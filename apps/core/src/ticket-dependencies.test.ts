@@ -6,7 +6,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setSetting } from './db/index.js';
-import { runs, settings } from './db/schema.js';
+import { runs, settings, tickets as ticketRows } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { CONFLICT_ATTEMPT_CAP, TicketService } from './tickets/service.js';
@@ -1479,6 +1479,30 @@ describe('factory chain robustness', () => {
     await Promise.all(passes);
 
     expect(await eventTypes(run)).toContain('secret_guard_blocked');
+    expect(await eventTypes(run)).not.toContain('merged_to_main');
+    expect(await statusOf(a.id)).toBe('review');
+    await settle(project.id);
+  });
+
+  it('a restart does not run again a pipeline that ended, though the board changed since', async () => {
+    const project = await createProject();
+    const a = await createTicket(project.id, { title: 'A', status: 'ready' });
+    const passes = trackPipelines();
+    const { run } = (await api('POST', `/api/tickets/${a.id}/start`, {})).json() as { run: Run };
+    await finish(run);
+    // Nothing else waits in Ready: A's run is no factory step, and its ticket stays in Review for its person.
+    await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
+    await Promise.all(passes);
+    expect(await statusOf(a.id)).toBe('review');
+    // Later a ticket lands in Ready (which would make A's run look like a factory step; set in the
+    // database so nothing starts it), and core restarts.
+    await createTicket(project.id, { title: 'B', status: 'backlog' });
+    t.db.update(ticketRows).set({ status: 'ready' }).where(eq(ticketRows.title, 'B')).run();
+
+    const restarted = new TicketService(t.db, t.runs, t.scheduler);
+    const resumed = trackPipelines(restarted);
+    await restarted.resumeChains();
+    expect(resumed).toHaveLength(0);
     expect(await eventTypes(run)).not.toContain('merged_to_main');
     expect(await statusOf(a.id)).toBe('review');
     await settle(project.id);

@@ -117,6 +117,13 @@ const INGESTED_TICKET_FILES_MAX = 50;
 const ACTIVE_CHAINS_KEY = 'factory.activeChains';
 
 /**
+ * Settings key of the runs whose completion pipeline is due or going (JSON array of run ids): set
+ * when a finished turn's settle wait starts, cleared when its pass ends or the wait is dropped. What
+ * is left at start-up was cut off by the restart.
+ */
+const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
+
+/**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
  * was cut off (it finalizes the ticket even when the project is not chaining any more).
  */
@@ -359,6 +366,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   private completeRunWhenSettled(run: Run): void {
     this.stopSettling(run.id);
+    this.markPipelinePending(run.id);
     if (this.pipelineSettleMs <= 0 || run.endedAt) {
       this.completeRun(run);
       return;
@@ -394,10 +402,33 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     clearTimeout(timer);
     this.settlingRuns.delete(runId);
     this.runs.pipelineBusy(runId, false);
+    this.releasePipelinePending(runId);
+  }
+
+  /** The runs whose pipeline is due or going, as stored (see {@link PENDING_PIPELINES_KEY}). */
+  private pendingPipelineRuns(): Set<string> {
+    const value = getSetting<unknown>(this.db, PENDING_PIPELINES_KEY);
+    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
+  }
+
+  private markPipelinePending(runId: string): void {
+    const pending = this.pendingPipelineRuns();
+    if (pending.has(runId)) return;
+    pending.add(runId);
+    setSetting(this.db, PENDING_PIPELINES_KEY, [...pending]);
+  }
+
+  /** Clears the run's mark unless a settle wait or a pass of it still goes on. */
+  private releasePipelinePending(runId: string): void {
+    if (this.settlingRuns.has(runId) || this.pipelineRuns.has(runId)) return;
+    const pending = this.pendingPipelineRuns();
+    if (!pending.delete(runId)) return;
+    setSetting(this.db, PENDING_PIPELINES_KEY, [...pending]);
   }
 
   /** Runs the completion pipeline in the background; it is best effort per run. */
   private completeRun(run: Run, opts: PipelineOptions = {}): void {
+    this.markPipelinePending(run.id);
     this.handleRunCompleted(run, opts).catch((error: unknown) => {
       // Record why it stopped instead of crashing core.
       this.runs.note(run.id, 'pipeline_failed', { message: (error as Error).message?.slice(0, 500) });
@@ -524,9 +555,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * After a core restart: finalizes the Review tickets a cut-off pipeline left behind in every
-   * project (a hand-started run's too, with the chain on or off), then dispatches every project whose
-   * chain was on, so the factory carries on without a person pressing "Run pipeline".
+   * After a core restart: runs again, in every project (a hand-started run's too, with the chain on
+   * or off), the pipelines the restart cut off, then dispatches every project whose chain was on, so
+   * the factory carries on without a person pressing "Run pipeline".
    */
   async resumeChains(): Promise<void> {
     const known = new Set(
@@ -536,9 +567,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .all()
         .map((p) => p.id),
     );
-    // Not as `finalizing`: each pipeline decides as its cut-off pass would have whether the run is a
-    // factory step (gates, merge), so a person's run in a project without a factory is not merged.
-    for (const projectId of known) this.finalizeLeftoverReviews(projectId);
+    // Only passes that were due or going when core stopped: one that ended decided already (a run
+    // that was no factory step stays in Review for its person, whatever the board shows now). Not as
+    // `finalizing`: each pass decides as the cut-off one would have whether the run is a factory step.
+    const cutOff = this.pendingPipelineRuns();
+    for (const projectId of known) this.finalizeLeftoverReviews(projectId, { cutOff });
+    // A cut-off pass not taken up (its run is gone, or its ticket left Review) is dropped.
+    for (const runId of cutOff) this.releasePipelinePending(runId);
     if (!getFactorySettings(this.db).autoPickupReady) return;
     const resumed: Promise<unknown>[] = [];
     for (const projectId of [...this.autoChainProjects]) {
@@ -553,15 +588,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * (core went down mid-way, or inside the settle window): the pipeline runs again, so its gates
    * apply instead of a merge behind them; one that merged but was cut off before Done moves there
    * (when tickets move to Done by themselves). Once per run and process; the pipelines are not
-   * awaited, since a dispatch they start waits for the one calling this.
+   * awaited, since a dispatch they start waits for the one calling this. `cutOff`: only those runs.
    */
-  private finalizeLeftoverReviews(projectId: string, opts: PipelineOptions = {}): void {
+  private finalizeLeftoverReviews(
+    projectId: string,
+    { finalizing, cutOff }: PipelineOptions & { cutOff?: Set<string> } = {},
+  ): void {
     const { autoMoveToDone } = getFactorySettings(this.db);
     for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
       const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
       // A run whose own pipeline is still going (gates, merge) or waiting to settle is not left over.
       if (
         !latestRun ||
+        (cutOff && !cutOff.has(latestRun.id)) ||
         latestRun.state !== 'done' ||
         latestRun.handedOffTo ||
         this.pipelineRuns.has(latestRun.id) ||
@@ -587,7 +626,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.resumedPipelines.has(latestRun.id)) continue;
       this.resumedPipelines.add(latestRun.id);
-      this.completeRun(latestRun, opts);
+      this.completeRun(latestRun, { finalizing });
     }
   }
 
@@ -905,6 +944,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       const left = (this.pipelineRuns.get(run.id) ?? 1) - 1;
       if (left > 0) this.pipelineRuns.set(run.id, left);
       else this.pipelineRuns.delete(run.id);
+      this.releasePipelinePending(run.id);
     }
   }
 

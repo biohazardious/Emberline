@@ -2378,13 +2378,15 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private async afterSessionCheck(row: RunRow): Promise<RunRow> {
     const sessionId = row.ptydSessionId;
     if (!sessionId || row.endedAt || this.ptyd.status !== 'connected') return row;
+    let sessions: SessionInfo[];
     try {
-      const { sessions } = await this.ptyd.get().list();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (session?.status !== 'running') await this.recordSessionEnd(row.id, sessionId, session);
+      ({ sessions } = await this.ptyd.get().list());
     } catch {
       // The runner went away mid-call: the run stays as it is, and the next reconcile retries.
+      return this.row(row.id);
     }
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session?.status !== 'running') await this.recordSessionEnd(row.id, sessionId, session);
     return this.row(row.id);
   }
 
@@ -2646,12 +2648,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         );
       }
     }
-    // Its teardown runs already (an earlier prune, auto-GC), or that of a run sharing its worktree:
-    // the prune follows it.
-    if (this.tearingDown.has(id) || this.teardownJobs.has(row.worktreePath))
+    // Its teardown runs already (an earlier prune, auto-GC): the prune follows it.
+    if (this.tearingDown.has(id))
       return { runId: id, worktreePath: row.worktreePath, removed: false, pending: true };
+    // The teardown of a run sharing this worktree (a handoff) runs: this prune follows it below, and
+    // the worktree's outputs were archived for that run.
+    const sharedTeardown = this.teardownJobs.has(row.worktreePath);
     // Deliverables in git-ignored build directories exist only here: archive them first.
-    if (row.worktreePath !== project.path) await this.outputs.archiveBeforePrune(id);
+    if (row.worktreePath !== project.path && !sharedTeardown) await this.outputs.archiveBeforePrune(id);
     const recordPruned = (removed: boolean) => {
       if (removed) {
         this.record(id, {
@@ -2661,7 +2665,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         });
       }
     };
-    if (row.worktreePath !== project.path && this.needsTeardown(project.id, row.worktreePath)) {
+    if (
+      row.worktreePath !== project.path &&
+      (sharedTeardown || this.needsTeardown(project.id, row.worktreePath))
+    ) {
       // Teardown commands and compose downs may take minutes: the request waits a bounded time, the rest is background.
       let removed = false;
       const job = this.teardownThenPrune(row, project, (r) => {
@@ -2679,13 +2686,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   /**
    * Teardown, then the worktree's compose projects, then prune, then `after`, as one background job:
    * guarded by `tearingDown` so no other path starts it again, and listed in `teardownJobs` so a
-   * project delete can wait for it. Never rejects.
+   * project delete can wait for it. Never rejects. One job per worktree: while another run's job for
+   * the same worktree (a handoff) runs, this run follows it and gets `after` once it ended.
    */
   private teardownThenPrune(
     row: RunRow,
     project: { id: string; path: string },
     after: (removed: boolean) => unknown,
   ): Promise<void> {
+    const running = this.teardownJobs.get(row.worktreePath);
+    if (running) {
+      // Its own job (two requests that both got past their checks): `after` runs once, in that job.
+      if (this.tearingDown.has(row.id)) return running;
+      this.tearingDown.add(row.id);
+      return running
+        .then(async () => {
+          await after(!existsSync(row.worktreePath));
+        })
+        .catch(() => undefined)
+        .finally(() => this.tearingDown.delete(row.id));
+    }
     this.tearingDown.add(row.id);
     const job: Promise<void> = this.teardownWorktree(row, project)
       // Best effort: a teardown that throws must not leave the worktree behind.
@@ -3463,12 +3483,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       throw badRequest(parsed.error.issues.map((i) => i.message).join('; '));
     }
     const body: StartPreviewBody = parsed.data;
-    // Also while the teardown of another run in the same worktree (a handoff) runs.
-    if (this.tearingDown.has(id) || this.teardownJobs.has(row.worktreePath))
-      throw conflict("this run's worktree is being removed; it cannot start a preview");
 
     // One start or stop per run at a time: a second start waits, then cancels the first one's job.
     return this.previewRunLock.run(id, async () => {
+      // Checked once the start has the lock: a teardown may have begun while it waited. Also while
+      // the teardown of another run in the same worktree (a handoff) runs.
+      if (this.tearingDown.has(id) || this.teardownJobs.has(row.worktreePath))
+        throw conflict("this run's worktree is being removed; it cannot start a preview");
       const generation = (this.previewGenerations.get(id) ?? 0) + 1;
       this.previewGenerations.set(id, generation);
       const service = approvedPreviewService(this.db, row.projectId);
@@ -4234,9 +4255,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           byProj.set(r.projectId, arr);
         }
         const seen = new Set<string>();
-        const staleCount = [...byProj.values()].reduce(
-          (sum, arr) => sum + Math.max(0, arr.length - AUTO_GC_KEEP_RECENT_PER_PROJECT),
-          0,
+        const staleIds = [...byProj.values()].flatMap((arr) =>
+          arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT).map((r) => r.id),
         );
         let runsLeft = 0;
         // Archiving before prunes shares one time budget per auto-GC pass, so reconcile (exits,
@@ -4260,8 +4280,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             ) {
               const budgetLeft = archiveDeadline - Date.now();
               if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) {
-                // This run and every one not reached yet.
-                runsLeft = staleCount - seen.size + 1;
+                // This run and every one not reached yet; they keep their cached verdicts, so the
+                // next pass needs no full git check for them.
+                runsLeft = staleIds.length - seen.size + 1;
+                for (const staleId of staleIds) seen.add(staleId);
                 break autoGc;
               }
               // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
@@ -4288,15 +4310,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           }
         }
         if (runsLeft > 0) {
-          // The runs not reached keep their cached verdicts: the next pass needs no full git check for them.
           this.log?.warn(
             { runsLeft },
             'auto-GC: the archive time budget is used up; the runs left wait for the next pass',
           );
-        } else {
-          for (const id of this.keptWorktreeChecks.keys()) {
-            if (!seen.has(id)) this.keptWorktreeChecks.delete(id);
-          }
+        }
+        for (const id of this.keptWorktreeChecks.keys()) {
+          if (!seen.has(id)) this.keptWorktreeChecks.delete(id);
         }
       }
     } catch {

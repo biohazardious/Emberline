@@ -903,6 +903,40 @@ describe('teardown before prune', () => {
     release();
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
     await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
+    // B's worktree is gone too: its timeline says so once the shared teardown ended.
+    await expect.poll(() => typesOf(b.id)).toContain('worktree_pruned');
+    expect(order).toEqual([`teardown:${a.worktreePath}`]);
+  });
+
+  it('two prunes of runs sharing a worktree, sent while the first archives, tear it down once', async () => {
+    const { release, order } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject('version: 1\nteardown:\n  - echo slow-teardown\n');
+    await approveHead(project.id);
+    const a = await endedRun(project.id);
+    const b = await endedRun(project.id);
+    t.db.update(runs).set({ worktreePath: a.worktreePath }).where(eq(runs.id, b.id)).run();
+    // A's archive is still running when B's prune arrives.
+    let archived!: () => void;
+    const archiving = new Promise<void>((resolve) => (archived = resolve));
+    const archive = t.runs.outputs.archiveBeforePrune.bind(t.runs.outputs);
+    const archiveSpy = vi
+      .spyOn(t.runs.outputs, 'archiveBeforePrune')
+      .mockImplementation(async (id, ...rest) => {
+        if (id === a.id) await archiving;
+        return archive(id, ...rest);
+      });
+    const pruneA = api('POST', `/api/runs/${a.id}/worktree/prune`, {});
+    await expect.poll(() => archiveSpy.mock.calls.length).toBe(1);
+    const resB = await api('POST', `/api/runs/${b.id}/worktree/prune`, {});
+    expect(resB.json()).toMatchObject({ pending: true });
+    archived();
+    expect((await pruneA).json()).toMatchObject({ pending: true });
+    expect(order).toEqual([`teardown:${a.worktreePath}`]);
+    release();
+    await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+    await expect.poll(() => typesOf(a.id)).toContain('worktree_pruned');
+    await expect.poll(() => typesOf(b.id)).toContain('worktree_pruned');
     expect(order).toEqual([`teardown:${a.worktreePath}`]);
   });
 
@@ -924,6 +958,35 @@ describe('teardown before prune', () => {
     expect(res.json().message).toBe("this run's worktree is being removed; it cannot start a preview");
     release();
     await expect.poll(() => existsSync(a.worktreePath), { timeout: 8_000 }).toBe(false);
+  });
+
+  it('a preview start that waited for its turn is refused when the teardown began meanwhile', async () => {
+    const { release } = holdTeardowns();
+    budgets().request = 200;
+    const project = await createProject(
+      'version: 1\nteardown:\n  - echo slow-teardown\nservices:\n  - name: web\n    command: sleep 30\n    preview: true\n',
+    );
+    await approveHead(project.id);
+    const run = await endedRun(project.id);
+    // Another start or stop of this run's preview holds the turn.
+    let done!: () => void;
+    const busy = new Promise<void>((resolve) => (done = resolve));
+    const lock = (
+      t.runs as unknown as { previewRunLock: { run(key: string, fn: () => Promise<void>): Promise<void> } }
+    ).previewRunLock;
+    const held = lock.run(run.id, () => busy);
+    const start = api('POST', `/api/runs/${run.id}/preview/start`, {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await api('POST', `/api/runs/${run.id}/worktree/prune`, {})).json()).toMatchObject({
+      pending: true,
+    });
+    done();
+    await held;
+    const res = await start;
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toBe("this run's worktree is being removed; it cannot start a preview");
+    release();
+    await expect.poll(() => existsSync(run.worktreePath), { timeout: 8_000 }).toBe(false);
   });
 
   it('a manual GC answers within its time budget and reports the teardowns still running', async () => {

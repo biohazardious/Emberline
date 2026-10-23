@@ -96,6 +96,44 @@ async function tokenFor(runId: string): Promise<string> {
   return readFileSync(file, 'utf8');
 }
 
+/**
+ * Finished runs newer than any the test made, in place in the project (no worktree): `count` of them
+ * fill auto-GC's ten kept slots, so the test's own older runs are the stale ones.
+ */
+function fillRecent(project: { id: string; path: string }, count = 10) {
+  for (let i = 0; i < count; i += 1) {
+    t.db
+      .insert(runs)
+      .values({
+        id: `synthetic-${i}`,
+        projectId: project.id,
+        agent: 'claude',
+        state: 'done',
+        worktreePath: project.path,
+        hookTokenHash: 'x',
+        stateChangedAt: new Date(10_000 + i),
+        createdAt: new Date(10_000 + i),
+        endedAt: new Date(10_000 + i),
+      })
+      .run();
+  }
+}
+
+/** Starts a reconcile pass that is held in its session listing until `release()`. */
+function holdReconcilePass(): { pass: Promise<void>; release: () => void } {
+  const client = t.ptyd.get();
+  const list = client.list.bind(client);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let calls = 0;
+  vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
+    calls += 1;
+    if (calls === 1) await gate;
+    return list(...args);
+  });
+  return { pass: t.runs.reconcile(), release };
+}
+
 describe('run event pruning', () => {
   const seed = (runId: string, type: string, n: number) =>
     t.db
@@ -548,22 +586,7 @@ describe('runs', () => {
         .where(eq(runs.id, successor.id))
         .run();
       // Nine newer finished rows plus the successor fill the ten kept slots.
-      for (let i = 0; i < 9; i += 1) {
-        t.db
-          .insert(runs)
-          .values({
-            id: `synthetic-${i}`,
-            projectId: project.id,
-            agent: 'claude',
-            state: 'done',
-            worktreePath: project.path,
-            hookTokenHash: 'x',
-            stateChangedAt: new Date(10_000 + i),
-            createdAt: new Date(10_000 + i),
-            endedAt: new Date(10_000 + i),
-          })
-          .run();
-      }
+      fillRecent(project, 9);
       // reconcile only reaches auto-GC while some run is still open; keep one alive.
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
@@ -593,25 +616,11 @@ describe('runs', () => {
         .toBe('exited');
       return run;
     };
-    /** A reconcile pass held in its session listing until `release()`. */
-    const heldPass = () => {
-      const client = t.ptyd.get();
-      const list = client.list.bind(client);
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => (release = resolve));
-      let calls = 0;
-      vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
-        calls += 1;
-        if (calls === 1) await gate;
-        return list(...args);
-      });
-      return { pass: t.runs.reconcile(), release };
-    };
 
     it('a prune notes the exit of the run itself instead of refusing it as active', async () => {
       const project = await createProject('Prune during a pass', true);
       const run = await exitedRun(project.id);
-      const { pass, release } = heldPass();
+      const { pass, release } = holdReconcilePass();
       try {
         const res = await api('POST', `/api/runs/${run.id}/worktree/prune`, {});
         expect(res.statusCode).toBe(200);
@@ -630,7 +639,7 @@ describe('runs', () => {
     it('a manual GC waits for the pass, so a run that just ended is collected', async () => {
       const project = await createProject('GC during a pass', true);
       const run = await exitedRun(project.id);
-      const { pass, release } = heldPass();
+      const { pass, release } = holdReconcilePass();
       setTimeout(release, 300);
       const res = await t.runs.garbageCollect({
         projectId: project.id,
@@ -780,22 +789,7 @@ describe('runs', () => {
         .set({ createdAt: new Date(1_000) })
         .where(eq(runs.id, stale.id))
         .run();
-      for (let i = 0; i < 10; i += 1) {
-        t.db
-          .insert(runs)
-          .values({
-            id: `synthetic-${i}`,
-            projectId: project.id,
-            agent: 'claude',
-            state: 'done',
-            worktreePath: project.path,
-            hookTokenHash: 'x',
-            stateChangedAt: new Date(10_000 + i),
-            createdAt: new Date(10_000 + i),
-            endedAt: new Date(10_000 + i),
-          })
-          .run();
-      }
+      fillRecent(project);
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
       const autoGc = async () => {
@@ -844,37 +838,28 @@ describe('runs', () => {
         .set({ createdAt: new Date(1_000) })
         .where(eq(runs.id, stale.id))
         .run();
-      for (let i = 0; i < 10; i += 1) {
-        t.db
-          .insert(runs)
-          .values({
-            id: `synthetic-${i}`,
-            projectId: project.id,
-            agent: 'claude',
-            state: 'done',
-            worktreePath: project.path,
-            hookTokenHash: 'x',
-            stateChangedAt: new Date(10_000 + i),
-            createdAt: new Date(10_000 + i),
-            endedAt: new Date(10_000 + i),
-          })
-          .run();
-      }
+      fillRecent(project);
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
-      const mergeTarget = vi.spyOn(
-        t.runs as unknown as { mergeTarget(project: unknown): Promise<string> },
-        'mergeTarget',
-      );
+      // The merge target is the main workspace's branch: `git rev-parse --abbrev-ref HEAD` there.
+      let branchLookups = 0;
+      setCommandExecutor(async (request: ExecRequest) => {
+        if (request.cwd === project.path && request.args.includes('--abbrev-ref')) branchLookups += 1;
+        return localCommandExecutor(request);
+      });
       const autoGc = async () => {
         (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
         await t.runs.reconcile();
       };
-      await autoGc();
-      expect(mergeTarget).toHaveBeenCalledTimes(1);
-      // The kept worktree's verdict is cached and its HEAD has not moved: no git call for the branch.
-      await autoGc();
-      expect(mergeTarget).toHaveBeenCalledTimes(1);
+      try {
+        await autoGc();
+        expect(branchLookups).toBe(1);
+        // The kept worktree's verdict is cached and its HEAD has not moved: no git call for the branch.
+        await autoGc();
+        expect(branchLookups).toBe(1);
+      } finally {
+        setCommandExecutor(localCommandExecutor);
+      }
       expect(t.runs.list().map((r) => r.id)).toContain(stale.id);
     });
 
@@ -896,22 +881,7 @@ describe('runs', () => {
           .where(eq(runs.id, row.id))
           .run();
       }
-      for (let i = 0; i < 10; i += 1) {
-        t.db
-          .insert(runs)
-          .values({
-            id: `synthetic-${i}`,
-            projectId: project.id,
-            agent: 'claude',
-            state: 'done',
-            worktreePath: project.path,
-            hookTokenHash: 'x',
-            stateChangedAt: new Date(10_000 + i),
-            createdAt: new Date(10_000 + i),
-            endedAt: new Date(10_000 + i),
-          })
-          .run();
-      }
+      fillRecent(project);
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
       const checks = (
@@ -925,6 +895,8 @@ describe('runs', () => {
         checkedAt: Date.now(),
       };
       checks.set(kept.id, verdict);
+      // A verdict on a run that is gone is dropped, budget or not.
+      checks.set('removed-run', verdict);
       const warn = vi.fn();
       t.runs.setLogger({ warn });
       vi.useFakeTimers({ toFake: ['Date'] });
@@ -939,6 +911,7 @@ describe('runs', () => {
         vi.useRealTimers();
       }
       expect(checks.get(kept.id)).toEqual(verdict);
+      expect(checks.has('removed-run')).toBe(false);
       expect(warn).toHaveBeenCalledWith(
         expect.objectContaining({ runsLeft: 2 }),
         expect.stringContaining('next pass'),
@@ -955,22 +928,7 @@ describe('runs', () => {
         .set({ createdAt: new Date(1_000) })
         .where(eq(runs.id, stale.id))
         .run();
-      for (let i = 0; i < 10; i += 1) {
-        t.db
-          .insert(runs)
-          .values({
-            id: `synthetic-${i}`,
-            projectId: project.id,
-            agent: 'claude',
-            state: 'done',
-            worktreePath: project.path,
-            hookTokenHash: 'x',
-            stateChangedAt: new Date(10_000 + i),
-            createdAt: new Date(10_000 + i),
-            endedAt: new Date(10_000 + i),
-          })
-          .run();
-      }
+      fillRecent(project);
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
       (t.runs as unknown as { lastAutoGcAt: number }).lastAutoGcAt = 0;
@@ -1538,17 +1496,7 @@ describe('runs', () => {
           })
           .run();
         // A pass that is still listing the sessions when the prompt arrives.
-        const client = t.ptyd.get();
-        const list = client.list.bind(client);
-        let release!: () => void;
-        const gate = new Promise<void>((resolve) => (release = resolve));
-        let calls = 0;
-        vi.spyOn(client, 'list').mockImplementation(async (...args: Parameters<typeof list>) => {
-          calls += 1;
-          if (calls === 1) await gate;
-          return list(...args);
-        });
-        const pass = t.runs.reconcile();
+        const { pass, release } = holdReconcilePass();
         // The prompt checks this run's session itself: it does not wait for the pass (an auto-GC
         // pass may take a minute).
         const prompting = t.runs.prompt('gem-3', 'fix', { automatic: true });
@@ -1774,22 +1722,7 @@ describe('build output archive', () => {
         .where(eq(runs.id, r.id))
         .run(),
     );
-    for (let i = 0; i < 10; i += 1) {
-      t.db
-        .insert(runs)
-        .values({
-          id: `synthetic-${i}`,
-          projectId,
-          agent: 'claude',
-          state: 'done',
-          worktreePath: projectPath,
-          hookTokenHash: 'x',
-          stateChangedAt: new Date(10_000 + i),
-          createdAt: new Date(10_000 + i),
-          endedAt: new Date(10_000 + i),
-        })
-        .run();
-    }
+    fillRecent({ id: projectId, path: projectPath });
   };
 
   it('auto-GC archives an APK in a git-ignored build/ dir before it prunes the merged worktree', async () => {
