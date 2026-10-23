@@ -130,6 +130,12 @@ const ACTIVE_CHAINS_KEY = 'factory.activeChains';
 const PENDING_PIPELINES_KEY = 'factory.pendingPipelines';
 
 /**
+ * Settings key of the upgrade from a version that kept no pipeline marks (0.6.0 or earlier):
+ * `pending` until the start that holds its cut-off Review tickets got to them, then `done`.
+ */
+const UPGRADE_HOLDS_KEY = 'factory.upgradeHolds';
+
+/**
  * `finalizing`: a dispatch's Review finalization runs the pipeline of a completion whose own pass
  * was cut off (it finalizes the ticket even when the project is not chaining any more).
  * `resumed`: this pass stands in for one a restart cut off; it goes on where that one was.
@@ -336,10 +342,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   private readonly settlingRuns = new Map<string, NodeJS.Timeout>();
   private readonly pipelineSettleMs: number;
   /**
-   * The first start of a version that marks pipelines (an upgrade from 0.6.0 or earlier): read before
-   * any run's `done` can write the marks, then `{}` is written, so only this start holds (resumeChains).
+   * After an upgrade from a version that kept no pipeline marks: the runs whose checks the upgrade's
+   * restart may have cut off, taken when this service starts (before any run of this start finishes
+   * or a dispatch turns a chain off); resumeChains holds them. Empty otherwise.
    */
-  private unmarkedUpgrade: boolean;
+  private readonly upgradeCandidates: string[];
 
   /** Event types of a run, oldest first (to tell whether its worktree setup finished). */
   private runEventTypes(runId: string): string[] {
@@ -362,8 +369,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.setMaxListeners(0);
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
-    this.unmarkedUpgrade = getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) === undefined;
-    if (this.unmarkedUpgrade) this.savePendingPipelines(new Map());
+    this.upgradeCandidates = this.takeUpgradeCandidates();
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;
@@ -642,13 +648,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         .all()
         .map((p) => p.id),
     );
-    // The first start of a version that marks pipelines (an upgrade from 0.6.0 or earlier): a pass
-    // the upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a
-    // person instead of being merged without its checks or left unseen; only on this start.
-    if (this.unmarkedUpgrade) {
-      this.unmarkedUpgrade = false;
-      const marked = this.pendingPipelineRuns();
-      for (const projectId of known) this.holdUnmarkedReviews(projectId, marked);
+    // After an upgrade from a version that kept no pipeline marks (0.6.0 or earlier): a pass the
+    // upgrade's restart cut off cannot be told from one that ended. Its ticket is held for a person
+    // instead of being merged without its checks or left unseen; noted as done only once held.
+    if (getSetting<unknown>(this.db, UPGRADE_HOLDS_KEY) === 'pending') {
+      this.holdUpgradeCandidates();
+      setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');
     }
     // Only passes that were due or going when core stopped: one that ended decided already (a run
     // that was no factory step stays in Review for its person, whatever the board shows now). Not as
@@ -668,30 +673,68 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /**
-   * The first start after an upgrade from a version that kept no pipeline marks (see resumeChains):
-   * a Review ticket of a chaining project whose latest run finished and whose pass left no outcome
-   * may have had its checks cut off by the upgrade's restart. It gets a `pipeline_interrupted` hold,
-   * so it shows in the Inbox; the agent's next stop runs its checks again.
+   * The upgrade from a version that kept no pipeline marks (see UPGRADE_HOLDS_KEY): decided on the
+   * first start of this version, by the marks not existing yet. Until its holds are done, each start
+   * takes the Review tickets of chaining projects (with auto-merge or auto-Done on) whose latest run
+   * finished and whose pass left no outcome: their checks may have been cut off by the upgrade's
+   * restart. A start with none to hold notes the upgrade as done at once.
    */
-  private holdUnmarkedReviews(projectId: string, marked: Map<string, PendingPipeline>): void {
-    if (!this.autoChainProjects.has(projectId)) return;
-    const { autoSyncToMain, autoMoveToDone } = effectiveFactorySettings(this.db, projectId);
-    // With neither, a pass that ended leaves its ticket in Review without an outcome too.
-    if (!autoSyncToMain && !autoMoveToDone) return;
-    for (const reviewTicket of this.list(projectId).filter((t) => t.status === 'review')) {
-      const latestRun = this.runs.latestRunForTicket(reviewTicket.id);
-      if (!latestRun || latestRun.state !== 'done' || latestRun.handedOffTo) continue;
-      // Finished since this start: its own pass (going, settling or due) runs its checks.
-      if (
-        this.pipelineRuns.has(latestRun.id) ||
-        this.settlingRuns.has(latestRun.id) ||
-        marked.has(latestRun.id)
-      )
-        continue;
-      if (this.pipelineOutcome(latestRun.id) !== null) continue;
-      // A run still resolving its conflict is finished by its own pipeline when it stops again.
-      if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
-      this.runs.note(latestRun.id, 'pipeline_interrupted', {});
+  private takeUpgradeCandidates(): string[] {
+    const state = getSetting<unknown>(this.db, UPGRADE_HOLDS_KEY);
+    if (state === 'done') return [];
+    if (state !== 'pending' && getSetting<unknown>(this.db, PENDING_PIPELINES_KEY) !== undefined) {
+      setSetting(this.db, UPGRADE_HOLDS_KEY, 'done');
+      return [];
+    }
+    const candidates: string[] = [];
+    for (const projectId of this.autoChainProjects) {
+      const { autoSyncToMain, autoMoveToDone } = effectiveFactorySettings(this.db, projectId);
+      // With neither, a pass that ended leaves its ticket in Review without an outcome too.
+      if (!autoSyncToMain && !autoMoveToDone) continue;
+      let reviewTickets: Ticket[];
+      try {
+        reviewTickets = this.list(projectId).filter((t) => t.status === 'review');
+      } catch {
+        continue; // the project is gone
+      }
+      for (const reviewTicket of reviewTickets) {
+        const run = this.runs.latestRunForTicket(reviewTicket.id);
+        if (run && this.mayBeCutOff(run)) candidates.push(run.id);
+      }
+    }
+    setSetting(this.db, UPGRADE_HOLDS_KEY, candidates.length > 0 ? 'pending' : 'done');
+    return candidates;
+  }
+
+  /** A finished run whose pass left no outcome and that is not resolving a conflict. */
+  private mayBeCutOff(run: Run): boolean {
+    if (run.state !== 'done' || run.handedOffTo) return false;
+    if (this.pipelineOutcome(run.id) !== null) return false;
+    // A run still resolving its conflict is finished by its own pipeline when it stops again.
+    return !(!run.endedAt && this.conflictResolutionRequested(run.id));
+  }
+
+  /**
+   * Holds each upgrade candidate still in that state, whatever its project's chain does meanwhile: a
+   * `pipeline_interrupted` hold shows it in the Inbox, and the agent's next stop runs its checks
+   * again. One that finished again since the start (its own pass going, settling or due) is not.
+   */
+  private holdUpgradeCandidates(): void {
+    const marked = this.pendingPipelineRuns();
+    for (const runId of this.upgradeCandidates) {
+      let run: Run;
+      try {
+        run = this.runs.getRun(runId);
+      } catch {
+        continue; // removed meanwhile
+      }
+      const ticket = run.ticketId
+        ? this.db.select().from(tickets).where(eq(tickets.id, run.ticketId)).get()
+        : undefined;
+      if (ticket?.status !== 'review' || this.runs.latestRunForTicket(ticket.id)?.id !== run.id) continue;
+      if (this.pipelineRuns.has(run.id) || this.settlingRuns.has(run.id) || marked.has(run.id)) continue;
+      if (!this.mayBeCutOff(run)) continue;
+      this.runs.note(run.id, 'pipeline_interrupted', {});
     }
   }
 

@@ -1919,7 +1919,7 @@ describe('factory chain robustness', () => {
   });
 
   describe('the first start after an upgrade from 0.6.0 (no pipeline marks kept)', () => {
-    /** A chaining project's Review ticket whose pass was cut off, with no marks kept (or, `marked`, an empty list). */
+    /** A chaining project's Review ticket whose pass was cut off; the database as 0.6.0 left it (or, `marked`, with marks). */
     async function cutOffBeforeMarks(marked: boolean) {
       const project = await createProject();
       t.tickets.setAutoChain(project.id, true);
@@ -1931,11 +1931,13 @@ describe('factory chain robustness', () => {
       await finish(run);
       await expect.poll(() => statusOf(a.id), { timeout: 10_000 }).toBe('review');
       t.db.delete(settings).where(eq(settings.key, 'factory.pendingPipelines')).run();
+      t.db.delete(settings).where(eq(settings.key, 'factory.upgradeHolds')).run();
       if (marked) setSetting(t.db, 'factory.pendingPipelines', {});
       return { project, a, run };
     }
-    const pendingKey = () =>
-      t.db.select().from(settings).where(eq(settings.key, 'factory.pendingPipelines')).get();
+    const upgradeState = () =>
+      t.db.select().from(settings).where(eq(settings.key, 'factory.upgradeHolds')).get()?.value;
+    const holds = async (run: Run) => (await eventTypes(run)).filter((x) => x === 'pipeline_interrupted');
 
     it('holds such a ticket once for a person, with a way to run its checks again', async () => {
       const { project, a, run } = await cutOffBeforeMarks(false);
@@ -1943,7 +1945,7 @@ describe('factory chain robustness', () => {
       const passes = trackPipelines(restarted);
       await restarted.resumeChains();
       expect(passes).toHaveLength(0);
-      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
+      expect(await holds(run)).toHaveLength(1);
       expect(await eventTypes(run)).not.toContain('merged_to_main');
       expect(await statusOf(a.id)).toBe('review');
       expect(t.runs.getRun(run.id).attention).toMatchObject({
@@ -1951,22 +1953,62 @@ describe('factory chain robustness', () => {
         detail: 'Checks cut off by an update',
       });
       expect((await t.recovery.get(run.id))?.suggestions[0]).toMatchObject({ id: 'run_checks_again' });
-      expect(pendingKey()).toBeDefined();
-      // The next start knows the marks: no second hold.
+      expect(upgradeState()).toBe('done');
+      // A later start holds nothing more.
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
-      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
+      expect(await holds(run)).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it("holds it also when a dispatch before the resume turned the project's chain off", async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler);
+      // E.g. another ticket run lost its session in the reconcile before the resume: its failure
+      // dispatches, finds the queue empty and ends the chain.
+      await restarted.dispatchNextReadyTicket(project.id);
+      expect(restarted.isAutoChainActive(project.id)).toBe(false);
+      await restarted.resumeChains();
+      expect(await holds(run)).toHaveLength(1);
       await settle(project.id);
     });
 
     it('holds it also when another run finished between the start and the resume', async () => {
-      const { project, a, run } = await cutOffBeforeMarks(false);
+      const { project, run } = await cutOffBeforeMarks(false);
       const restarted = new TicketService(t.db, t.runs, t.scheduler);
       // Another run's Stop (an agent that kept running through the update) writes the marks first.
       (restarted as unknown as { markPipelinePending(id: string): void }).markPipelinePending('other-run');
-      expect(pendingKey()).toBeDefined();
       await restarted.resumeChains();
-      expect((await eventTypes(run)).filter((x) => x === 'pipeline_interrupted')).toHaveLength(1);
-      expect(await statusOf(a.id)).toBe('review');
+      expect(await holds(run)).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it('a start that ends before the resume leaves the holds to the next start, which holds once', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      // The runner never connected, or core was stopped: resumeChains never ran.
+      new TicketService(t.db, t.runs, t.scheduler);
+      expect(upgradeState()).toBe('pending');
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(await holds(run)).toHaveLength(1);
+      await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
+      expect(await holds(run)).toHaveLength(1);
+      await settle(project.id);
+    });
+
+    it('a run that finished after the start is not held', async () => {
+      const { project, run } = await cutOffBeforeMarks(false);
+      const restarted = new TicketService(t.db, t.runs, t.scheduler, { pipelineSettleMs: 0 });
+      (restarted as unknown as { handleRunCompleted(r: Run): Promise<void> }).handleRunCompleted = async () =>
+        undefined;
+      const b = await createTicket(project.id, { title: 'B', status: 'ready' });
+      await t.tickets.dispatchNextReadyTicket(project.id);
+      const later = runsFor(b.id)[0] as Run;
+      await finish(later);
+      await expect.poll(() => statusOf(b.id), { timeout: 10_000 }).toBe('review');
+      // Its pass ended without an outcome (no mark left either): it is still not one the update cut off.
+      setSetting(t.db, 'factory.pendingPipelines', {});
+      await restarted.resumeChains();
+      expect(await holds(run)).toHaveLength(1);
+      expect(await holds(later)).toHaveLength(0);
       await settle(project.id);
     });
 
@@ -1978,15 +2020,16 @@ describe('factory chain robustness', () => {
       await restarted.resumeChains();
       await expect.poll(() => passes.length, { timeout: 10_000 }).toBe(1);
       await Promise.all(passes);
-      expect(await eventTypes(run)).not.toContain('pipeline_interrupted');
+      expect(await holds(run)).toHaveLength(0);
       await settle(project.id);
     });
 
-    it('holds nothing once the marks are kept', async () => {
+    it('holds nothing on an install that already keeps the marks', async () => {
       const { project, a, run } = await cutOffBeforeMarks(true);
       await new TicketService(t.db, t.runs, t.scheduler).resumeChains();
-      expect(await eventTypes(run)).not.toContain('pipeline_interrupted');
+      expect(await holds(run)).toHaveLength(0);
       expect(await statusOf(a.id)).toBe('review');
+      expect(upgradeState()).toBe('done');
       await settle(project.id);
     });
   });
