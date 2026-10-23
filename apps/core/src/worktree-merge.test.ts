@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { unavailable } from './errors.js';
 import { runProducedChanges, withMainWorkspaceLock } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
 import { commitWorktree } from './runs/git.js';
@@ -293,6 +294,143 @@ describe('a merge refused before it starts', () => {
       'app.js',
       'picked.js',
     ]);
+  });
+
+  it("an unfinished `git merge --autostash` is refused with a note, and its stash stays the merge's (never the shared list)", async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 run\nline3\n');
+    git(a, 'commit', '-q', '-am', 'run edit');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nline2 main\nline3\n');
+    git(main, 'commit', '-q', '-am', 'main edit');
+    // Uncommitted work the autostash takes, then a conflict that stops the merge.
+    writeFileSync(path.join(a, 'old.txt'), 'edited, not committed\n');
+    expect(() => git(a, 'merge', '--autostash', '-q', 'main')).toThrow();
+    const before = { head: git(a, 'rev-parse', 'HEAD'), status: git(a, 'status', '--porcelain') };
+    const res = await refusing(a, () => {
+      throw new Error('never asked');
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(res.summary).toBe(
+      'Could not merge T-1: a git merge --autostash in its worktree is not finished. Finish it with git commit (or end it with git merge --abort), then merge again.',
+    );
+    expect({ head: git(a, 'rev-parse', 'HEAD'), status: git(a, 'status', '--porcelain') }).toEqual(before);
+    expect(git(a, 'stash', 'list')).toBe('');
+    expect(git(a, 'rev-parse', '-q', '--verify', 'MERGE_AUTOSTASH')).not.toBe('');
+  });
+
+  it('a merge whose end failed after the branch moved is ended by the next merge, which records nothing twice', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 run\nline3\n');
+    git(a, 'commit', '-q', '-am', 'run edit');
+    writeFileSync(path.join(main, 'app.js'), 'line1\nline2 main\nline3\n');
+    git(main, 'commit', '-q', '-am', 'main edit');
+    const mainTip = git(main, 'rev-parse', 'HEAD');
+    expect(() => git(a, 'merge', '-q', 'main')).toThrow();
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 both\nline3\n');
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('--quit'))
+        throw new Error('index.lock: File exists');
+      return localCommandExecutor(request);
+    });
+    try {
+      await expect(refusing(a, () => undefined)).rejects.toThrow('index.lock');
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    const recorded = git(a, 'rev-parse', 'HEAD');
+    expect(git(a, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(3);
+    // MERGE_HEAD is now in HEAD: the next merge ends it and merges, with no second output commit.
+    const res = await refusing(a, () => undefined);
+    expect(res.ok, res.summary).toBe(true);
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(recorded);
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(git(main, 'merge-base', '--is-ancestor', mainTip, 'HEAD')).toBe('');
+    expect(readFileSync(path.join(main, 'app.js'), 'utf8')).toBe('line1\nline2 both\nline3\n');
+  });
+
+  it('parents are reduced as `git commit` reduces them: a MERGE_HEAD already in HEAD adds none, unless --no-ff', async () => {
+    const a = addWorktree('a');
+    const base = git(a, 'rev-parse', 'HEAD');
+    writeFileSync(path.join(a, 'step.js'), 'step\n');
+    git(a, 'add', 'step.js');
+    git(a, 'commit', '-q', '-m', 'step');
+    const gitDir = git(a, 'rev-parse', '--path-format=absolute', '--git-dir');
+    writeFileSync(path.join(gitDir, 'MERGE_HEAD'), `${base}\n`);
+    writeFileSync(path.join(a, 'one.js'), '1\n');
+    expect((await refusing(a, () => undefined)).ok).toBe(true);
+    expect(git(a, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(2);
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+
+    writeFileSync(path.join(gitDir, 'MERGE_HEAD'), `${base}\n`);
+    writeFileSync(path.join(gitDir, 'MERGE_MODE'), 'no-ff');
+    writeFileSync(path.join(a, 'two.js'), '2\n');
+    expect((await refusing(a, () => undefined)).ok).toBe(true);
+    expect(git(a, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ').slice(1)).toEqual([
+      git(a, 'rev-parse', 'HEAD^1'),
+      base,
+    ]);
+  });
+
+  it('a cherry-pick sequence: its last pick ends the sequence, an earlier one leaves it for --continue', async () => {
+    const pickInto = (wt: string) => {
+      git(main, 'checkout', '-q', '-b', `picks-${path.basename(wt)}`);
+      writeFileSync(path.join(main, 'app.js'), 'line1\nline2 A\nline3\n');
+      git(main, 'commit', '-q', '-am', 'A');
+      writeFileSync(path.join(main, 'b.txt'), 'B\n');
+      git(main, 'add', 'b.txt');
+      git(main, 'commit', '-q', '-m', 'B');
+      const [first, second] = [git(main, 'rev-parse', 'HEAD~1'), git(main, 'rev-parse', 'HEAD')];
+      git(main, 'checkout', '-q', 'main');
+      writeFileSync(path.join(wt, 'app.js'), 'line1\nline2 run\nline3\n');
+      git(wt, 'commit', '-q', '-am', 'run edit');
+      return [first, second] as const;
+    };
+    const sequencer = (wt: string) =>
+      existsSync(path.join(git(wt, 'rev-parse', '--path-format=absolute', '--git-dir'), 'sequencer'));
+
+    // A conflicts first, B is still to come: the sequence stays.
+    const a = addWorktree('a');
+    const [first, second] = pickInto(a);
+    expect(() => git(a, 'cherry-pick', first, second)).toThrow();
+    expect(sequencer(a)).toBe(true);
+    writeFileSync(path.join(a, 'app.js'), 'line1\nline2 both\nline3\n');
+    expect((await refusing(a, () => undefined)).ok).toBe(true);
+    expect(() => git(a, 'rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD')).toThrow();
+    expect(sequencer(a)).toBe(true);
+
+    // B applies, then A, the last pick, conflicts: concluding it ends the sequence.
+    const b = addWorktree('b');
+    const [lastA, firstB] = pickInto(b);
+    expect(() => git(b, 'cherry-pick', firstB, lastA)).toThrow();
+    expect(sequencer(b)).toBe(true);
+    writeFileSync(path.join(b, 'app.js'), 'line1\nline2 both\nline3\n');
+    expect((await refusing(b, () => undefined)).ok).toBe(true);
+    expect(() => git(b, 'rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD')).toThrow();
+    expect(sequencer(b)).toBe(false);
+    expect(git(b, 'log', '--format=%s', '-3').split('\n')).toEqual([
+      'feat(T-1): factory run output',
+      'B',
+      'run edit',
+    ]);
+  });
+
+  it('an update of the branch that fails without the branch moving is reported as its own error', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const before = git(a, 'rev-parse', 'HEAD');
+    let asked = 0;
+    setCommandExecutor(async (request) => {
+      if (request.file === 'git' && request.args.includes('update-ref') && !request.args.includes('-d'))
+        throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
+      return localCommandExecutor(request);
+    });
+    try {
+      await expect(refusing(a, () => void asked++)).rejects.toMatchObject({ code: 'ptyd_unavailable' });
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(asked).toBe(1);
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(before);
   });
 
   it('a restage that fails leaves the branch where it was and the index never behind it', async () => {

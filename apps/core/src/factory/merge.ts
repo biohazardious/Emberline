@@ -82,18 +82,25 @@ const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 /**
  * What the agent left unconcluded in its worktree, as `git commit` would conclude it with the run's
- * output: a merge (MERGE_HEAD's commits become the output commit's other parents), a cherry-pick
- * (the output commit keeps the picked commit's author) or a revert.
+ * output: a merge (MERGE_HEAD's commits become the output commit's other parents, reduced as git
+ * reduces them), a cherry-pick (the output commit keeps the picked commit's author) or a revert.
  */
 interface PendingOperation {
   mergeHeads: string[];
+  /** The output commit's parents: HEAD and MERGE_HEAD's commits, without one another's ancestors. */
+  parents: string[];
+  /** MERGE_HEAD's commits are all in HEAD already (a conclusion that failed after the branch moved). */
+  staleMerge: boolean;
   cherryPick: string | null;
   revert: boolean;
+  /** A `git merge --autostash` is unconcluded: its stashed changes must go back into the worktree. */
+  autostash: boolean;
 }
 
-async function pendingOperation(worktreePath: string): Promise<PendingOperation> {
+async function pendingOperation(worktreePath: string, head: string): Promise<PendingOperation> {
+  const inWorktree = { cwd: worktreePath };
   const verify = (rev: string) =>
-    execGitFile(['rev-parse', '-q', '--verify', `${rev}^{commit}`], { cwd: worktreePath }).then(
+    execGitFile(['rev-parse', '-q', '--verify', `${rev}^{commit}`], inWorktree).then(
       (res) => res.stdout.trim() || null,
       () => null,
     );
@@ -105,20 +112,42 @@ async function pendingOperation(worktreePath: string): Promise<PendingOperation>
       throw new Error(`MERGE_HEAD names no commit (${line.slice(0, 80)}); conclude or abort the merge`);
     mergeHeads.push(oid);
   }
+  let parents = [...new Set([head, ...mergeHeads])];
+  // `git commit` drops a parent that another one contains, unless the merge was asked as --no-ff.
+  if (mergeHeads.length > 0 && (await readGitDirFile(worktreePath, 'MERGE_MODE')) !== 'no-ff') {
+    const independent = new Set(
+      gitLines((await execGitFile(['merge-base', '--independent', ...parents], inWorktree)).stdout),
+    );
+    parents = parents.filter((p) => independent.has(p));
+  }
   return {
     mergeHeads,
+    parents,
+    staleMerge: mergeHeads.length > 0 && parents.length === 1 && parents[0] === head,
     cherryPick: await verify('CHERRY_PICK_HEAD'),
     revert: (await verify('REVERT_HEAD')) !== null,
+    autostash: (await readGitDirFile(worktreePath, 'MERGE_AUTOSTASH')) !== null,
   };
 }
 
 /** Ends what the output commit concluded, as `git commit` does once it records it. */
 async function endPendingOperation(worktreePath: string, pending: PendingOperation): Promise<void> {
   const inWorktree = { cwd: worktreePath };
-  // `--quit`: MERGE_HEAD, MERGE_MSG, MERGE_MODE and AUTO_MERGE go; index and files stay.
+  // `--quit`: MERGE_HEAD, MERGE_MSG, MERGE_MODE and AUTO_MERGE go; index and files stay. (An
+  // autostash never gets here: such a merge is refused.)
   if (pending.mergeHeads.length > 0) await execGitFile(['merge', '--quit'], inWorktree);
-  if (pending.cherryPick) await execGitFile(['update-ref', '-d', 'CHERRY_PICK_HEAD'], inWorktree);
-  if (pending.revert) await execGitFile(['update-ref', '-d', 'REVERT_HEAD'], inWorktree);
+  for (const [ref, command] of [
+    [pending.cherryPick ? 'CHERRY_PICK_HEAD' : null, 'cherry-pick'],
+    [pending.revert ? 'REVERT_HEAD' : null, 'revert'],
+  ] as const) {
+    if (!ref) continue;
+    await execGitFile(['update-ref', '-d', ref], inWorktree);
+    // After the last pick of a sequence (its todo names only the one just concluded), `git commit`
+    // removes the sequence too; before it, the sequence stays for `--continue`.
+    const todo = await readGitDirFile(worktreePath, 'sequencer/todo');
+    const left = gitLines(todo ?? '').filter((line) => !line.startsWith('#')).length;
+    if (todo !== null && left <= 1) await execGitFile([command, '--quit'], inWorktree);
+  }
 }
 
 /**
@@ -164,7 +193,7 @@ async function buildRunOutputCommit(
           )
         ).stdout.split('\n')
       : null;
-    const parents = [head, ...pending.mergeHeads].flatMap((p) => ['-p', p]);
+    const parents = pending.parents.flatMap((p) => ['-p', p]);
     return (
       await execGitFile(
         [
@@ -399,7 +428,14 @@ export async function syncWorktreeToMainWorkspace(params: {
     // 1. The run's output as a commit on its own branch; .gitignore keeps secrets and build output
     //    out. It goes on the branch only once the merge is allowed.
     const head = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
-    const pending = await pendingOperation(worktreePath);
+    const pending = await pendingOperation(worktreePath, head);
+    if (pending.autostash) {
+      // Concluding it would put the agent's stashed changes on the stash list all worktrees share.
+      return result(
+        false,
+        `Could not merge ${label}: a git merge --autostash in its worktree is not finished. Finish it with git commit (or end it with git merge --abort), then merge again.`,
+      );
+    }
     const output = await buildRunOutputCommit(worktreePath, head, label, pending);
     const tip = output ?? head;
     const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
@@ -423,28 +459,36 @@ export async function syncWorktreeToMainWorkspace(params: {
       // failure, or an agent's git command, in between finds the index ahead of HEAD, never behind.
       await stageRunOutput(worktreePath);
       // Only if the branch is still where the commit was built on (an agent may commit meanwhile).
-      const moved = await execGitFile(
+      const failed = await execGitFile(
         [
           'update-ref',
           '-m',
-          `commit${pending.mergeHeads.length > 0 ? ' (merge)' : ''}: feat(${label}): factory run output`,
+          `commit${pending.parents.length > 1 ? ' (merge)' : ''}: feat(${label}): factory run output`,
           'HEAD',
           output,
           head,
         ],
         inWorktree,
       ).then(
-        () => false,
-        () => true,
+        () => null,
+        (error: unknown) => error,
       );
-      if (moved) {
-        beforeMerge?.();
-        return result(
-          false,
-          `Could not merge ${label}: its branch moved while it was being merged. Merge it again.`,
-        );
+      if (failed !== null) {
+        // "Moved" only when it did; any other failure (a lock, the runner) is reported as it is.
+        const now = (await execGitFile(['rev-parse', 'HEAD'], inWorktree)).stdout.trim();
+        if (now === head) throw failed;
+        if (now !== output) {
+          beforeMerge?.();
+          return result(
+            false,
+            `Could not merge ${label}: its branch moved while it was being merged. Merge it again.`,
+          );
+        }
       }
       await endPendingOperation(worktreePath, pending);
+    } else if (pending.staleMerge) {
+      // An earlier merge recorded MERGE_HEAD's commits but could not end the merge: end it now.
+      await endPendingOperation(worktreePath, { ...pending, cherryPick: null, revert: false });
     }
 
     // 2. Edits made directly in the main workspace (file explorer, blueprint) are committed first so
