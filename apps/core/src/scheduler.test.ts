@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Run, RunDetail, SchedulerState } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { quotaWindows, runs as runsTable } from './db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -121,6 +121,30 @@ describe('scheduler', () => {
 
     // A finishing its turn frees the slot.
     await hook(a.id, 'Stop', tokenA);
+    await expect.poll(async () => (await getRun(b.id)).state, { timeout: 5_000 }).toBe('starting');
+  });
+
+  it('starts nothing on a runner that needs a security update, and starts normally once it is current', async () => {
+    await api('PATCH', '/api/scheduler', { maxConcurrentRuns: 1 });
+    const a = await submit();
+    const b = await submit();
+    expect(b.state).toBe('queued');
+    const tokenA = await work(a);
+
+    // The runner turns out to be older than core (protocol 3): freeing the slot dispatches nothing.
+    let version = 3;
+    Object.defineProperty(t.ptyd, 'protocolVersion', { configurable: true, get: () => version });
+    const launch = vi.spyOn(t.runs, 'launch');
+    await hook(a.id, 'Stop', tokenA);
+    await expect.poll(async () => (await getRun(a.id)).state, { timeout: 5_000 }).not.toBe('working');
+    await t.scheduler.tick();
+    expect(launch).not.toHaveBeenCalled();
+    expect((await getRun(b.id)).state).toBe('queued');
+
+    // The runner answers hello with protocol 4: the queued run starts.
+    version = 4;
+    await t.scheduler.tick();
+    expect(launch).toHaveBeenCalledWith(b.id);
     await expect.poll(async () => (await getRun(b.id)).state, { timeout: 5_000 }).toBe('starting');
   });
 
