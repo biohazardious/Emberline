@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { MAX_EXEC_OUTPUT_BYTES, type PtydResult } from '@emberline/protocol';
 import { PtydClientError } from '@emberline/ptyd/client';
-import { HttpError, runnerNotSecured, runnerOutdated, unavailable } from './errors.js';
+import { HttpError, runnerNotSecured, runnerOutdated, runnerStarting, unavailable } from './errors.js';
 import { redactCapabilityUrls, withoutUrlCredentials } from './git-gateway/redact-text.js';
 import { isOutdatedRunner, type PtydBridge } from './ptyd-bridge.js';
 
@@ -128,7 +128,7 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
     const client = ptyd.get();
     // Fail closed: an outdated or not secured runner runs no command of core's.
     if (isOutdatedRunner(ptyd.protocolVersion)) throw runnerOutdated();
-    if (ptyd.unsecured) throw runnerNotSecured();
+    if (ptyd.unsecured) throw ptyd.lockState === 'starting' ? runnerStarting() : runnerNotSecured();
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const call = client.exec({
       file: request.file,
@@ -260,7 +260,7 @@ export function runnerUnavailableCause(error: unknown): Error | undefined {
     if (
       e instanceof HttpError &&
       e.statusCode === 503 &&
-      (e.code === 'runner_outdated' || e.code === 'runner_not_secured')
+      (e.code === 'runner_outdated' || e.code === 'runner_not_secured' || e.code === 'runner_starting')
     )
       return e;
     if (e instanceof HttpError && e.statusCode === 503 && e.code === 'ptyd_unavailable') unreachable ??= e;

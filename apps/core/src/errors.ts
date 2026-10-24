@@ -38,6 +38,15 @@ export const RUNNER_NOT_SECURED =
   "Runner not secured: the runner has not locked its service's socket, so a coding agent could stand in for it, and Emberline starts no agent and runs no command in the runner. The runner locks it as it starts, as root: if it was started as another user (`user:` in the compose file), remove that and restart it (`make up`, or `docker compose up -d`); otherwise restart it and see its log.";
 export const runnerNotSecured = () => unavailable('runner_not_secured', RUNNER_NOT_SECURED);
 
+/** A runner that has just started and not locked its socket yet: nothing starts for a few seconds. */
+export const RUNNER_STARTING =
+  'The runner is starting: it is securing its service, and Emberline starts nothing in it until then. Try again in a few seconds.';
+export const runnerStarting = () => unavailable('runner_starting', RUNNER_STARTING);
+
+/** The runner runs as another user than root on a socket folder an earlier start locked (PtydBridge.startProblem). */
+export const RUNNER_MUST_START_AS_ROOT =
+  'Runner cannot start: it must start as root to secure its service socket. Remove `user:` from the runner service in the compose file, then start it again (`make up`, or `docker compose up -d`).';
+
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) {

@@ -216,6 +216,7 @@ export async function buildServer(
     status: 'ok',
     version: VERSION,
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+    ...(deps.ptyd.startProblem ? { runnerProblem: deps.ptyd.startProblem } : {}),
   }));
 
   registerAuth(app, deps);
@@ -231,7 +232,9 @@ export async function buildServer(
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
-    runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.unsecured,
+    runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.lockState === 'not_secured',
+    runnerStarting: deps.ptyd.status === 'connected' && deps.ptyd.lockState === 'starting',
+    runnerProblem: deps.ptyd.startProblem,
     runnerPtraceUnrestricted: deps.ptyd.status === 'connected' && isPtraceUnrestricted(deps.ptyd.ptraceScope),
     docker: deps.runs.docker.status,
   }));

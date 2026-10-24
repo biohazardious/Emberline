@@ -6,7 +6,12 @@ import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/pro
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
-import { RUNNER_NOT_SECURED, RUNNER_SECURITY_UPDATE } from './errors.js';
+import {
+  RUNNER_MUST_START_AS_ROOT,
+  RUNNER_NOT_SECURED,
+  RUNNER_SECURITY_UPDATE,
+  RUNNER_STARTING,
+} from './errors.js';
 import type { CoreDeps } from './server.js';
 
 /** Below this much free space a volume is reported as degraded. */
@@ -70,7 +75,11 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
       result.database = { ok: false, detail: (error as Error).message };
     }
     const connected = deps.ptyd.status === 'connected';
-    result.runner = { ok: connected, detail: `ptyd ${deps.ptyd.status}` };
+    const problem = deps.ptyd.startProblem;
+    result.runner = {
+      ok: connected,
+      detail: problem === 'must_start_as_root' ? RUNNER_MUST_START_AS_ROOT : `ptyd ${deps.ptyd.status}`,
+    };
     const version = deps.ptyd.protocolVersion;
     const current = (version ?? 0) >= PTYD_PROTOCOL_VERSION;
     result.runnerProtocol = {
@@ -96,7 +105,9 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
           : !current
             ? "an agent can replace the runner's service: its socket's directory is not root's (rebuilding the runner with `make up` locks it)"
             : required
-              ? RUNNER_NOT_SECURED
+              ? deps.ptyd.lockState === 'starting'
+                ? RUNNER_STARTING
+                : RUNNER_NOT_SECURED
               : "the socket's directory is not root's, allowed by EMBERLINE_ALLOW_UNSECURED_RUNNER (the dev stack)",
     };
     result.runnerPtrace = ptraceCheck(connected, deps.ptyd.ptraceScope);

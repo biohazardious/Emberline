@@ -89,6 +89,30 @@ export function RunnerNotSecuredBanner({ notSecured }: { notSecured: boolean | u
   );
 }
 
+/** Shown for the few seconds a runner takes to secure its service socket as it starts. */
+export function RunnerStartingBanner({ starting }: { starting: boolean | undefined }) {
+  if (!starting) return null;
+  return (
+    <div className="banner banner-info" role="status">
+      Runner starting… It is securing its service; agents and commands start in a few seconds.
+    </div>
+  );
+}
+
+/** Shown while the runner runs as another user than root and cannot start its service (`runnerProblem`). */
+export function RunnerCannotStartBanner({ problem }: { problem: string | null | undefined }) {
+  if (problem !== 'must_start_as_root') return null;
+  return (
+    <div className="banner banner-error security-banner" role="alert">
+      <span>
+        <strong>Runner cannot start:</strong> it must start as root to secure its service socket. Remove{' '}
+        <code>user:</code> from the runner service in the compose file, then start it again (
+        <code>make up</code>, or <code>docker compose up -d</code>). Its log says the same.
+      </span>
+    </div>
+  );
+}
+
 /**
  * Shown while the runner image is older than core (`runnerOutdated`): core then starts no agent and
  * runs no command in the runner (fail closed) until the runner is updated.

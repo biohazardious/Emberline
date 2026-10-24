@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { lstatSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { PTYD_MIN_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydClient } from '@emberline/ptyd/client';
@@ -8,8 +8,19 @@ import {
   RUNNER_NOT_REACHABLE,
   runnerNotSecured,
   runnerOutdated,
+  runnerStarting,
   unavailable,
 } from './errors.js';
+
+/**
+ * How long a connected runner may take to lock its socket before core says it is not secured. Its
+ * entrypoint locks it milliseconds after ptyd listens; until then core starts nothing either way, and
+ * says the runner is starting.
+ */
+export const SECURE_GRACE_MS = 10_000;
+
+/** What core says about a connected runner's socket lock ({@link PtydBridge.lockState}). */
+export type RunnerLockState = 'secured' | 'starting' | 'not_secured';
 
 export type PtydStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -30,6 +41,22 @@ export function socketDirGuardedSync(socketPath: string): boolean {
 
 export async function socketDirGuarded(socketPath: string): Promise<boolean> {
   return socketDirGuardedSync(socketPath);
+}
+
+/**
+ * {@link PtydBridge.startProblem} for the socket at `socketPath`: only while core cannot reach the
+ * runner (its service, and so every agent, is down), and only in a socket folder an earlier root start
+ * locked (`guarded`), which is the case it explains.
+ */
+export function runnerStartProblem(
+  socketPath: string,
+  connected: boolean,
+  guarded: (socketPath: string) => boolean = socketDirGuardedSync,
+): 'must_start_as_root' | null {
+  if (connected || !guarded(socketPath)) return null;
+  return existsSync(path.join(path.dirname(socketPath), 'browser', 'runner-not-root'))
+    ? 'must_start_as_root'
+    : null;
 }
 
 /** A runner older than this core: it needs a security update before core uses it (fail closed). */
@@ -74,6 +101,9 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private _ptraceScope: number | null | undefined = undefined;
   private _socketGuarded: boolean | null = null;
   private readonly requireSecured: boolean;
+  private _lockHint: 'pending' | 'locked' | 'impossible' | undefined;
+  /** When the current connection was handed out (Date.now()). */
+  private connectedAt = 0;
 
   /**
    * `requireSecured`: start nothing in a current runner whose socket's directory is not locked
@@ -125,10 +155,31 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     return this.client !== undefined && this.requireSecured && !this.outdated && this.socketGuarded === false;
   }
 
+  /**
+   * For what core shows: a connected runner whose socket is not locked is `starting` for
+   * {@link SECURE_GRACE_MS} after core connected, unless the runner itself says it cannot lock it
+   * (`hello` lock `impossible`); then, or after that, it is `not_secured`. Nothing starts in either.
+   */
+  get lockState(): RunnerLockState {
+    if (!this.unsecured) return 'secured';
+    if (this._lockHint === 'impossible') return 'not_secured';
+    return Date.now() - this.connectedAt < SECURE_GRACE_MS ? 'starting' : 'not_secured';
+  }
+
+  /**
+   * Why the runner cannot be used though core cannot reach it: it was started as another user than
+   * root on a socket folder an earlier start locked, so its service cannot even listen. The runner's
+   * entrypoint says so in a file of browser/ (the runner user's; a root start makes browser/ afresh);
+   * it counts only while the folder is locked and core is not connected ({@link runnerStartProblem}).
+   */
+  get startProblem(): 'must_start_as_root' | null {
+    return runnerStartProblem(this.socketPath, this.client !== undefined);
+  }
+
   /** Why nothing may start in the connected runner now, if anything forbids it. */
   private refusal(): HttpError | undefined {
     if (this.outdated) return runnerOutdated();
-    if (this.unsecured) return runnerNotSecured();
+    if (this.unsecured) return this.lockState === 'starting' ? runnerStarting() : runnerNotSecured();
     return undefined;
   }
 
@@ -227,6 +278,8 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
         const hello = await client.hello().catch(() => null);
         this._protocolVersion = hello?.protocolVersion ?? 1;
         this._ptraceScope = hello?.ptraceScope;
+        this._lockHint = hello?.lock;
+        this.connectedAt = Date.now();
         this.client = client;
         this.setStatus('connected');
         await new Promise<void>((resolve) => client.once('close', resolve));
