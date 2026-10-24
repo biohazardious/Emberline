@@ -53,7 +53,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
       ok: connected && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION,
       detail: `runner ${version ?? 'unknown'}, core needs ${PTYD_MIN_PROTOCOL_VERSION}${
         connected && !current && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION
-          ? ` (update available: ${PTYD_PROTOCOL_VERSION} cancels worktree setup on stop)`
+          ? ` (update available: protocol ${PTYD_PROTOCOL_VERSION}; rebuild the runner with \`make up\`)`
           : ''
       }`,
     };

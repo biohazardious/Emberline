@@ -98,7 +98,12 @@ export class PtySession {
       cols: params.cols,
       rows: params.rows,
       cwd: params.cwd,
-      env: { ...pickBaseEnv(), ...params.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      env: {
+        ...(params.inheritEnv ? pickBaseEnv() : {}),
+        ...params.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+      },
     });
 
     this.proc.onData((data) => {

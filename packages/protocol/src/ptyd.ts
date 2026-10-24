@@ -47,12 +47,14 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
 /**
  * Bumped whenever ptyd gains or changes a method. Core reads it on connect (`hello`) and refuses
  * features the runner does not have yet, instead of failing with an unknown-method error.
- * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel`.
+ * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel` · 4: `inheritEnv`
+ * on `spawn` and `exec`.
  */
-export const PTYD_PROTOCOL_VERSION = 3;
+export const PTYD_PROTOCOL_VERSION = 4;
 /**
  * The oldest runner protocol core works with. Between this and PTYD_PROTOCOL_VERSION the runner
- * is not outdated, only missing extras (3: a stop during worktree setup waits for the command).
+ * is not outdated, only missing extras (3: a stop during worktree setup waits for the command; 4: core's
+ * own commands still get the runner's base environment beneath the variables core sets).
  */
 export const PTYD_MIN_PROTOCOL_VERSION = 2;
 
@@ -71,6 +73,8 @@ export const ptydMethods = {
       cwd: z.string().min(1),
       /** Merged over a minimal base environment; ptyd does not leak its own environment. */
       env: StringMap.default({}),
+      /** false: the process gets only `env` (and TERM/COLORTERM), none of ptyd's base environment. */
+      inheritEnv: z.boolean().default(true),
       cols: Cols.default(120),
       rows: Rows.default(32),
       meta: StringMap.default({}),
@@ -106,6 +110,8 @@ export const ptydMethods = {
       cwd: z.string().min(1),
       /** Merged over the same minimal base environment as `spawn`. */
       env: StringMap.default({}),
+      /** false: the process gets only `env`, none of ptyd's base environment (core's own commands). */
+      inheritEnv: z.boolean().default(true),
       timeoutMs: z
         .number()
         .int()

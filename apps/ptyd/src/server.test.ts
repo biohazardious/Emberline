@@ -153,7 +153,7 @@ describe('ptyd', () => {
     const { PtySession } = await import('./session.js');
     const session = new PtySession(
       'b21',
-      { file: 'sh', args: [], cwd: dir, env: {}, cols: 80, rows: 24, meta: {} },
+      { file: 'sh', args: [], cwd: dir, env: {}, inheritEnv: true, cols: 80, rows: 24, meta: {} },
       {},
     );
     // The flush callback is asynchronous; disposing in the same tick used to drop it for good.
@@ -334,6 +334,47 @@ describe('ptyd', () => {
     });
     await client.execCancel('dup');
     await first;
+  });
+
+  it('gives a process with inheritEnv false only the variables sent, none of its own (exec and spawn)', async () => {
+    const client = await connect();
+    const planted = { PATH: `${dir}/planted:/usr/bin:/bin`, HOME: dir, LANG: 'xx_XX', TMPDIR: dir };
+    const saved = Object.fromEntries(Object.keys(planted).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, planted);
+    try {
+      const inherited = await client.exec({ file: '/usr/bin/env', cwd: dir, env: { ONLY: '1' } });
+      expect(inherited.stdout).toContain(`HOME=${dir}`);
+      const clean = await client.exec({
+        file: '/usr/bin/env',
+        cwd: dir,
+        env: { ONLY: '1' },
+        inheritEnv: false,
+      });
+      expect(clean.stdout.trim().split('\n').sort()).toEqual(['ONLY=1']);
+
+      const session = await client.spawn({
+        file: '/usr/bin/env',
+        cwd: dir,
+        env: { ONLY: '1' },
+        inheritEnv: false,
+        cols: 80,
+        rows: 24,
+      });
+      await expect.poll(async () => (await client.list()).sessions[0]?.status).toBe('exited');
+      const screen = (await client.snapshot(session.id)).data;
+      // node-pty itself sets PWD (the cwd); nothing else comes from ptyd.
+      expect([...screen.matchAll(/([A-Z_]+)=/g)].map((m) => m[1]).sort()).toEqual([
+        'COLORTERM',
+        'ONLY',
+        'PWD',
+        'TERM',
+      ]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('refuses to start a second server on a live socket', async () => {

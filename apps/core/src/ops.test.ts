@@ -61,21 +61,22 @@ describe('ops endpoints', () => {
     }
 
     it('a current runner is ok, with nothing to update', async () => {
-      expect(PTYD_PROTOCOL_VERSION).toBe(3);
+      expect(PTYD_PROTOCOL_VERSION).toBe(4);
       expect(PTYD_MIN_PROTOCOL_VERSION).toBe(2);
-      const { deep, system } = await withRunner(3);
+      const { deep, system } = await withRunner(4);
       expect(deep.statusCode).toBe(200);
       expect(deep.json().checks.runnerProtocol).toMatchObject({ ok: true });
       expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: false });
     });
 
-    it('a protocol-2 runner still works: ok, with an update available', async () => {
-      const { deep, system } = await withRunner(2);
-      expect(deep.statusCode).toBe(200);
-      expect(deep.json().checks.runnerProtocol.ok).toBe(true);
-      expect(deep.json().checks.runnerProtocol.detail).toContain('update available');
-      expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: true });
-    });
+    for (const version of [2, 3])
+      it(`a protocol-${version} runner still works: ok, with an update available`, async () => {
+        const { deep, system } = await withRunner(version);
+        expect(deep.statusCode).toBe(200);
+        expect(deep.json().checks.runnerProtocol.ok).toBe(true);
+        expect(deep.json().checks.runnerProtocol.detail).toContain('update available');
+        expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: true });
+      });
 
     it('a runner below the minimum is outdated', async () => {
       const { deep, system } = await withRunner(1);

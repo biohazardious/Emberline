@@ -18,7 +18,7 @@ export function runExec(
   return new Promise((resolve) => {
     const child = spawn(params.file, params.args, {
       cwd: params.cwd,
-      env: { ...baseEnv, ...params.env },
+      env: params.inheritEnv ? { ...baseEnv, ...params.env } : { ...params.env },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group, so a timeout also kills what the command started (npm -> node).
       detached: true,
