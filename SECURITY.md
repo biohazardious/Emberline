@@ -24,12 +24,57 @@ Emberline gives AI agents a shell, your git credentials and your provider logins
 
 ### What it does not protect
 
-- **Agents from each other.** All agents and terminals in the runner run as the same user. Any agent can read every workspace and every provider login in the runner's home directory. Don't run agents on untrusted code next to projects you care about.
+- **Agents from each other, and Emberline's runner side from agents.** All agents and terminals in the runner run as the same user as the runner's own service and Emberline's commands there. Any agent can read and change every workspace and every provider login in the runner's home directory. See [The shared runner](#the-shared-runner). Don't run agents on untrusted code next to projects you care about.
 - **Secrets at rest, from someone with the key.** Secrets in the database are encrypted with AES-256-GCM under `EMBERLINE_SECRETS_KEY` or `/data/secrets.key`, which sits in the same data volume unless you set the variable, so anyone with access to that volume or to the Docker host can still read them, and snapshots from before 0.5.0 hold them in plaintext.
 - **Traffic on the network.** Emberline does not terminate TLS. It listens on `127.0.0.1` by default. If you set `EMBERLINE_BIND=0.0.0.0` without a TLS reverse proxy or VPN, passwords and session cookies travel in plaintext on your network.
 - **Attached hardware.** With `compose.usb.yaml` enabled, every agent can read and flash the attached serial device.
 - **The host from the Docker engine.** The engine is on by default and is a privileged container; see [The Docker engine](#the-docker-engine). `EMBERLINE_DOCKER_ENGINE=0` turns it off.
 - **What agents do with their access.** Agents can run arbitrary commands in the runner, reach the network and push branches with the credentials you gave them. Review their changes before merging.
+
+### The shared runner
+
+Everything in the runner container runs as one Unix user (`node`, uid 1000): the coding agents and terminals, ptyd (the runner's service, which starts every agent and every command Emberline runs there), the browser daemon behind the Live Browser, and the commands Emberline runs there for itself (git for merges, pushes and Refresh, the Docker CLI for previews and clean-up). The workspaces, every project's `.git`, the runner's home (`/home/node`) and the AI tools folder (`/opt/ai-tools`) are writable by that user.
+
+So a coding agent that wants to do harm can:
+
+- **Change any project.** It can read and change every project's files, git config and history, not only its own worktree. That includes moving `main` in a project's repository directly: **Push main to origin** and **Keep main pushed** then push what it put there, without the checks, the merge or a review. Branch protection at your forge is the control for what reaches it.
+- **Use the runner's service.** It can connect to ptyd like core does: list every session with its command line (an import clone's one-time address, for up to 60 minutes), read any session's screen (a provider Login terminal's too), and type into or stop any session, other projects' agents included.
+- **Read other processes.** It can read the command lines and environments of the runner's other processes: other agents' provider API keys, and the one-time addresses of Emberline's git while they live.
+- **Change the shared browser.** It can change the browser daemon's script and the Playwright hook, or take the shared browser over, so screenshots and the Live Browser can show what it wants.
+- **Change ssh keys.** It can replace the runner's `~/.ssh` keys and `known_hosts`, which a project without a forge account uses for an ssh origin.
+- **Control the Docker engine.** See [The Docker engine](#the-docker-engine).
+
+The checks Emberline runs on an agent's work (the build gate, the secret and quality guards, the critic, reviews) are quality controls. They are not a security boundary against a hostile agent, which can change what they see or go around them.
+
+What does hold:
+
+- **No forge token reaches the runner.** Agents and the runner get only one-time addresses of core's git gateway, short-lived and scoped to one repository and one operation (see [What Emberline protects](#what-emberline-protects)).
+- **Emberline's own commands are the image's.** Core runs git, ssh, the merge's file steps, curl and the Docker CLI from the runner image's root-owned folders, by their full paths, with none of the runner's environment settings and none of the runner user's git or Docker configuration. A repository's git config cannot make them run a program, route traffic through a proxy or to another address, add a header or weaken TLS.
+- **No agent can replace ptyd.** The runner starts as root only to lock the directory of ptyd's socket once ptyd listens; ptyd and every agent then run as the runner's user. `/api/health/deep` reports a socket an agent could replace (`runnerSocket`). Because the container starts as root, `docker compose exec runner …` opens a root shell; use `docker compose exec -u node runner …` for the runner's user.
+- **Agents cannot trace ptyd**, as long as the Docker host's ptrace setting allows it; see below.
+
+Closing the rest takes separate users, or separate containers, for Emberline's runner side and for agents. Emberline does not do that yet.
+
+### The host's ptrace setting
+
+Linux's Yama setting `kernel.yama.ptrace_scope` decides which processes may trace (debug) another process of the same user. With `1`, the default on Ubuntu and many other distributions, a process may trace only its own children, and ptyd is no agent's child. With `0`, or on a kernel without Yama, any agent may attach to ptyd or to Emberline's git while it runs and make it do anything, so every command Emberline runs in the runner is the agent's. Docker's default seccomp profile allows tracing, and tracing a process of the same user needs no capability, so the container does not stop it.
+
+It is a setting of the Docker host's kernel, shared by every container. To check it, run on the Docker host:
+
+```sh
+cat /proc/sys/kernel/yama/ptrace_scope
+```
+
+To set it to `1` now and at every boot:
+
+```sh
+sudo sysctl -w kernel.yama.ptrace_scope=1
+echo 'kernel.yama.ptrace_scope = 1' | sudo tee /etc/sysctl.d/10-ptrace.conf
+```
+
+On TrueNAS SCALE, add it under System → Advanced Settings → Sysctl (variable `kernel.yama.ptrace_scope`, value `1`). `2` and `3` are stricter and also fine for Emberline, but they stop debuggers such as gdb and strace from attaching to a running process for everyone on the host, agents included.
+
+Emberline checks it: the runner reports the value, `/api/health/deep` shows it (`runnerPtrace`), and every page shows a warning while it is `0` or Yama is missing.
 
 ### The Docker engine
 
