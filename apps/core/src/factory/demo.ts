@@ -7,7 +7,7 @@ import {
   type BuildDemoResponse,
   type WorktreeChecks,
 } from '@emberline/protocol';
-import { CommandFailedError, execCommand, RUNNER_BIN, SYSTEM_PATH } from '../command-exec.js';
+import { CommandFailedError, execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -628,23 +628,29 @@ export async function captureBrowserViewportSnapshot(params: {
   const nowIso = new Date().toISOString();
   // Chromium lives in the runner; the screenshot comes back on stdout (base64), no shared temp file.
   if (params.targetUrl) {
+    // A fresh profile and home for the browser, removed afterwards: the runner user's own (agents can
+    // write it) could hold extensions, certificates or settings that change the picture.
     const script = [
       'f=$(mktemp --suffix=.png) || exit 1',
+      'd=$(mktemp -d) || exit 1',
+      'trap \'rm -rf -- "$f" "$d"\' EXIT',
       'for b in chromium chromium-browser google-chrome; do',
       '  command -v "$b" >/dev/null 2>&1 || continue',
-      '  "$b" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1280,720 --screenshot="$f" "$1" >/dev/null 2>&1 && [ -s "$f" ] && break',
+      '  HOME="$d" "$b" --headless --no-sandbox --disable-gpu --hide-scrollbars --user-data-dir="$d/profile" --window-size=1280,720 --screenshot="$f" "$1" >/dev/null 2>&1 && [ -s "$f" ] && break',
       'done',
-      'cat "$f"; rm -f "$f"',
+      'cat "$f"',
     ].join('\n');
-    // Core's own script: the image's sh, and the system PATH for the browser, mktemp, cat and rm.
-    const shot = await execCommand({
-      file: RUNNER_BIN.sh,
-      args: ['-c', script, 'sh', params.targetUrl],
-      env: { PATH: SYSTEM_PATH },
-      cwd: '/',
-      timeoutMs: 20_000,
-      encoding: 'base64',
-    }).catch(() => null);
+    // Core's own script: the image's sh, and the system PATH for the browser, mktemp, cat and rm,
+    // with nothing of the runner's environment.
+    const shot = await execCommand(
+      systemCommand({
+        file: RUNNER_BIN.sh,
+        args: ['-c', script, 'sh', params.targetUrl],
+        cwd: '/',
+        timeoutMs: 20_000,
+        encoding: 'base64',
+      }),
+    ).catch(() => null);
     if (shot && shot.exitCode === 0 && !shot.truncated && shot.stdout.length > 0) {
       return {
         available: true,

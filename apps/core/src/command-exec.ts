@@ -42,6 +42,7 @@ export const RUNNER_BIN = {
   git: '/usr/bin/git',
   ssh: '/usr/bin/ssh',
   sh: '/usr/bin/sh',
+  bash: '/usr/bin/bash',
   rm: '/usr/bin/rm',
   cp: '/usr/bin/cp',
   head: '/usr/bin/head',

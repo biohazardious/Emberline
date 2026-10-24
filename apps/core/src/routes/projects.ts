@@ -1132,13 +1132,14 @@ export function registerProjectRoutes(
       `printf "${spec.instructions}\\n\\n"`,
       autoInstallStep,
       spec.cmd,
-      `exec bash -i`,
+      `exec ${RUNNER_BIN.bash} -i`,
     ]
       .filter(Boolean)
       .join('; ');
 
+    // The image's bash by its path: the runner's PATH starts with a directory agents can write.
     const session = await ptyd.get().spawn({
-      file: 'bash',
+      file: RUNNER_BIN.bash,
       args: ['-c', shellScript],
       cwd: config.workspacesDir,
       meta: {

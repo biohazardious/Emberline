@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { coerceModelForProvider, selectProviderModelByRank } from '@emberline/protocol';
+import { RUNNER_BIN } from './command-exec.js';
 import { settings } from './db/schema.js';
 import {
   getFactorySettings,
@@ -419,5 +420,28 @@ describe('requireCompletionSignal over HTTP', () => {
     expect(await read()).toBe(false);
     expect((await patch(true)).json().requireCompletionSignal).toBe(true);
     expect((await patch('no')).statusCode).toBe(400);
+  });
+});
+
+describe('the provider Login terminal', () => {
+  it("is the image's bash by its path, never one planted on the runner's PATH", async () => {
+    const cookie = await setupAndLogin(t.app);
+    const spawned: { file: string; args: string[] }[] = [];
+    vi.spyOn(t.ptyd, 'get').mockReturnValue({
+      spawn: async (params: { file: string; args: string[]; meta?: { title?: string } }) => {
+        spawned.push(params);
+        return { id: 's1', status: 'running', meta: params.meta ?? {} };
+      },
+    } as never);
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/factory/provider-login',
+      payload: { provider: 'claude' },
+      headers: authHeaders(cookie),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]!.file).toBe(RUNNER_BIN.bash);
+    expect(spawned[0]!.args[1]).toMatch(new RegExp(`exec ${RUNNER_BIN.bash} -i$`));
   });
 });

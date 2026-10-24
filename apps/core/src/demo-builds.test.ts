@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ProjectStatusSummary, WorkspaceDemoTarget } from '@emberline/protocol';
@@ -13,7 +23,18 @@ import {
   readDemoBuilds,
   recordDemoBuild,
 } from './factory/demo-builds.js';
-import { buildWorkspaceDemo, hasVerifiableBuildTarget } from './factory/demo.js';
+import {
+  type ExecRequest,
+  localCommandExecutor,
+  RUNNER_BIN,
+  setCommandExecutor,
+  SYSTEM_PATH,
+} from './command-exec.js';
+import {
+  buildWorkspaceDemo,
+  captureBrowserViewportSnapshot,
+  hasVerifiableBuildTarget,
+} from './factory/demo.js';
 import { workspaceHeadSha, worktreeHeadSha } from './runs/git.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
@@ -323,5 +344,56 @@ describe('build records', () => {
     });
     git(wt, 'commit', '-q', '--allow-empty', '-m', 'agent work');
     expect(target(await status(project.id), 'run-a').demoStale).toBe(true);
+  });
+});
+
+describe("the Live Browser's fallback screenshot", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'shot-'));
+  });
+  afterEach(() => {
+    setCommandExecutor(localCommandExecutor);
+    rmTemp(dir);
+  });
+
+  it("runs the image's sh with none of the runner's environment and a fresh browser profile and home, removed after", async () => {
+    // A browser that records what it got and writes a picture where it was asked to.
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, 'chromium'),
+      [
+        '#!/bin/sh',
+        `{ echo "home=$HOME"; echo "planted=\${PLANTED:-}"; for a in "$@"; do echo "arg=$a"; done; } > ${dir}/seen`,
+        'for a in "$@"; do case "$a" in --screenshot=*) printf PNG > "${a#--screenshot=}";; esac; done',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(path.join(bin, 'chromium'), 0o755);
+    const seen: ExecRequest[] = [];
+    setCommandExecutor(async (request) => {
+      seen.push(request);
+      // As the runner would run it, with the recorder first on the system PATH, and a planted variable
+      // that only an inherited environment could carry.
+      const inherited = request.inheritEnv === false ? {} : { PLANTED: '1' };
+      return localCommandExecutor({
+        ...request,
+        env: { ...inherited, ...request.env, PATH: `${bin}:${request.env?.PATH}` },
+      });
+    });
+    const shot = await captureBrowserViewportSnapshot({ targetUrl: 'http://core:7420/x' });
+    expect(seen[0]).toMatchObject({ file: RUNNER_BIN.sh, inheritEnv: false, env: { PATH: SYSTEM_PATH } });
+    expect(shot).toMatchObject({
+      available: true,
+      imageDataUrl: `data:image/png;base64,${Buffer.from('PNG').toString('base64')}`,
+    });
+    const lines = readFileSync(path.join(dir, 'seen'), 'utf8').split('\n');
+    const home = lines.find((l) => l.startsWith('home='))!.slice('home='.length);
+    expect(home).not.toBe(process.env.HOME);
+    expect(lines).toContain('planted=');
+    expect(lines).toContain(`arg=--user-data-dir=${home}/profile`);
+    expect(lines).toContain('arg=http://core:7420/x');
+    expect(existsSync(home), 'the fresh home was left behind').toBe(false);
   });
 });
