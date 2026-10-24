@@ -89,7 +89,7 @@ describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
         code: 'not_secured',
       });
       await expect(client.exec({ file: 'true', cwd: dir })).rejects.toMatchObject({ code: 'not_secured' });
-      expect((await client.hello()).protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
+      expect(await client.hello()).toMatchObject({ protocolVersion: PTYD_PROTOCOL_VERSION, lock: 'pending' });
       expect((await client.list()).sessions).toEqual([]);
       client.close();
       // It knows which socket it bound: the one the entrypoint checks before it locks.
@@ -97,6 +97,19 @@ describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
       expect(guarded.socketIdentity).toEqual({ dev: st.dev, ino: st.ino });
     } finally {
       await guarded.close();
+    }
+  });
+
+  it('a runner started as another user says it cannot lock the socket', async () => {
+    const socket = path.join(dir, 'user.sock');
+    const unlockable = new PtydServer({ socketPath: socket, cannotLock: true });
+    await unlockable.listen();
+    try {
+      const client = await PtydClient.connect(socket);
+      expect((await client.hello()).lock).toBe('impossible');
+      client.close();
+    } finally {
+      await unlockable.close();
     }
   });
 

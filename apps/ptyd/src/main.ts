@@ -6,6 +6,7 @@
  *   EMBERLINE_PTYD_SOCKET   socket path (default $XDG_RUNTIME_DIR/emberline/ptyd.sock or <tmp>/emberline/ptyd.sock)
  *   EMBERLINE_PTYD_LOG_DIR  directory for raw session logs (disabled when unset)
  *   EMBERLINE_PTYD_REQUIRE_LOCK  `1`: refuse spawn and exec until the socket's directory is locked
+ *   EMBERLINE_PTYD_CANNOT_LOCK  `1`: started as another user than root; hello says the lock is impossible
  *   EMBERLINE_PTYD_READY_FD  a file descriptor to write `ready <dev> <ino>` to once listening, then close
  */
 import { closeSync, writeSync } from 'node:fs';
@@ -25,6 +26,7 @@ const server = new PtydServer({
   logDir: process.env.EMBERLINE_PTYD_LOG_DIR || undefined,
   log,
   requireLock: process.env.EMBERLINE_PTYD_REQUIRE_LOCK === '1',
+  cannotLock: process.env.EMBERLINE_PTYD_CANNOT_LOCK === '1',
 });
 
 /**

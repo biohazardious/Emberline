@@ -33,6 +33,8 @@ export interface PtydServerOptions extends SessionConfig {
    * `exec` are refused. Agents share ptyd's user; one started before the lock could replace the socket.
    */
   requireLock?: boolean;
+  /** The runner runs as another user than root and cannot lock the directory (hello says so). */
+  cannotLock?: boolean;
 }
 
 /** A path's device and inode, as `stat -c '%d %i'` prints them. */
@@ -237,7 +239,15 @@ export class PtydServer {
       this.options.log?.(`spawned ${id} (pid ${session.info().pid}): ${params.file}`);
       return session.info();
     },
-    hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION, ptraceScope: this.ptraceScope }),
+    hello: () => ({
+      protocolVersion: PTYD_PROTOCOL_VERSION,
+      ptraceScope: this.ptraceScope,
+      ...(this.options.cannotLock
+        ? { lock: 'impossible' as const }
+        : this.options.requireLock
+          ? { lock: this.isLocked() ? ('locked' as const) : ('pending' as const) }
+          : {}),
+    }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
       this.assertLocked();

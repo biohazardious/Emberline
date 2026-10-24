@@ -92,6 +92,13 @@ export const ptydMethods = {
        * Yama. Absent from a runner before protocol 4.
        */
       ptraceScope: z.number().int().nullable().optional(),
+      /**
+       * Whether the runner's entrypoint has locked the socket's directory: `pending` while it starts,
+       * `locked` once done, `impossible` when the runner runs as another user than root and cannot
+       * lock it. Absent from a ptyd started without the entrypoint (the dev stack). Only a hint for
+       * what core shows: core checks the directory itself.
+       */
+      lock: z.enum(['pending', 'locked', 'impossible']).optional(),
     }),
   },
   list: { params: Empty, result: z.object({ sessions: z.array(SessionInfo) }) },
