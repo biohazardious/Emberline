@@ -4,7 +4,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
-## [0.6.1] - 2026-10-23
+## [0.6.1] - 2026-10-24
 
 A clean-up release: every known bug and piece of technical debt left after 0.6.0, from the Answer dialog to held tickets, restarts, previews, project delete and how repository addresses and credentials are shown.
 
