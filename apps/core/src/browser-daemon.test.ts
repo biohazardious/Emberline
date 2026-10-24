@@ -8,6 +8,7 @@ import {
   isBrowsableUrl,
   logBridgeErrorOnce,
   resetBridgeErrorLog,
+  runnerBrowserDir,
 } from './factory/browser-daemon.js';
 
 /** The daemon is a standalone script run in the runner; its URL guard is evaluated from the source. */
@@ -688,5 +689,15 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
 
   it('a snapshot says when Auto-Interact runs for another project (B-12)', () => {
     expect(daemonSource('captureState')).toMatch(/playtestElsewhere: playtestHeldByOther\(/);
+  });
+});
+
+describe("the browser daemon's directory", () => {
+  it("is browser/ beside ptyd's socket (whose own directory the runner locks), for every file of the daemon's", () => {
+    expect(runnerBrowserDir('/run/emberline/ptyd.sock')).toBe('/run/emberline/browser');
+    expect(BROWSER_DAEMON_SCRIPT).toContain("'/run/emberline/browser/browser.sock'");
+    // The tabs and the agents' browser events sit next to the socket; nothing is written beside ptyd's.
+    expect(BROWSER_DAEMON_SCRIPT).toContain("SOCKET_PATH.replace(/[^/]+$/, 'agent-browser-events.jsonl')");
+    expect(BROWSER_DAEMON_SCRIPT.match(/\/run\/emberline\/[\w.-]+/g)).toEqual(['/run/emberline/browser']);
   });
 });

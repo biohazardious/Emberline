@@ -95,6 +95,7 @@ import {
   getRunnerClaudeUsage,
   isBrowsableUrl,
   runnerBrowserDaemon,
+  runnerBrowserDir,
   withRunActivity,
 } from '../factory/browser-daemon.js';
 import { type BrowserTabOptions, ProjectBrowserTabs } from '../factory/project-browser-tabs.js';
@@ -236,7 +237,7 @@ export function registerProjectRoutes(
       .run();
   };
   const browserTabs = new ProjectBrowserTabs(
-    (opts) => runnerBrowserDaemon(ptyd, path.dirname(config.ptydSocket), opts),
+    (opts) => runnerBrowserDaemon(ptyd, runnerBrowserDir(config.ptydSocket), opts),
     (ids) =>
       new Set(
         db
@@ -1171,7 +1172,7 @@ export function registerProjectRoutes(
     async (request): Promise<ClaudeUsageTelemetry> => {
       return getRunnerClaudeUsage({
         ptyd,
-        socketDir: path.dirname(config.ptydSocket),
+        socketDir: runnerBrowserDir(config.ptydSocket),
         forceRefresh: request.query.refresh === '1',
       });
     },

@@ -297,7 +297,7 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && cp /opt/emberline/hook/wrappers/* /opt/emberline/wrappers/ \
   && chmod +x /opt/emberline/wrappers/* \
   && ln -sf /opt/emberline/wrappers/agy /opt/emberline/wrappers/antigravity \
-  && mkdir -p /run/emberline /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
+  && mkdir -p /run/emberline/browser /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
   && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools \
   && mkdir -p /opt/emberline/docker/config /opt/emberline/docker/buildx/instances /opt/emberline/docker/buildx/defaults \
     /opt/emberline/docker/buildx/activity /opt/emberline/docker/buildx/refs \
@@ -307,7 +307,9 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
 # /opt/emberline/docker: the Docker CLI's config and buildx directories for Emberline's own commands
 # (DOCKER_CLI_ENV in apps/core/src/command-exec.ts), root's so no agent can add a plugin, a config or
 # a builder; buildx may write only its lock, activity times and build records.
-USER node
+# The container starts as root: the entrypoint locks ptyd's socket directory once ptyd listens, and
+# runs ptyd (so every agent) as node. `docker compose exec runner …` is therefore root; use
+# `exec -u node` for the runner's user.
 WORKDIR /workspaces
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD test -S /run/emberline/ptyd.sock
 CMD ["/opt/emberline/wrappers/runner-entrypoint.sh"]

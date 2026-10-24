@@ -18,9 +18,9 @@ interface CheckResult {
 
 /**
  * Operations endpoints:
- * - `GET /api/health/deep` (public): database, runner connection and protocol, writable
- *   workspaces and free disk; 503 when anything is degraded. Docker keeps using the cheap
- *   `/api/health`, so a runner outage never restarts core.
+ * - `GET /api/health/deep` (public): database, runner connection and protocol, whether agents could
+ *   replace the runner's service, writable workspaces and free disk; 503 when anything is
+ *   degraded. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
  * - `GET /metrics`: Prometheus text format, only when `EMBERLINE_METRICS_TOKEN` is set and sent as
  *   a bearer token (404 otherwise, so the endpoint does not exist by default).
  */
@@ -56,6 +56,19 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
           ? ` (update available: protocol ${PTYD_PROTOCOL_VERSION}; rebuild the runner with \`make up\`)`
           : ''
       }`,
+    };
+    // Only a runner of this version locks its socket's directory; an older one is the runner update's
+    // business (runnerProtocol).
+    const guarded = deps.ptyd.socketGuarded;
+    result.runnerSocket = {
+      ok: !connected || guarded !== false || !current,
+      detail: !connected
+        ? 'not connected'
+        : guarded
+          ? "the socket's directory is root's: no agent can replace the runner's service"
+          : `an agent can replace the runner's service: its socket's directory is not root's${
+              current ? '' : ' (rebuilding the runner with `make up` locks it)'
+            }`,
     };
     result.workspaces = await access(deps.config.workspacesDir, fsConstants.W_OK).then(
       () => ({ ok: true, detail: 'writable' }),

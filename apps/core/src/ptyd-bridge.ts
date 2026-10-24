@@ -1,8 +1,25 @@
 import { EventEmitter } from 'node:events';
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
 import { PtydClient } from '@emberline/ptyd/client';
 import { RUNNER_NOT_REACHABLE, unavailable } from './errors.js';
 
 export type PtydStatus = 'connecting' | 'connected' | 'disconnected';
+
+/**
+ * Whether only root can add, remove or rename entries in the directory of ptyd's socket. Agents run
+ * as ptyd's own user, so the socket's owner and mode prove nothing; but in a directory that is
+ * root's and writable by root alone, the socket is the one ptyd bound and no agent can put its own
+ * listener in its place (the runner's entrypoint locks the directory once ptyd listens).
+ */
+export async function socketDirGuarded(socketPath: string): Promise<boolean> {
+  try {
+    const dir = await lstat(path.dirname(socketPath));
+    return dir.isDirectory() && dir.uid === 0 && (dir.mode & 0o022) === 0;
+  } catch {
+    return false;
+  }
+}
 
 interface BridgeEvents {
   status: [status: PtydStatus];
@@ -21,6 +38,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private _status: PtydStatus = 'connecting';
   private wake?: () => void;
   private _protocolVersion: number | null = null;
+  private _socketGuarded: boolean | null = null;
 
   constructor(private readonly socketPath: string) {
     super();
@@ -33,6 +51,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   /** ptyd protocol version of the connected runner (1 = before the handshake existed). */
   get protocolVersion(): number | null {
     return this._protocolVersion;
+  }
+
+  /** Whether the socket core last connected to sat in a directory agents cannot change ({@link socketDirGuarded}). */
+  get socketGuarded(): boolean | null {
+    return this._socketGuarded;
   }
 
   start(): void {
@@ -90,7 +113,9 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     let delay = 250;
     while (!this.stopped) {
       try {
+        const guarded = await socketDirGuarded(this.socketPath);
         const client = await PtydClient.connect(this.socketPath);
+        this._socketGuarded = guarded;
         if (this.stopped) {
           client.close();
           break;

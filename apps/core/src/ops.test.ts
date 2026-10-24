@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -8,6 +8,7 @@ import { openDb } from './db/index.js';
 import { quotaWindows } from './db/schema.js';
 import { PtydServer } from '@emberline/ptyd/server';
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
+import { socketDirGuarded } from './ptyd-bridge.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
 
@@ -46,18 +47,32 @@ describe('ops endpoints', () => {
       server = undefined;
     });
 
-    /** Core connected to a runner that answers `hello` with `version`. */
-    async function withRunner(version: number) {
+    /**
+     * Core connected to a runner that answers `hello` with `version`, with ptyd's socket in a
+     * directory agents cannot change unless `guarded` is false.
+     */
+    async function withRunner(
+      version: number,
+      { guarded = true }: { guarded?: boolean } = {},
+    ) {
       t = await createTestApp();
       server = new PtydServer({ socketPath: t.config.ptydSocket });
       await server.listen();
       t.ptyd.start();
       await t.ptyd.waitUntilConnected();
       Object.defineProperty(t.ptyd, 'protocolVersion', { get: () => version });
+      Object.defineProperty(t.ptyd, 'socketGuarded', { get: () => guarded });
       const cookie = await setupAndLogin(t.app);
       const deep = await t.app.inject({ url: '/api/health/deep' });
       const system = (await t.app.inject({ url: '/api/system', headers: authHeaders(cookie) })).json();
       return { deep, system };
+    }
+
+    async function closeRunner() {
+      await server?.close();
+      server = undefined;
+      await t?.close();
+      t = undefined;
     }
 
     it('a current runner is ok, with nothing to update', async () => {
@@ -84,6 +99,40 @@ describe('ops endpoints', () => {
       expect(deep.json().checks.runnerProtocol.ok).toBe(false);
       expect(system).toMatchObject({ runnerOutdated: true, runnerUpdateAvailable: false });
     });
+
+    it("a current runner whose socket's directory agents can change is degraded; an older one is told rebuilding locks it", async () => {
+      const current = await withRunner(4, { guarded: false });
+      expect(current.deep.statusCode).toBe(503);
+      expect(current.deep.json().checks.runnerSocket).toMatchObject({ ok: false });
+      expect(current.deep.json().checks.runnerSocket.detail).toContain(
+        "an agent can replace the runner's service",
+      );
+      await closeRunner();
+      const older = await withRunner(3, { guarded: false });
+      expect(older.deep.statusCode).toBe(200);
+      expect(older.deep.json().checks.runnerSocket.ok).toBe(true);
+      expect(older.deep.json().checks.runnerSocket.detail).toContain(
+        'rebuilding the runner with `make up` locks it',
+      );
+    });
+  });
+
+  it("the socket's directory counts as guarded only when it is root's and writable by root alone", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sock-dir-'));
+    try {
+      // A directory of the test's own user (agents' user in the runner) never counts, whatever its mode.
+      if (process.getuid?.() !== 0) {
+        chmodSync(dir, 0o700);
+        expect(await socketDirGuarded(path.join(dir, 'ptyd.sock'))).toBe(false);
+      }
+      // `/` is root's, 0755 in every container.
+      expect(await socketDirGuarded('/ptyd.sock')).toBe(true);
+      expect(await socketDirGuarded(path.join(dir, 'missing', 'ptyd.sock'))).toBe(false);
+      // /tmp is root's but anyone may add entries (1777).
+      expect(await socketDirGuarded(path.join(tmpdir(), 'ptyd.sock'))).toBe(false);
+    } finally {
+      rmTemp(dir);
+    }
   });
 
   it('serves Prometheus metrics only with the configured bearer token', async () => {

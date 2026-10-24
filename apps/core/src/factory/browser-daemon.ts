@@ -42,7 +42,7 @@ export function browsableHref(raw: string): string | null {
 }
 
 /**
- * Preload hook (`NODE_OPTIONS="--require /run/emberline/playwright-hook.cjs"`) injected into
+ * Preload hook (`NODE_OPTIONS="--require /run/emberline/browser/playwright-hook.cjs"`) injected into
  * agent processes so any custom Playwright script (`chromium.launch()`) or `npx playwright test`
  * executed via `Bash` automatically exposes `--remote-debugging-port=9223` for live streaming!
  */
@@ -62,7 +62,7 @@ try {
         args = [...args, '--remote-debugging-port=9223'];
         try {
           fs.appendFileSync(
-            '/run/emberline/agent-browser-events.jsonl',
+            require('node:path').join(__dirname, 'agent-browser-events.jsonl'),
             JSON.stringify({
               ts: new Date().toISOString(),
               toolName: 'playwright_launch',
@@ -98,13 +98,12 @@ import http from 'node:http';
 import net from 'node:net';
 
 const DAEMON_VERSION = '${BROWSER_DAEMON_VERSION}';
-const SOCKET_PATH = process.env.EMBERLINE_BROWSER_SOCKET || '/run/emberline/browser.sock';
+const SOCKET_PATH = process.env.EMBERLINE_BROWSER_SOCKET || '/run/emberline/browser/browser.sock';
 const CDP_PORT = 9222;
 const CDP_BASE = 'http://127.0.0.1:' + CDP_PORT;
 const EPHEMERAL_CDP_BASE = 'http://127.0.0.1:9223';
 const PROFILE_DIR = '/tmp/emberline-chrome-profile';
-const AGENT_EVENTS_FILE = '/run/emberline/agent-browser-events.jsonl';
-
+const AGENT_EVENTS_FILE = SOCKET_PATH.replace(/[^/]+$/, 'agent-browser-events.jsonl');
 const TABS_FILE = SOCKET_PATH.replace(/[^/]+$/, 'browser-tabs.json');
 /** tab id -> project id: tabs the daemon opened for a project's Live Browser. Any other tab is an agent's. */
 const tabProjects = new Map(loadTabProjects());
@@ -1207,8 +1206,20 @@ export function logBridgeErrorOnce(
 }
 
 /**
- * Ensures `/run/emberline/browser-daemon.mjs` and `/run/emberline/playwright-hook.cjs`
- * are written and running inside the `runner` container.
+ * The directory of the browser daemon's script, socket and state and of the Playwright hook:
+ * `browser/` beside ptyd's socket. ptyd's own directory is root's once ptyd listens (the runner's
+ * entrypoint locks it, so no agent can replace ptyd's socket); this one stays the runner user's.
+ */
+export function runnerBrowserDir(ptydSocket: string): string {
+  return path.join(path.dirname(ptydSocket), 'browser');
+}
+
+/** Where a daemon of an Emberline before 0.6.1 listens: beside ptyd's socket. */
+const legacyBrowserSocket = (socketDir: string) => path.join(path.dirname(socketDir), 'browser.sock');
+
+/**
+ * Ensures `browser-daemon.mjs` and `playwright-hook.cjs` (in {@link runnerBrowserDir}) are written
+ * and running inside the `runner` container.
  */
 export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: string): Promise<string | null> {
   const browserSock = path.join(socketDir, 'browser.sock');
@@ -1249,6 +1260,11 @@ export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: str
       await writeFile(scriptPath, BROWSER_DAEMON_SCRIPT, { encoding: 'utf8', mode: 0o755 });
 
       if (ptyd.status !== 'connected') return null;
+      // A daemon an earlier Emberline started (a runner not restarted since) holds Chromium's debugging port.
+      if (existsSync(legacyBrowserSocket(socketDir)))
+        await socketRequest(legacyBrowserSocket(socketDir), 'POST', '/shutdown', {}, 1_000).catch(
+          () => undefined,
+        );
 
       resetBridgeErrorLog();
       // The image's node by its path, which starts the daemon with itself (process.execPath).

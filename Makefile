@@ -81,19 +81,19 @@ backup: ## Consistent SQLite snapshot (VACUUM INTO) in the data volume, copied t
 	echo "backup: backups/$$(basename $$file) (also kept in the data volume)"
 
 claude-login: ## One-time `claude login` inside the runner (Anthropic OAuth credentials)
-	$(PROD) exec runner claude login
+	$(PROD) exec -u node runner claude login
 
 gemini-login: ## Google login (Code Assist Standard/Enterprise only) via `gemini` inside the runner
-	$(PROD) exec runner gemini
+	$(PROD) exec -u node runner gemini
 
 agy-login: ## Interactive Antigravity / Google OAuth login (`agy login`) inside the runner
-	$(PROD) exec runner agy login
+	$(PROD) exec -u node runner agy login
 
 codex-login: ## Interactive OpenAI ChatGPT/Codex OAuth login (`codex login`) inside the runner
-	$(PROD) exec runner codex login
+	$(PROD) exec -u node runner codex login
 
 copilot-login: ## Interactive GitHub Copilot CLI login (`copilot login`) inside the runner
-	$(PROD) exec runner copilot login
+	$(PROD) exec -u node runner copilot login
 
 clean: ## Remove dev containers and volumes (node_modules, pnpm store)
 	$(DEV) down -v --remove-orphans

@@ -23,6 +23,8 @@ services:
   forge:
     image: emberline/runner:e2e
     entrypoint: ['node', '/e2e/fake-forge.mjs']
+    # The runner image starts as root (for its entrypoint); the fake needs no root.
+    user: node
     # The runner image checks for ptyd's socket; this service only runs the fake.
     healthcheck:
       test:
