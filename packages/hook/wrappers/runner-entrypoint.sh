@@ -20,9 +20,6 @@ if [ "$EUID" != 0 ]; then
   # Emberline treats this runner as not secured and starts nothing in it (see SECURITY.md).
   echo "runner: started as uid $EUID, not root: the runner's service socket cannot be locked, and Emberline will start nothing in this runner. Remove \`user:\` from the runner service." >&2
   /usr/bin/mkdir -p "${TOOLS_DIR}/bin" "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib" "${TOOLS_DIR}/pipx" 2>/dev/null || true
-  # Where core can read it while this runner cannot even start its service (a socket folder an
-  # earlier start locked): browser/ is the runner user's. A root start makes browser/ afresh.
-  printf 'not-root %s\n' "$EUID" > "$RUN_DIR/browser/runner-not-root" 2>/dev/null || true
   EMBERLINE_PTYD_CANNOT_LOCK=1 exec "${PTYD[@]}"
 fi
 

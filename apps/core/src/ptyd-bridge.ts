@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, lstatSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { PTYD_MIN_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydClient } from '@emberline/ptyd/client';
@@ -21,10 +21,9 @@ export const SECURE_GRACE_MS = 10_000;
 
 /**
  * Why core cannot use the runner while it cannot reach it ({@link PtydBridge.startProblem}):
- * `must_start_as_root` when the runner says so, else `not_answering` once that has lasted longer
- * than a restart takes ({@link SECURE_GRACE_MS}).
+ * `not_answering` once that has lasted longer than a restart takes ({@link SECURE_GRACE_MS}).
  */
-export type RunnerStartProblem = 'must_start_as_root' | 'not_answering';
+export type RunnerStartProblem = 'not_answering';
 
 /** What core says about a connected runner's socket lock ({@link PtydBridge.lockState}). */
 export type RunnerLockState = 'secured' | 'starting' | 'not_secured';
@@ -48,22 +47,6 @@ export function socketDirGuardedSync(socketPath: string): boolean {
 
 export async function socketDirGuarded(socketPath: string): Promise<boolean> {
   return socketDirGuardedSync(socketPath);
-}
-
-/**
- * {@link PtydBridge.startProblem} for the socket at `socketPath`: only while core cannot reach the
- * runner (its service, and so every agent, is down), and only in a socket folder an earlier root start
- * locked (`guarded`), which is the case it explains.
- */
-export function runnerStartProblem(
-  socketPath: string,
-  connected: boolean,
-  guarded: (socketPath: string) => boolean = socketDirGuardedSync,
-): 'must_start_as_root' | null {
-  if (connected || !guarded(socketPath)) return null;
-  return existsSync(path.join(path.dirname(socketPath), 'browser', 'runner-not-root'))
-    ? 'must_start_as_root'
-    : null;
 }
 
 /** A runner older than this core: it needs a security update before core uses it (fail closed). */
@@ -176,15 +159,12 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   }
 
   /**
-   * Why the runner cannot be used though core cannot reach it: it was started as another user than
-   * root on a socket folder an earlier start locked, so its service cannot even listen. The runner's
-   * entrypoint says so in a file of browser/ (the runner user's; a root start makes browser/ afresh);
-   * it counts only while the folder is locked and core is not connected ({@link runnerStartProblem}).
+   * Why the runner cannot be used though core cannot reach it: it has not answered for longer than a
+   * restart takes. Core cannot tell a stopped runner from one that cannot start (a compose `user:` on
+   * a socket folder an earlier start locked), so the hint names both (the not-answering hint in errors.ts).
    */
   get startProblem(): RunnerStartProblem | null {
     if (this.client) return null;
-    const known = runnerStartProblem(this.socketPath, false);
-    if (known) return known;
     return this.downSince !== null && Date.now() - this.downSince >= SECURE_GRACE_MS ? 'not_answering' : null;
   }
 

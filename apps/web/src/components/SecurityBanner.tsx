@@ -99,26 +99,13 @@ export function RunnerStartingBanner({ starting }: { starting: boolean | undefin
   );
 }
 
-/**
- * Shown while core cannot use the runner and knows why (`runnerProblem`): it runs as another user than
- * root and cannot start its service, or it has not answered for longer than a restart takes.
- */
-export function RunnerCannotStartBanner({ problem }: { problem: string | null | undefined }) {
-  if (problem === 'not_answering')
-    return (
-      <div className="banner banner-warn" role="status">
-        The runner has not answered for a while. See why with <code>docker compose logs runner</code>. If the
-        runner service sets <code>user:</code> in the compose file, remove it: the runner must start as root.
-      </div>
-    );
-  if (problem !== 'must_start_as_root') return null;
+/** Shown while core has not reached the runner for longer than a restart takes (`runnerProblem`). */
+export function RunnerNotAnsweringBanner({ problem }: { problem: string | null | undefined }) {
+  if (problem !== 'not_answering') return null;
   return (
-    <div className="banner banner-error security-banner" role="alert">
-      <span>
-        <strong>Runner cannot start:</strong> it must start as root to secure its service socket. Remove{' '}
-        <code>user:</code> from the runner service in the compose file, then start it again (
-        <code>make up</code>, or <code>docker compose up -d</code>). Its log says the same.
-      </span>
+    <div className="banner banner-warn" role="status">
+      The runner has not answered for a while. See why with <code>docker compose logs runner</code>. If the
+      runner service sets <code>user:</code> in the compose file, remove it: the runner must start as root.
     </div>
   );
 }

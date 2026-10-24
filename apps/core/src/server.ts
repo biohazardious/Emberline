@@ -15,7 +15,7 @@ import { registerAuth } from './auth/plugin.js';
 import type { CoreConfig } from './config.js';
 import { CronService } from './cron/service.js';
 import type { Db } from './db/index.js';
-import { installErrorHandler, RUNNER_MUST_START_AS_ROOT, RUNNER_NOT_ANSWERING } from './errors.js';
+import { installErrorHandler, RUNNER_NOT_ANSWERING } from './errors.js';
 import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { requestUrlForLog } from './git-gateway/gateway.js';
@@ -101,7 +101,7 @@ function runnerProblemFields(problem: RunnerStartProblem | null): Partial<Health
   if (!problem) return {};
   return {
     runnerProblem: problem,
-    runnerMessage: problem === 'must_start_as_root' ? RUNNER_MUST_START_AS_ROOT : RUNNER_NOT_ANSWERING,
+    runnerMessage: RUNNER_NOT_ANSWERING,
   };
 }
 

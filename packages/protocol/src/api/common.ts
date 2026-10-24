@@ -20,10 +20,9 @@ export const HealthResponse = z.object({
   uptimeSeconds: z.number(),
   /**
    * Why the runner cannot be used, when core knows (core itself is fine: `status` stays `ok`).
-   * `must_start_as_root`: the runner runs as another user (`user:`) and cannot start its service.
    * `not_answering`: core has not reached the runner for longer than a restart takes.
    */
-  runnerProblem: z.enum(['must_start_as_root', 'not_answering']).optional(),
+  runnerProblem: z.enum(['not_answering']).optional(),
   /** What to tell the person about `runnerProblem`. */
   runnerMessage: z.string().optional(),
 });
@@ -76,10 +75,10 @@ export const SystemStatus = z.object({
   /** The runner is connected but still securing its service socket: nothing starts yet, for a few seconds. */
   runnerStarting: z.boolean(),
   /**
-   * The runner cannot start its service: it runs as another user than root (`user:` in the compose
-   * file) on a socket folder an Emberline runner already locked. Null when there is no such problem.
+   * `not_answering`: core has not reached the runner for longer than a restart takes (stopped,
+   * crashing, or started as another user than root). Null otherwise.
    */
-  runnerProblem: z.enum(['must_start_as_root', 'not_answering']).nullable(),
+  runnerProblem: z.enum(['not_answering']).nullable(),
   /**
    * The runner's host lets any process trace another of its user (Yama `ptrace_scope` 0, or no
    * Yama): agents could take over the runner's own service. False while unknown.

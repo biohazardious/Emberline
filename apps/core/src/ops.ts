@@ -7,7 +7,6 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
 import {
-  RUNNER_MUST_START_AS_ROOT,
   RUNNER_NOT_ANSWERING,
   RUNNER_NOT_SECURED,
   RUNNER_SECURITY_UPDATE,
@@ -80,11 +79,9 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     result.runner = {
       ok: connected,
       detail:
-        problem === 'must_start_as_root'
-          ? RUNNER_MUST_START_AS_ROOT
-          : problem === 'not_answering'
-            ? `ptyd ${deps.ptyd.status}. ${RUNNER_NOT_ANSWERING}`
-            : `ptyd ${deps.ptyd.status}`,
+        problem === 'not_answering'
+          ? `ptyd ${deps.ptyd.status}. ${RUNNER_NOT_ANSWERING}`
+          : `ptyd ${deps.ptyd.status}`,
     };
     const version = deps.ptyd.protocolVersion;
     const current = (version ?? 0) >= PTYD_PROTOCOL_VERSION;
