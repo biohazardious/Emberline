@@ -198,12 +198,6 @@ export function Dashboard({
           Runner (ptyd) is {system?.ptyd ?? 'unknown'} — terminals are unavailable until it reconnects.
         </div>
       )}
-      {system?.runnerOutdated && (
-        <div className="banner banner-warn" role="status">
-          The runner image is older than core: git, builds and tests cannot run until it is rebuilt (
-          <code>make up</code>).
-        </div>
-      )}
       {system?.runnerUpdateAvailable && !system.runnerOutdated && (
         <div className="banner banner-info" role="status">
           Runner update available: stopping a run during setup waits for its current command.{' '}

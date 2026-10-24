@@ -1192,7 +1192,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const { persona, routes, routeIndex, route, prompt } = this.startRoute(input, body, origin);
     // Before the worktree exists, so a refused start leaves nothing behind.
     if (!origin?.routes) this.refuseHeadlessAsk(route.agent, body.permissionMode, prompt);
-    this.ptyd.get(); // fail fast (503) before touching git
+    this.ptyd.assertCanStart(); // fail fast (503: unreachable or outdated) before touching git
 
     const id = randomUUID();
     const short = id.slice(0, 8);
@@ -1686,7 +1686,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         patch: { endedAt: row.endedAt ?? new Date() },
       });
     }
-    this.ptyd.get(); // fail fast (503) before the run is marked
+    this.ptyd.assertCanStart(); // fail fast (503: unreachable or outdated) before the run is marked
     const hookToken = randomBytes(32).toString('base64url');
     // Mark as starting first so concurrent ticks never launch the same run twice.
     const starting = this.record(row.id, {

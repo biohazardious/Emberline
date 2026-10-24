@@ -1214,9 +1214,6 @@ export function runnerBrowserDir(ptydSocket: string): string {
   return path.join(path.dirname(ptydSocket), 'browser');
 }
 
-/** Where a daemon of an Emberline before 0.6.1 listens: beside ptyd's socket. */
-const legacyBrowserSocket = (socketDir: string) => path.join(path.dirname(socketDir), 'browser.sock');
-
 /**
  * Ensures `browser-daemon.mjs` and `playwright-hook.cjs` (in {@link runnerBrowserDir}) are written
  * and running inside the `runner` container.
@@ -1260,11 +1257,6 @@ export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: str
       await writeFile(scriptPath, BROWSER_DAEMON_SCRIPT, { encoding: 'utf8', mode: 0o755 });
 
       if (ptyd.status !== 'connected') return null;
-      // A daemon an earlier Emberline started (a runner not restarted since) holds Chromium's debugging port.
-      if (existsSync(legacyBrowserSocket(socketDir)))
-        await socketRequest(legacyBrowserSocket(socketDir), 'POST', '/shutdown', {}, 1_000).catch(
-          () => undefined,
-        );
 
       resetBridgeErrorLog();
       // The image's node by its path, which starts the daemon with itself (process.execPath).

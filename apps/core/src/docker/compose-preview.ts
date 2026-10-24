@@ -223,8 +223,7 @@ export async function composeProjects(
 /** `image prune` and `builder prune`, each `-f --filter until=72h`. Never throws. */
 export async function pruneImages(env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
   const images = await run(imagePruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
-  const prune = composeShell(builderPruneArgs());
-  const cache = await run(prune.args, NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS, { file: prune.file });
+  const cache = await run(builderPruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
   return { ok: images.ok && cache.ok, output: [images.output, cache.output].filter(Boolean).join('\n') };
 }
 

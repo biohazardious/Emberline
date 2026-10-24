@@ -141,7 +141,7 @@ describe('compose command lines', () => {
       return { status: run.status, seen, value };
     };
 
-    it("the image's directories when the runner has them; docker's exit code is kept", () => {
+    it("the image's directories, the override on stdin, and docker's exit code", () => {
       mkdirSync(path.join(dir, 'buildx'));
       const { status, seen, value } = runShell(path.join(dir, 'buildx'));
       expect(status).toBe(7);
@@ -149,16 +149,6 @@ describe('compose command lines', () => {
       expect(seen).toContain('stdin=services: {}');
       expect(value('config')).toBe('/image/config');
       expect(value('buildx')).toBe(path.join(dir, 'buildx'));
-    });
-
-    it('an older runner image without them: a fresh private directory, gone when the command ends', () => {
-      const { status, seen, value } = runShell('/nonexistent/buildx');
-      expect(status).toBe(7);
-      expect(seen).toContain('stdin=services: {}');
-      const fresh = value('buildx').replace(/\/buildx$/, '');
-      expect(fresh).toMatch(/^\/tmp\/tmp\.\w+$/);
-      expect(value('config')).toBe(`${fresh}/config`);
-      expect(existsSync(fresh), 'the directory was left behind').toBe(false);
     });
   });
 });

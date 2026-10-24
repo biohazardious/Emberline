@@ -80,7 +80,7 @@ describe('ops endpoints', () => {
 
     it('a current runner is ok, with nothing to update', async () => {
       expect(PTYD_PROTOCOL_VERSION).toBe(4);
-      expect(PTYD_MIN_PROTOCOL_VERSION).toBe(2);
+      expect(PTYD_MIN_PROTOCOL_VERSION).toBe(4);
       const { deep, system } = await withRunner(4);
       expect(deep.statusCode).toBe(200);
       expect(deep.json().checks.runnerProtocol).toMatchObject({ ok: true });
@@ -88,12 +88,14 @@ describe('ops endpoints', () => {
     });
 
     for (const version of [2, 3])
-      it(`a protocol-${version} runner still works: ok, with an update available`, async () => {
+      it(`a protocol-${version} runner needs a security update: degraded, and named so`, async () => {
         const { deep, system } = await withRunner(version);
-        expect(deep.statusCode).toBe(200);
-        expect(deep.json().checks.runnerProtocol.ok).toBe(true);
-        expect(deep.json().checks.runnerProtocol.detail).toContain('update available');
-        expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: true });
+        expect(deep.statusCode).toBe(503);
+        expect(deep.json().checks.runnerProtocol.ok).toBe(false);
+        expect(deep.json().checks.runnerProtocol.detail).toContain(
+          'Security update required: update the runner image',
+        );
+        expect(system).toMatchObject({ runnerOutdated: true, runnerUpdateAvailable: false });
       });
 
     it('a runner below the minimum is outdated', async () => {
@@ -131,7 +133,7 @@ describe('ops endpoints', () => {
     });
 
     it('a runner that does not report Yama (older) gets no warning: it is not known', async () => {
-      const { deep, system } = await withRunner(3);
+      const { deep, system } = await withRunner(4);
       Object.defineProperty(t!.ptyd, 'ptraceScope', { get: () => undefined });
       const again = await t!.app.inject({ url: '/api/health/deep' });
       expect(deep.statusCode).toBe(200);
@@ -149,7 +151,8 @@ describe('ops endpoints', () => {
       );
       await closeRunner();
       const older = await withRunner(3, { guarded: false });
-      expect(older.deep.statusCode).toBe(200);
+      // Refused anyway (runnerProtocol); the socket check does not count it twice.
+      expect(older.deep.statusCode).toBe(503);
       expect(older.deep.json().checks.runnerSocket.ok).toBe(true);
       expect(older.deep.json().checks.runnerSocket.detail).toContain(
         'rebuilding the runner with `make up` locks it',

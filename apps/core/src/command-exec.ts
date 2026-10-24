@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { MAX_EXEC_OUTPUT_BYTES, PTYD_MIN_PROTOCOL_VERSION, type PtydResult } from '@emberline/protocol';
+import { MAX_EXEC_OUTPUT_BYTES, type PtydResult } from '@emberline/protocol';
 import { PtydClientError } from '@emberline/ptyd/client';
-import { HttpError, unavailable } from './errors.js';
+import { HttpError, runnerOutdated, unavailable } from './errors.js';
 import { redactCapabilityUrls, withoutUrlCredentials } from './git-gateway/redact-text.js';
-import type { PtydBridge } from './ptyd-bridge.js';
+import { isOutdatedRunner, type PtydBridge } from './ptyd-bridge.js';
 
 /**
  * Every process core starts for a workspace (git, package installs, builds, tests) runs through
@@ -47,7 +47,6 @@ export const RUNNER_BIN = {
   cp: '/usr/bin/cp',
   head: '/usr/bin/head',
   curl: '/usr/bin/curl',
-  mktemp: '/usr/bin/mktemp',
   node: '/usr/local/bin/node',
   docker: '/usr/local/bin/docker',
 } as const;
@@ -71,8 +70,8 @@ export function systemCommand(request: ExecRequest): ExecRequest {
  * gets the runner image's own directories, which are root's: an empty config directory (only the
  * plugins in /usr/local/lib/docker/cli-plugins run, no config applies) and a buildx directory whose
  * builders and defaults are empty and fixed; buildx may write only its lock, activity times and build
- * records there. No home: nothing else of the runner user's is read. A runner image without these
- * directories (before 0.6.1) gets a fresh private one for each build or prune (see composeShell).
+ * records there. No home: nothing else of the runner user's is read. Core uses no runner image
+ * without them (an outdated runner runs no command of core's: see PtydBridge).
  */
 export const DOCKER_CLI_ENV: Readonly<Record<string, string>> = {
   HOME: '/nonexistent',
@@ -89,10 +88,6 @@ export type ExecResult = PtydResult<'exec'>;
 export type CommandExecutor = (request: ExecRequest) => Promise<ExecResult>;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-/** First ptyd protocol with the `exec` method. */
-const EXEC_PROTOCOL_VERSION = 2;
-/** First ptyd protocol with `execId` and `execCancel`. */
-const CANCEL_PROTOCOL_VERSION = 3;
 
 /** Stops a running command by its `execId`; resolves whether one was running. */
 export type CommandCanceller = (execId: string) => Promise<boolean>;
@@ -108,10 +103,10 @@ export function cancelCommand(execId: string): Promise<boolean> {
   return canceller(execId).catch(() => false);
 }
 
-/** Cancels through ptyd `execCancel`; an older runner cannot, and its command runs to its timeout. */
+/** Cancels through ptyd `execCancel`; an outdated runner runs nothing of core's, so nothing to cancel. */
 export function ptydCommandCanceller(ptyd: PtydBridge): CommandCanceller {
   return async (execId) => {
-    if ((ptyd.protocolVersion ?? 0) < CANCEL_PROTOCOL_VERSION) return false;
+    if (isOutdatedRunner(ptyd.protocolVersion)) return false;
     return (await ptyd.get().execCancel(execId)).cancelled;
   };
 }
@@ -131,12 +126,8 @@ export function execCommand(request: ExecRequest): Promise<ExecResult> {
 export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
   return async (request) => {
     const client = ptyd.get();
-    if ((ptyd.protocolVersion ?? 0) < EXEC_PROTOCOL_VERSION) {
-      throw unavailable(
-        'runner_outdated',
-        `the runner image is older than core (ptyd protocol ${ptyd.protocolVersion} < ${PTYD_MIN_PROTOCOL_VERSION}); rebuild it with \`make up\``,
-      );
-    }
+    // Fail closed: an outdated runner runs no command of core's.
+    if (isOutdatedRunner(ptyd.protocolVersion)) throw runnerOutdated();
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const call = client.exec({
       file: request.file,
@@ -147,9 +138,7 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
       maxOutputBytes: Math.min(request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES, MAX_EXEC_OUTPUT_BYTES),
       encoding: request.encoding ?? 'utf8',
       ...(request.inheritEnv === false ? { inheritEnv: false } : {}),
-      ...(request.execId && (ptyd.protocolVersion ?? 0) >= CANCEL_PROTOCOL_VERSION
-        ? { execId: request.execId }
-        : {}),
+      ...(request.execId ? { execId: request.execId } : {}),
     });
     // ptyd enforces the timeout; this only guards against a reply that never comes. It is a timeout
     // like the client's own (isRunnerTimeout), whichever of the two fires first.

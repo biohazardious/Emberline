@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
+import { PTYD_MIN_PROTOCOL_VERSION } from '@emberline/protocol';
 import { PtydClient } from '@emberline/ptyd/client';
-import { RUNNER_NOT_REACHABLE, unavailable } from './errors.js';
+import { RUNNER_NOT_REACHABLE, runnerOutdated, unavailable } from './errors.js';
 
 export type PtydStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -19,6 +20,28 @@ export async function socketDirGuarded(socketPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A runner older than this core: it needs a security update before core uses it (fail closed). */
+export const isOutdatedRunner = (protocolVersion: number | null | undefined): boolean =>
+  (protocolVersion ?? 0) < PTYD_MIN_PROTOCOL_VERSION;
+
+/** The ptyd methods that start or feed something in the runner: refused on an outdated runner. */
+const STARTING_METHODS = new Set<PropertyKey>(['spawn', 'exec', 'write']);
+
+/**
+ * The client as an outdated runner may be used: reading `hello`, the session list and screens,
+ * attaching, resizing, stopping and removing what already runs, but never starting a process or
+ * typing into one (`spawn`, `exec`, `write` reject with the security update error).
+ */
+function refusingStarts(client: PtydClient): PtydClient {
+  return new Proxy(client, {
+    get(target, prop) {
+      if (STARTING_METHODS.has(prop)) return () => Promise.reject(runnerOutdated());
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
 }
 
 interface BridgeEvents {
@@ -59,6 +82,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     return this._ptraceScope;
   }
 
+  /** The connected runner is older than this core ({@link isOutdatedRunner}): nothing may start in it. */
+  get outdated(): boolean {
+    return this.client !== undefined && isOutdatedRunner(this.protocolVersion);
+  }
+
   /** Whether the socket core last connected to sat in a directory agents cannot change ({@link socketDirGuarded}). */
   get socketGuarded(): boolean | null {
     return this._socketGuarded;
@@ -74,21 +102,32 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     this.client?.close();
   }
 
-  /** Control client for list/spawn/kill. Throws 503 while ptyd is unreachable. */
+  /**
+   * Control client for list/spawn/kill. Throws 503 while ptyd is unreachable; on an outdated runner
+   * its `spawn`, `exec` and `write` reject with the security update error ({@link refusingStarts}).
+   */
   get(): PtydClient {
     if (!this.client || this.client.isClosed) {
       throw unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
     }
-    return this.client;
+    return this.outdated ? refusingStarts(this.client) : this.client;
   }
 
-  /** A fresh connection owned by the caller (close it when done). */
+  /** Throws 503 unless something may start in the runner now: reachable, and not outdated. */
+  assertCanStart(): void {
+    this.get();
+    if (this.outdated) throw runnerOutdated();
+  }
+
+  /** A fresh connection owned by the caller (close it when done); as {@link get} on an outdated runner. */
   async openViewer(): Promise<PtydClient> {
+    let viewer: PtydClient;
     try {
-      return await PtydClient.connect(this.socketPath);
+      viewer = await PtydClient.connect(this.socketPath);
     } catch {
       throw unavailable('ptyd_unavailable', RUNNER_NOT_REACHABLE);
     }
+    return this.outdated ? refusingStarts(viewer) : viewer;
   }
 
   /** Resolves once connected (or rejects after `timeoutMs`); used by tests and startup. */
@@ -126,11 +165,12 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
           client.close();
           break;
         }
-        this.client = client;
         delay = 250;
+        // Handed out only once its protocol is known, so nothing starts in an outdated runner.
         const hello = await client.hello().catch(() => null);
         this._protocolVersion = hello?.protocolVersion ?? 1;
         this._ptraceScope = hello?.ptraceScope;
+        this.client = client;
         this.setStatus('connected');
         await new Promise<void>((resolve) => client.once('close', resolve));
       } catch {

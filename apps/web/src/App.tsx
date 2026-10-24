@@ -45,7 +45,7 @@ import { formatClaudePlanLabel, formatTokensCompact } from './components/QuotaPa
 import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
 import { ScopedPage } from './components/ScopedPage';
-import { RunnerTraceBanner, SecurityBanner } from './components/SecurityBanner';
+import { RunnerSecurityUpdateBanner, RunnerTraceBanner, SecurityBanner } from './components/SecurityBanner';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
@@ -967,6 +967,7 @@ function Shell() {
         </header>
 
         <SecurityBanner />
+        <RunnerSecurityUpdateBanner outdated={system.data?.runnerOutdated} />
         <RunnerTraceBanner unrestricted={system.data?.runnerPtraceUnrestricted} />
 
         <div className="workbench-stage">

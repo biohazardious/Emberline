@@ -25,6 +25,14 @@ export const unavailable = (code: string, message: string) => new HttpError(503,
 /** What a request says when the runner cannot run its command. */
 export const RUNNER_NOT_REACHABLE = 'the runner (ptyd) is not reachable';
 
+/**
+ * A runner image older than this core (ptyd protocol below PTYD_MIN_PROTOCOL_VERSION): until it is
+ * updated, core starts no agent and runs no command in it (see PtydBridge).
+ */
+export const RUNNER_SECURITY_UPDATE =
+  'Security update required: update the runner image. This Emberline needs the runner image of the same release, and until it is updated it starts no agent and runs no command in the runner. From source, run `make up`; with the published images, `docker compose pull && docker compose up -d`.';
+export const runnerOutdated = () => unavailable('runner_outdated', RUNNER_SECURITY_UPDATE);
+
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) {

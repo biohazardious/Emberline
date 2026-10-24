@@ -68,3 +68,21 @@ export function RunnerTraceBanner({ unrestricted }: { unrestricted: boolean | un
     </div>
   );
 }
+
+/**
+ * Shown while the runner image is older than core (`runnerOutdated`): core then starts no agent and
+ * runs no command in the runner (fail closed) until the runner is updated.
+ */
+export function RunnerSecurityUpdateBanner({ outdated }: { outdated: boolean | undefined }) {
+  if (!outdated) return null;
+  return (
+    <div className="banner banner-error security-banner" role="alert">
+      <span>
+        <strong>Security update required: update the runner image.</strong> Until it is updated, Emberline
+        starts no agent and runs no command in the runner (git, checks, merges, previews). From source,
+        run <code>make up</code>; with the published images, <code>docker compose pull &amp;&amp; docker compose up -d</code>.
+        Agents that were already running keep running: you can watch and stop them.
+      </span>
+    </div>
+  );
+}

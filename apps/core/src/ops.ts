@@ -6,6 +6,7 @@ import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/pro
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
+import { RUNNER_SECURITY_UPDATE } from './errors.js';
 import type { CoreDeps } from './server.js';
 
 /** Below this much free space a volume is reported as degraded. */
@@ -75,9 +76,11 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     result.runnerProtocol = {
       ok: connected && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION,
       detail: `runner ${version ?? 'unknown'}, core needs ${PTYD_MIN_PROTOCOL_VERSION}${
-        connected && !current && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION
-          ? ` (update available: protocol ${PTYD_PROTOCOL_VERSION}; rebuild the runner with \`make up\`)`
-          : ''
+        connected && (version ?? 0) < PTYD_MIN_PROTOCOL_VERSION
+          ? `. ${RUNNER_SECURITY_UPDATE}`
+          : connected && !current
+            ? ` (update available: protocol ${PTYD_PROTOCOL_VERSION}; rebuild the runner with \`make up\`)`
+            : ''
       }`,
     };
     // Only a runner of this version locks its socket's directory; an older one is the runner update's

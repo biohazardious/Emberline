@@ -52,7 +52,11 @@ export const SystemStatus = z.object({
   version: z.string(),
   apiVersion: z.number().int(),
   ptyd: z.enum(['connecting', 'connected', 'disconnected']),
-  /** True when the connected runner speaks an older ptyd protocol than this core needs (PTYD_MIN_PROTOCOL_VERSION). */
+  /**
+   * True when the connected runner speaks an older ptyd protocol than this core needs
+   * (PTYD_MIN_PROTOCOL_VERSION): a security update of the runner image is required, and until then
+   * core starts no agent and runs no command in the runner.
+   */
   runnerOutdated: z.boolean(),
   /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
   runnerUpdateAvailable: z.boolean(),

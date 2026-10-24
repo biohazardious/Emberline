@@ -52,11 +52,11 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
  */
 export const PTYD_PROTOCOL_VERSION = 4;
 /**
- * The oldest runner protocol core works with. Between this and PTYD_PROTOCOL_VERSION the runner
- * is not outdated, only missing extras (3: a stop during worktree setup waits for the command; 4: core's
- * own commands still get the runner's base environment beneath the variables core sets).
+ * The oldest runner protocol core works with. A runner below it is refused, fail closed: core starts
+ * no agent and runs no command in it, only reads `hello` and what already runs. Runners before 4 start
+ * ptyd through a PATH an agent can write, and give core's own commands the runner's environment.
  */
-export const PTYD_MIN_PROTOCOL_VERSION = 2;
+export const PTYD_MIN_PROTOCOL_VERSION = 4;
 
 /** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
 export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
