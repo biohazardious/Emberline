@@ -231,6 +231,7 @@ export async function buildServer(
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
+    runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.unsecured,
     runnerPtraceUnrestricted: deps.ptyd.status === 'connected' && isPtraceUnrestricted(deps.ptyd.ptraceScope),
     docker: deps.runs.docker.status,
   }));

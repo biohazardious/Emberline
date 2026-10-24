@@ -61,6 +61,11 @@ export const SystemStatus = z.object({
   /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
   runnerUpdateAvailable: z.boolean(),
   /**
+   * The connected runner is current but its service socket is not locked (it was started as another
+   * user than root, or its start has not finished): core starts no agent and runs no command in it.
+   */
+  runnerNotSecured: z.boolean(),
+  /**
    * The runner's host lets any process trace another of its user (Yama `ptrace_scope` 0, or no
    * Yama): agents could take over the runner's own service. False while unknown.
    */

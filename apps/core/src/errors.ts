@@ -33,6 +33,11 @@ export const RUNNER_SECURITY_UPDATE =
   'Security update required: update the runner image. This Emberline needs the runner image of the same release, and until it is updated it starts no agent and runs no command in the runner. From source, run `make up`; with the published images, `docker compose pull && docker compose up -d`.';
 export const runnerOutdated = () => unavailable('runner_outdated', RUNNER_SECURITY_UPDATE);
 
+/** A current runner whose service socket is not locked (see PtydBridge): core starts nothing in it. */
+export const RUNNER_NOT_SECURED =
+  "Runner not secured: the runner has not locked its service's socket, so a coding agent could stand in for it, and Emberline starts no agent and runs no command in the runner. The runner locks it as it starts, as root: if it was started as another user (`user:` in the compose file), remove that and restart it (`make up`, or `docker compose up -d`); otherwise restart it and see its log.";
+export const runnerNotSecured = () => unavailable('runner_not_secured', RUNNER_NOT_SECURED);
+
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) {

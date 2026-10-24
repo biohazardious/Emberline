@@ -33,7 +33,7 @@ try {
   });
   throw error; // unreachable for a key refusal (the process exited); other errors were rethrown above
 }
-const ptyd = new PtydBridge(config.ptydSocket);
+const ptyd = new PtydBridge(config.ptydSocket, { requireSecured: config.requireSecuredRunner });
 // git, builds and tests for workspaces run in the runner container, never here.
 setCommandExecutor(ptydCommandExecutor(ptyd));
 setCommandCanceller(ptydCommandCanceller(ptyd));

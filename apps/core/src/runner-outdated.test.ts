@@ -4,6 +4,11 @@
  * nothing, until the runner image is updated. A current runner works as before.
  */
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
+import { mkdtempSync } from 'node:fs';
+import net from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { PtydClient } from '@emberline/ptyd/client';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -13,7 +18,9 @@ import {
   setCommandCanceller,
 } from './command-exec.js';
 import { runs } from './db/schema.js';
-import { RUNNER_SECURITY_UPDATE } from './errors.js';
+import { RUNNER_NOT_SECURED, RUNNER_SECURITY_UPDATE } from './errors.js';
+import { PtydBridge } from './ptyd-bridge.js';
+import { rmTemp } from './test-rm.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -115,5 +122,126 @@ describe('a runner older than core', () => {
     await t.ptyd.get().remove(id);
     const system = (await t.app.inject({ url: '/api/system', headers: authHeaders(cookie) })).json();
     expect(system.runnerOutdated).toBe(false);
+  });
+});
+
+/** An old runner's ptyd: answers `hello` with `version` and anything else with ok, and records every request. */
+async function fakePtyd(socketPath: string, version: number) {
+  const seen: { method: string; params: unknown }[] = [];
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on('data', (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4 && buffer.length >= 4 + buffer.readUInt32BE(0)) {
+        const length = buffer.readUInt32BE(0);
+        const request = JSON.parse(buffer.subarray(4, 4 + length).toString('utf8')) as {
+          id: number;
+          method: string;
+          params: unknown;
+        };
+        buffer = buffer.subarray(4 + length);
+        seen.push({ method: request.method, params: request.params });
+        const result = request.method === 'hello' ? { protocolVersion: version } : {};
+        const body = Buffer.from(JSON.stringify({ type: 'response', id: request.id, ok: true, result }));
+        const header = Buffer.alloc(4);
+        header.writeUInt32BE(body.length, 0);
+        socket.write(Buffer.concat([header, body]));
+      }
+    });
+    socket.on('error', () => undefined);
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  return {
+    seen,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+describe('a terminal viewer (M-A)', () => {
+  it('is refused while the bridge is not connected, and never types into a runner that says it is old', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'old-ptyd-'));
+    const socketPath = path.join(dir, 'ptyd.sock');
+    const old = await fakePtyd(socketPath, 3);
+    const bridge = new PtydBridge(socketPath);
+    try {
+      // Not connected yet (as while it reconnects): no viewer at all, though the old ptyd is reachable.
+      await expect(bridge.openViewer()).rejects.toMatchObject({ statusCode: 503, code: 'ptyd_unavailable' });
+      bridge.start();
+      await bridge.waitUntilConnected();
+      expect(bridge.outdated).toBe(true);
+      const viewer = await bridge.openViewer();
+      await expect(viewer.write('s1', 'secret typed\r')).rejects.toMatchObject(outdated);
+      await expect(viewer.hello()).resolves.toEqual({ protocolVersion: 3 });
+      viewer.close();
+      expect(old.seen.map((r) => r.method)).not.toContain('write');
+    } finally {
+      bridge.stop();
+      await old.close();
+      rmTemp(dir);
+    }
+  });
+});
+
+describe('a current runner whose socket is not locked', () => {
+  let u: TestApp;
+  let ptydServer: PtydServer;
+  let ucookie: string;
+  beforeEach(async () => {
+    // The test's own directory, like a runner started with a compose `user:` (node's, not root's).
+    u = await createTestApp({ requireSecuredRunner: true });
+    ptydServer = new PtydServer({ socketPath: u.config.ptydSocket });
+    await ptydServer.listen();
+    u.ptyd.start();
+    await u.ptyd.waitUntilConnected();
+    ucookie = await setupAndLogin(u.app);
+  });
+  afterEach(async () => {
+    await ptydServer.close();
+    await u.close();
+  });
+
+  const notSecured = { statusCode: 503, code: 'runner_not_secured', message: RUNNER_NOT_SECURED };
+
+  it('gets nothing started or typed until it is locked, says so, and works once it is', async () => {
+    // A session that was running before (started on its own connection, as before the check).
+    const own = await PtydClient.connect(u.config.ptydSocket);
+    const running = (await own.spawn({ file: 'sleep', args: ['60'], cwd: u.dir })).id;
+    own.close();
+    expect(u.ptyd.protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
+    expect(u.ptyd.socketGuarded).toBe(false);
+    expect(u.ptyd.unsecured).toBe(true);
+    await expect(
+      ptydCommandExecutor(u.ptyd)({ file: '/bin/echo', args: ['x'], cwd: '/' }),
+    ).rejects.toMatchObject(notSecured);
+    await expect(u.ptyd.get().spawn({ file: 'true', cwd: u.dir })).rejects.toMatchObject(notSecured);
+    await expect(u.ptyd.get().write(running, 'x')).rejects.toMatchObject(notSecured);
+    const viewer = await u.ptyd.openViewer();
+    await expect(viewer.write(running, 'x')).rejects.toMatchObject(notSecured);
+    viewer.close();
+    expect(() => u.ptyd.assertCanStart()).toThrow(RUNNER_NOT_SECURED);
+    const terminal = await u.app.inject({
+      method: 'POST',
+      url: '/api/terminals',
+      payload: { kind: 'shell' },
+      headers: authHeaders(ucookie),
+    });
+    expect(terminal.statusCode).toBe(503);
+    expect(terminal.json()).toMatchObject({ error: 'runner_not_secured', message: RUNNER_NOT_SECURED });
+    const system = (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
+    expect(system).toMatchObject({ runnerNotSecured: true, runnerOutdated: false });
+    const deep = (await u.app.inject({ url: '/api/health/deep' })).json();
+    expect(deep.checks.runnerSocket).toMatchObject({ ok: false, detail: RUNNER_NOT_SECURED });
+    // Watching and stopping still work.
+    expect((await u.ptyd.get().list()).sessions.map((s) => s.id)).toContain(running);
+    await u.ptyd.get().remove(running);
+
+    // The runner's entrypoint locks the directory: everything works.
+    Object.defineProperty(u.ptyd, 'socketGuarded', { get: () => true });
+    expect(u.ptyd.unsecured).toBe(false);
+    expect(await ptydCommandExecutor(u.ptyd)({ file: '/bin/echo', args: ['ok'], cwd: '/' })).toMatchObject({
+      exitCode: 0,
+    });
+    const after = (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
+    expect(after.runnerNotSecured).toBe(false);
   });
 });

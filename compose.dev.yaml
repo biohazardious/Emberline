@@ -57,6 +57,8 @@ services:
       EMBERLINE_HOOK_URL: http://core:7420
       # The dev runner is the `ptyd` service: only it may use the git gateway.
       EMBERLINE_RUNNER_HOSTS: ptyd
+      # The dev ptyd runs as node without the runner's entrypoint, so its socket is never locked.
+      EMBERLINE_ALLOW_UNSECURED_RUNNER: '1'
     ports:
       - '127.0.0.1:7420:7420'
     depends_on: *after-install

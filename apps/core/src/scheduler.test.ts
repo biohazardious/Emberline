@@ -148,6 +148,27 @@ describe('scheduler', () => {
     await expect.poll(async () => (await getRun(b.id)).state, { timeout: 5_000 }).toBe('starting');
   });
 
+  it('starts nothing on a current runner whose socket is not locked, and starts once it is', async () => {
+    await api('PATCH', '/api/scheduler', { maxConcurrentRuns: 1 });
+    const a = await submit();
+    const b = await submit();
+    expect(b.state).toBe('queued');
+    const tokenA = await work(a);
+
+    let unsecured = true;
+    Object.defineProperty(t.ptyd, 'unsecured', { configurable: true, get: () => unsecured });
+    const launch = vi.spyOn(t.runs, 'launch');
+    await hook(a.id, 'Stop', tokenA);
+    await expect.poll(async () => (await getRun(a.id)).state, { timeout: 5_000 }).not.toBe('working');
+    await t.scheduler.tick();
+    expect(launch).not.toHaveBeenCalled();
+    expect((await getRun(b.id)).state).toBe('queued');
+
+    unsecured = false;
+    await t.scheduler.tick();
+    expect(launch).toHaveBeenCalledWith(b.id);
+  });
+
   it('pauses on a rate limit and resumes everything at the reset time', async () => {
     const a = await submit();
     const tokenA = await work(a);

@@ -70,6 +70,26 @@ export function RunnerTraceBanner({ unrestricted }: { unrestricted: boolean | un
 }
 
 /**
+ * Shown while the runner is current but has not locked its service socket (`runnerNotSecured`):
+ * started as another user than root, or its start did not finish. Core then starts nothing in it.
+ */
+export function RunnerNotSecuredBanner({ notSecured }: { notSecured: boolean | undefined }) {
+  if (!notSecured) return null;
+  return (
+    <div className="banner banner-error security-banner" role="alert">
+      <span>
+        <strong>Runner not secured.</strong> The runner has not locked its service&apos;s socket, so a coding
+        agent could stand in for it, and Emberline starts no agent and runs no command in the runner. The
+        runner locks it as it starts, as root: if the compose file sets <code>user:</code> for the runner,
+        remove that and restart it (<code>make up</code>, or <code>docker compose up -d</code>); otherwise
+        restart the runner and see its log. Agents that were already running keep running: you can watch and
+        stop them.
+      </span>
+    </div>
+  );
+}
+
+/**
  * Shown while the runner image is older than core (`runnerOutdated`): core then starts no agent and
  * runs no command in the runner (fail closed) until the runner is updated.
  */

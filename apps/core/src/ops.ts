@@ -6,7 +6,7 @@ import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/pro
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
-import { RUNNER_SECURITY_UPDATE } from './errors.js';
+import { RUNNER_NOT_SECURED, RUNNER_SECURITY_UPDATE } from './errors.js';
 import type { CoreDeps } from './server.js';
 
 /** Below this much free space a volume is reported as degraded. */
@@ -84,17 +84,20 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
       }`,
     };
     // Only a runner of this version locks its socket's directory; an older one is the runner update's
-    // business (runnerProtocol).
+    // business (runnerProtocol). Without the lock core starts nothing (PtydBridge.unsecured).
     const guarded = deps.ptyd.socketGuarded;
+    const required = deps.config.requireSecuredRunner;
     result.runnerSocket = {
-      ok: !connected || guarded !== false || !current,
+      ok: !connected || guarded !== false || !current || !required,
       detail: !connected
         ? 'not connected'
         : guarded
           ? "the socket's directory is root's: no agent can replace the runner's service"
-          : `an agent can replace the runner's service: its socket's directory is not root's${
-              current ? '' : ' (rebuilding the runner with `make up` locks it)'
-            }`,
+          : !current
+            ? "an agent can replace the runner's service: its socket's directory is not root's (rebuilding the runner with `make up` locks it)"
+            : required
+              ? RUNNER_NOT_SECURED
+              : "the socket's directory is not root's, allowed by EMBERLINE_ALLOW_UNSECURED_RUNNER (the dev stack)",
     };
     result.runnerPtrace = ptraceCheck(connected, deps.ptyd.ptraceScope);
     result.workspaces = await access(deps.config.workspacesDir, fsConstants.W_OK).then(

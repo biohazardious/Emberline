@@ -144,11 +144,15 @@ describe('ops endpoints', () => {
 
     it("a current runner whose socket's directory agents can change is degraded; an older one is told rebuilding locks it", async () => {
       const current = await withRunner(4, { guarded: false });
-      expect(current.deep.statusCode).toBe(503);
-      expect(current.deep.json().checks.runnerSocket).toMatchObject({ ok: false });
-      expect(current.deep.json().checks.runnerSocket.detail).toContain(
-        "an agent can replace the runner's service",
-      );
+      // The dev stack allows it (EMBERLINE_ALLOW_UNSECURED_RUNNER), and says so.
+      expect(current.deep.statusCode).toBe(200);
+      expect(current.deep.json().checks.runnerSocket.detail).toContain('EMBERLINE_ALLOW_UNSECURED_RUNNER');
+      // Everywhere else it is not secured: degraded, with what to do.
+      t!.config.requireSecuredRunner = true;
+      const required = await t!.app.inject({ url: '/api/health/deep' });
+      expect(required.statusCode).toBe(503);
+      expect(required.json().checks.runnerSocket).toMatchObject({ ok: false });
+      expect(required.json().checks.runnerSocket.detail).toContain('Runner not secured');
       await closeRunner();
       const older = await withRunner(3, { guarded: false });
       // Refused anyway (runnerProtocol); the socket check does not count it twice.

@@ -11,6 +11,12 @@ export interface CoreConfig {
   /** Built web UI, served by core when set (production image). */
   webDir?: string;
   ptydSocket: string;
+  /**
+   * Start nothing in a runner whose socket's directory is not locked (see PtydBridge). Off only with
+   * `EMBERLINE_ALLOW_UNSECURED_RUNNER=1`, for the dev stack, whose ptyd runs without the runner's
+   * entrypoint; agents there could replace ptyd's socket.
+   */
+  requireSecuredRunner: boolean;
   /** Shared with the runner container at the same path. */
   workspacesDir: string;
   /** Absolute host path of the workspaces volume, when known; only used to show host paths. */
@@ -132,6 +138,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     dataDir: env.EMBERLINE_DATA_DIR ?? path.resolve('data'),
     webDir: env.EMBERLINE_WEB_DIR || undefined,
     ptydSocket: env.EMBERLINE_PTYD_SOCKET ?? '/run/emberline/ptyd.sock',
+    requireSecuredRunner: env.EMBERLINE_ALLOW_UNSECURED_RUNNER !== '1',
     workspacesDir: env.EMBERLINE_WORKSPACES_DIR ?? '/workspaces',
     workspacesHostDir: env.EMBERLINE_WORKSPACES_HOST_DIR?.startsWith('/')
       ? env.EMBERLINE_WORKSPACES_HOST_DIR

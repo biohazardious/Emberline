@@ -78,6 +78,8 @@ export async function createTestApp(
     port: 0,
     dataDir: dir,
     ptydSocket: path.join(dir, 'ptyd.sock'),
+    // The test's own directory is not root's; the refusal has its own tests.
+    requireSecuredRunner: false,
     workspacesDir: dir,
     workspacesHostDir: undefined,
     secureCookies: false,
@@ -102,7 +104,7 @@ export async function createTestApp(
   beforeStart?.(opened.db);
   // What core's start does with what an older version left: seal it with the installed key.
   encryptStoredSecrets(opened.db.$client, installedSecretsKey());
-  const ptyd = new PtydBridge(config.ptydSocket);
+  const ptyd = new PtydBridge(config.ptydSocket, { requireSecured: config.requireSecuredRunner });
   const runs = new RunService(opened.db, config, ptyd);
   // No periodic ticks in tests: event-driven kicks plus explicit tick() calls.
   const scheduler = new Scheduler(opened.db, runs, ptyd, config, {

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { MAX_EXEC_OUTPUT_BYTES, type PtydResult } from '@emberline/protocol';
 import { PtydClientError } from '@emberline/ptyd/client';
-import { HttpError, runnerOutdated, unavailable } from './errors.js';
+import { HttpError, runnerNotSecured, runnerOutdated, unavailable } from './errors.js';
 import { redactCapabilityUrls, withoutUrlCredentials } from './git-gateway/redact-text.js';
 import { isOutdatedRunner, type PtydBridge } from './ptyd-bridge.js';
 
@@ -126,8 +126,9 @@ export function execCommand(request: ExecRequest): Promise<ExecResult> {
 export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
   return async (request) => {
     const client = ptyd.get();
-    // Fail closed: an outdated runner runs no command of core's.
+    // Fail closed: an outdated or not secured runner runs no command of core's.
     if (isOutdatedRunner(ptyd.protocolVersion)) throw runnerOutdated();
+    if (ptyd.unsecured) throw runnerNotSecured();
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const call = client.exec({
       file: request.file,
@@ -250,13 +251,18 @@ export function isRunnerUnavailable(error: unknown): boolean {
 /**
  * The error along `cause` that says the runner could not run the command (see
  * {@link isRunnerUnavailable}), the most specific one anywhere in the chain: a 503 that the runner
- * is too old, else a 503 that it is not reachable, else the first dropped or unanswered connection.
+ * is too old or not secured, else a 503 that it is not reachable, else the first dropped or unanswered connection.
  */
 export function runnerUnavailableCause(error: unknown): Error | undefined {
   let unreachable: Error | undefined;
   let connection: Error | undefined;
   for (let e = error, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
-    if (e instanceof HttpError && e.statusCode === 503 && e.code === 'runner_outdated') return e;
+    if (
+      e instanceof HttpError &&
+      e.statusCode === 503 &&
+      (e.code === 'runner_outdated' || e.code === 'runner_not_secured')
+    )
+      return e;
     if (e instanceof HttpError && e.statusCode === 503 && e.code === 'ptyd_unavailable') unreachable ??= e;
     if (e instanceof PtydClientError && (e.code === 'disconnected' || e.code === 'timeout')) connection ??= e;
   }
