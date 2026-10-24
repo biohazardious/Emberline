@@ -376,7 +376,7 @@ describe("the Live Browser's fallback screenshot", () => {
       seen.push(request);
       // As the runner would run it, with the recorder first on the system PATH, and a planted variable
       // that only an inherited environment could carry.
-      const inherited = request.inheritEnv === false ? {} : { PLANTED: '1' };
+      const inherited: Record<string, string> = request.inheritEnv === false ? {} : { PLANTED: '1' };
       return localCommandExecutor({
         ...request,
         env: { ...inherited, ...request.env, PATH: `${bin}:${request.env?.PATH}` },
