@@ -66,7 +66,7 @@ down: ## Stop core + runner + the Docker engine
 logs: ## Follow logs
 	$(PROD) logs -f
 
-upgrade-core: ## Rebuild/restart core only (and create a missing Docker engine); agents keep running. Not enough when a release changes the runner (0.6.1 does): use `make up`
+upgrade-core: ## Rebuild/restart core only (and create a missing Docker engine); agents keep running. Not enough when the release notes say so (0.6.1 does): use `make up`
 	@[ -n "$$($(PROD) ps -aq docker)" ] || $(PROD) up -d --no-deps docker
 	$(PROD) up -d --build --no-deps core
 

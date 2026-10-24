@@ -73,7 +73,7 @@ Day-to-day commands (from source):
 
 ```bash
 make upgrade-core        # rebuild and restart core only (it also creates a missing Docker engine); running agents keep running.
-                         # Not enough when a release changes the runner (0.6.1 does): core then refuses the old runner; use make up
+                         # Not enough when the release notes say so (0.6.1 does: its core refuses an older runner); use make up
 make backup              # consistent database snapshot, copied to ./backups/ (back up /data/secrets.key separately)
 make reset-password      # forgot the admin password: clears it, then use the new setup token
 make down
