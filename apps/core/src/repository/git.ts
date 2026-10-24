@@ -50,7 +50,7 @@ export function shortGitError(error: unknown, known?: KnownSecrets): string {
 export { remoteUrlForDisplay };
 
 export const REMOTE_NOT_SUPPORTED =
-  'Emberline reaches a repository only over https, ssh or a git@host:path address. Change origin in Project settings → Repository; a local path or a file:// or git:// address is not allowed.';
+  'Emberline reaches a repository only over https, http, ssh or an scp-style host:path address (such as git@host:owner/repo.git). Change origin in Project settings → Repository; a local path or a file:// or git:// address is not allowed.';
 
 /**
  * Whether git would reach `raw` over a transport Emberline allows: https, http, ssh or an scp-like
