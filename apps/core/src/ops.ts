@@ -16,10 +16,33 @@ interface CheckResult {
   detail: string;
 }
 
+export const PTRACE_SCOPE_HINT =
+  'set kernel.yama.ptrace_scope=1 on the Docker host (sysctl -w kernel.yama.ptrace_scope=1, and in /etc/sysctl.d/ to keep it)';
+
+/**
+ * Whether the runner host lets a process trace another of its user ({@link isPtraceUnrestricted}):
+ * agents share ptyd's user, so they could then take over ptyd and every command core runs.
+ */
+function ptraceCheck(connected: boolean, scope: number | null | undefined): CheckResult {
+  if (!connected) return { ok: true, detail: 'not connected' };
+  if (scope === undefined)
+    return { ok: true, detail: 'the runner does not report it (an older runner image)' };
+  if (!isPtraceUnrestricted(scope)) return { ok: true, detail: `kernel.yama.ptrace_scope is ${scope}` };
+  return {
+    ok: false,
+    detail: `${scope === null ? 'the host kernel has no Yama' : 'kernel.yama.ptrace_scope is 0'}: agents can trace the runner's own service; ${PTRACE_SCOPE_HINT}`,
+  };
+}
+
+/** 0, or no Yama at all: any process may trace another of the same user. Undefined: not known. */
+export function isPtraceUnrestricted(scope: number | null | undefined): boolean {
+  return scope === null || scope === 0;
+}
+
 /**
  * Operations endpoints:
  * - `GET /api/health/deep` (public): database, runner connection and protocol, whether agents could
- *   replace the runner's service, writable workspaces and free disk; 503 when anything is
+ *   replace or trace the runner's service, writable workspaces and free disk; 503 when anything is
  *   degraded. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
  * - `GET /metrics`: Prometheus text format, only when `EMBERLINE_METRICS_TOKEN` is set and sent as
  *   a bearer token (404 otherwise, so the endpoint does not exist by default).
@@ -70,6 +93,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
               current ? '' : ' (rebuilding the runner with `make up` locks it)'
             }`,
     };
+    result.runnerPtrace = ptraceCheck(connected, deps.ptyd.ptraceScope);
     result.workspaces = await access(deps.config.workspacesDir, fsConstants.W_OK).then(
       () => ({ ok: true, detail: 'writable' }),
       (error: Error) => ({ ok: false, detail: error.message }),

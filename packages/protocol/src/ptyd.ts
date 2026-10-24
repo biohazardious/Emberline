@@ -48,7 +48,7 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
  * Bumped whenever ptyd gains or changes a method. Core reads it on connect (`hello`) and refuses
  * features the runner does not have yet, instead of failing with an unknown-method error.
  * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel` · 4: `inheritEnv`
- * on `spawn` and `exec`.
+ * on `spawn` and `exec`, and `hello` reports `ptraceScope`.
  */
 export const PTYD_PROTOCOL_VERSION = 4;
 /**
@@ -82,7 +82,18 @@ export const ptydMethods = {
     result: SessionInfo,
   },
   /** Protocol handshake; ptyd builds older than version 2 reject it as an unknown method. */
-  hello: { params: Empty, result: z.object({ protocolVersion: z.number().int() }) },
+  hello: {
+    params: Empty,
+    result: z.object({
+      protocolVersion: z.number().int(),
+      /**
+       * The runner host's `kernel.yama.ptrace_scope` (0: any process may trace another of its user,
+       * so agents could take over ptyd; 1 and up: only its own descendants); null: the kernel has no
+       * Yama. Absent from a runner before protocol 4.
+       */
+      ptraceScope: z.number().int().nullable().optional(),
+    }),
+  },
   list: { params: Empty, result: z.object({ sessions: z.array(SessionInfo) }) },
   attach: {
     params: BySession,

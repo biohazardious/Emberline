@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PtydClient, PtydClientError } from './client.js';
-import { PtydServer } from './server.js';
+import { PtydServer, readPtraceScope } from './server.js';
 
 let dir: string;
 let socketPath: string;
@@ -65,6 +65,31 @@ afterEach(async () => {
   await server.close();
   // A session that is still exiting may add a file during removal (ENOTEMPTY): retry.
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+describe("the host's Yama ptrace setting", () => {
+  it('hello reports it as the kernel has it, and null without Yama', async () => {
+    const yama = path.join(dir, 'ptrace_scope');
+    for (const [content, scope] of [
+      ['0\n', 0],
+      ['1\n', 1],
+      ['3\n', 3],
+    ] as const) {
+      writeFileSync(yama, content);
+      const other = new PtydServer({
+        socketPath: path.join(dir, `yama-${scope}.sock`),
+        ptraceScopeFile: yama,
+      });
+      await other.listen();
+      const client = await PtydClient.connect(path.join(dir, `yama-${scope}.sock`));
+      expect(await client.hello()).toEqual({ protocolVersion: PTYD_PROTOCOL_VERSION, ptraceScope: scope });
+      client.close();
+      await other.close();
+    }
+    expect(readPtraceScope(path.join(dir, 'no-yama'))).toBeNull();
+    writeFileSync(yama, 'garbage');
+    expect(readPtraceScope(yama)).toBeNull();
+  });
 });
 
 describe('ptyd', () => {
@@ -286,7 +311,10 @@ describe('ptyd', () => {
     await expect(client.exec({ file: 'true', cwd: path.join(dir, 'nope') })).rejects.toMatchObject({
       code: 'bad_request',
     });
-    expect(await client.hello()).toEqual({ protocolVersion: PTYD_PROTOCOL_VERSION });
+    expect(await client.hello()).toEqual({
+      protocolVersion: PTYD_PROTOCOL_VERSION,
+      ptraceScope: readPtraceScope(),
+    });
     // exec never creates a session.
     expect((await client.list()).sessions).toHaveLength(0);
   });

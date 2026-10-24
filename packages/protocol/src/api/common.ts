@@ -56,6 +56,11 @@ export const SystemStatus = z.object({
   runnerOutdated: z.boolean(),
   /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
   runnerUpdateAvailable: z.boolean(),
+  /**
+   * The runner's host lets any process trace another of its user (Yama `ptrace_scope` 0, or no
+   * Yama): agents could take over the runner's own service. False while unknown.
+   */
+  runnerPtraceUnrestricted: z.boolean(),
   docker: DockerEngineStatus,
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;

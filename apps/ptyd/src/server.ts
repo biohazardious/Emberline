@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, unlink } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -25,6 +25,22 @@ const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 export interface PtydServerOptions extends SessionConfig {
   socketPath: string;
   log?: (message: string) => void;
+  /** Where the kernel's Yama ptrace setting is read (tests). */
+  ptraceScopeFile?: string;
+}
+
+/**
+ * The host's Yama `ptrace_scope`, or null without Yama. Agents run as ptyd's own user: with 0, any of
+ * them may attach to ptyd (or write its memory) and run whatever it likes as every command core
+ * sends; 1 and up allow tracing only a process's own descendants, and ptyd is no agent's.
+ */
+export function readPtraceScope(file = '/proc/sys/kernel/yama/ptrace_scope'): number | null {
+  try {
+    const value = Number.parseInt(readFileSync(file, 'utf8').trim(), 10);
+    return Number.isInteger(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export class PtydError extends Error {
@@ -56,8 +72,12 @@ export class PtydServer {
   private readonly execs = new Map<string, () => void>();
   private readonly connections = new Set<Connection>();
   private server?: net.Server;
+  /** Read once at start: a kernel setting of the host, the same for the container's life. */
+  private readonly ptraceScope: number | null;
 
-  constructor(private readonly options: PtydServerOptions) {}
+  constructor(private readonly options: PtydServerOptions) {
+    this.ptraceScope = readPtraceScope(options.ptraceScopeFile);
+  }
 
   get socketPath(): string {
     return this.options.socketPath;
@@ -163,7 +183,7 @@ export class PtydServer {
       this.options.log?.(`spawned ${id} (pid ${session.info().pid}): ${params.file}`);
       return session.info();
     },
-    hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION }),
+    hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION, ptraceScope: this.ptraceScope }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
       const { execId } = params;

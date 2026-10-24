@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -48,15 +48,18 @@ describe('ops endpoints', () => {
     });
 
     /**
-     * Core connected to a runner that answers `hello` with `version`, with ptyd's socket in a
-     * directory agents cannot change unless `guarded` is false.
+     * Core connected to a runner that answers `hello` with `version`, on a host whose Yama setting is
+     * `yama` (the file's content; none: no Yama), with ptyd's socket in a directory agents cannot
+     * change unless `guarded` is false.
      */
     async function withRunner(
       version: number,
-      { guarded = true }: { guarded?: boolean } = {},
+      { yama = '1\n', guarded = true }: { yama?: string | null; guarded?: boolean } = {},
     ) {
       t = await createTestApp();
-      server = new PtydServer({ socketPath: t.config.ptydSocket });
+      const yamaFile = path.join(t.dir, 'ptrace_scope');
+      if (yama !== null) writeFileSync(yamaFile, yama);
+      server = new PtydServer({ socketPath: t.config.ptydSocket, ptraceScopeFile: yamaFile });
       await server.listen();
       t.ptyd.start();
       await t.ptyd.waitUntilConnected();
@@ -98,6 +101,43 @@ describe('ops endpoints', () => {
       expect(deep.statusCode).toBe(503);
       expect(deep.json().checks.runnerProtocol.ok).toBe(false);
       expect(system).toMatchObject({ runnerOutdated: true, runnerUpdateAvailable: false });
+    });
+
+    it("a host whose Yama lets agents trace the runner's service is degraded and named, with how to set it", async () => {
+      for (const [yama, why] of [
+        ['0\n', 'kernel.yama.ptrace_scope is 0'],
+        [null, 'the host kernel has no Yama'],
+      ] as const) {
+        await closeRunner();
+        const { deep, system } = await withRunner(4, { yama });
+        expect(deep.statusCode).toBe(503);
+        expect(deep.json().checks.runnerPtrace).toMatchObject({ ok: false });
+        expect(deep.json().checks.runnerPtrace.detail).toContain(why);
+        expect(deep.json().checks.runnerPtrace.detail).toContain(
+          'set kernel.yama.ptrace_scope=1 on the Docker host',
+        );
+        expect(system.runnerPtraceUnrestricted).toBe(true);
+      }
+      for (const yama of ['1\n', '2\n', '3\n']) {
+        await closeRunner();
+        const { deep, system } = await withRunner(4, { yama });
+        expect(deep.statusCode).toBe(200);
+        expect(deep.json().checks.runnerPtrace).toEqual({
+          ok: true,
+          detail: `kernel.yama.ptrace_scope is ${yama.trim()}`,
+        });
+        expect(system.runnerPtraceUnrestricted).toBe(false);
+      }
+    });
+
+    it('a runner that does not report Yama (older) gets no warning: it is not known', async () => {
+      const { deep, system } = await withRunner(3);
+      Object.defineProperty(t!.ptyd, 'ptraceScope', { get: () => undefined });
+      const again = await t!.app.inject({ url: '/api/health/deep' });
+      expect(deep.statusCode).toBe(200);
+      expect(again.json().checks.runnerPtrace.ok).toBe(true);
+      expect(again.json().checks.runnerPtrace.detail).toContain('does not report');
+      expect(system.runnerPtraceUnrestricted).toBe(false);
     });
 
     it("a current runner whose socket's directory agents can change is degraded; an older one is told rebuilding locks it", async () => {

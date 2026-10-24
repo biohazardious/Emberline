@@ -38,6 +38,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private _status: PtydStatus = 'connecting';
   private wake?: () => void;
   private _protocolVersion: number | null = null;
+  private _ptraceScope: number | null | undefined = undefined;
   private _socketGuarded: boolean | null = null;
 
   constructor(private readonly socketPath: string) {
@@ -51,6 +52,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   /** ptyd protocol version of the connected runner (1 = before the handshake existed). */
   get protocolVersion(): number | null {
     return this._protocolVersion;
+  }
+
+  /** The runner host's Yama `ptrace_scope` (null: no Yama), undefined while the runner has not said. */
+  get ptraceScope(): number | null | undefined {
+    return this._ptraceScope;
   }
 
   /** Whether the socket core last connected to sat in a directory agents cannot change ({@link socketDirGuarded}). */
@@ -122,10 +128,9 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
         }
         this.client = client;
         delay = 250;
-        this._protocolVersion = await client.hello().then(
-          (res) => res.protocolVersion,
-          () => 1,
-        );
+        const hello = await client.hello().catch(() => null);
+        this._protocolVersion = hello?.protocolVersion ?? 1;
+        this._ptraceScope = hello?.ptraceScope;
         this.setStatus('connected');
         await new Promise<void>((resolve) => client.once('close', resolve));
       } catch {

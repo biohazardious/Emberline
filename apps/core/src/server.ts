@@ -22,7 +22,7 @@ import { requestUrlForLog } from './git-gateway/gateway.js';
 import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
-import { registerOpsRoutes } from './ops.js';
+import { isPtraceUnrestricted, registerOpsRoutes } from './ops.js';
 import type { PtydBridge } from './ptyd-bridge.js';
 import { KeepMainPushed } from './repository/keep-pushed.js';
 import { RepositoryService } from './repository/service.js';
@@ -231,6 +231,7 @@ export async function buildServer(
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
+    runnerPtraceUnrestricted: deps.ptyd.status === 'connected' && isPtraceUnrestricted(deps.ptyd.ptraceScope),
     docker: deps.runs.docker.status,
   }));
   registerProjectRoutes(app, { ...deps, postMerge, mainPush });
