@@ -1,17 +1,30 @@
 /**
  * Test-only git smart-HTTP server (`git http-backend` over CGI), with push enabled and no auth.
  * It serves a real transport so the no-account read/push paths, which refuse a local-path origin,
- * can be exercised with real git. Nothing here is used outside tests.
+ * can be exercised with real git. Every request's headers are kept (`seen`); a path under
+ * `/private/` answers 401, so git would ask for a password. The backend is the system git with a
+ * fixed PATH, whatever a test plants in this process's environment. Nothing here is used outside tests.
  */
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-function backend(req: IncomingMessage, res: ServerResponse, root: string): void {
+export interface SeenRequest {
+  url: string;
+  headers: IncomingMessage['headers'];
+}
+
+function backend(req: IncomingMessage, res: ServerResponse, root: string, seen: SeenRequest[]): void {
   const url = new URL(req.url ?? '/', 'http://x');
-  const child = spawn('git', ['http-backend'], {
+  seen.push({ url: req.url ?? '/', headers: req.headers });
+  if (url.pathname.startsWith('/private/')) {
+    req.resume();
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="test"' }).end();
+    return;
+  }
+  const child = spawn('/usr/bin/git', ['http-backend'], {
     env: {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      PATH: '/usr/bin:/bin',
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_PROJECT_ROOT: root,
@@ -52,13 +65,16 @@ function backend(req: IncomingMessage, res: ServerResponse, root: string): void 
 /** Serves `<root>` (a directory of bare repos) over smart HTTP; `url(name)` is `http://…/<name>`. */
 export async function startGitHttp(root: string): Promise<{
   url: (repo: string) => string;
+  seen: SeenRequest[];
   close: () => Promise<void>;
 }> {
-  const server = createServer((req, res) => backend(req, res, root));
+  const seen: SeenRequest[] = [];
+  const server = createServer((req, res) => backend(req, res, root, seen));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {
     url: (repo) => `http://127.0.0.1:${port}/${repo}`,
+    seen,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
