@@ -15,7 +15,7 @@ import { registerAuth } from './auth/plugin.js';
 import type { CoreConfig } from './config.js';
 import { CronService } from './cron/service.js';
 import type { Db } from './db/index.js';
-import { installErrorHandler } from './errors.js';
+import { installErrorHandler, RUNNER_MUST_START_AS_ROOT, RUNNER_NOT_ANSWERING } from './errors.js';
 import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { requestUrlForLog } from './git-gateway/gateway.js';
@@ -23,7 +23,7 @@ import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
 import { isPtraceUnrestricted, registerOpsRoutes } from './ops.js';
-import type { PtydBridge } from './ptyd-bridge.js';
+import type { PtydBridge, RunnerStartProblem } from './ptyd-bridge.js';
 import { KeepMainPushed } from './repository/keep-pushed.js';
 import { RepositoryService } from './repository/service.js';
 import { registerContainerPreviewRoutes } from './routes/container-preview.js';
@@ -94,6 +94,15 @@ function withRequestRedaction(logger: FastifyServerOptions['logger']): FastifySe
   if (!logger) return logger;
   const options = logger === true ? {} : logger;
   return { ...options, serializers: { ...options.serializers, req: requestLogSerializer } };
+}
+
+/** `runnerProblem` and what to tell the person about it, for /api/health. */
+function runnerProblemFields(problem: RunnerStartProblem | null): Partial<HealthResponse> {
+  if (!problem) return {};
+  return {
+    runnerProblem: problem,
+    runnerMessage: problem === 'must_start_as_root' ? RUNNER_MUST_START_AS_ROOT : RUNNER_NOT_ANSWERING,
+  };
 }
 
 export async function buildServer(
@@ -216,7 +225,7 @@ export async function buildServer(
     status: 'ok',
     version: VERSION,
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
-    ...(deps.ptyd.startProblem ? { runnerProblem: deps.ptyd.startProblem } : {}),
+    ...runnerProblemFields(deps.ptyd.startProblem),
   }));
 
   registerAuth(app, deps);

@@ -19,6 +19,13 @@ import {
  */
 export const SECURE_GRACE_MS = 10_000;
 
+/**
+ * Why core cannot use the runner while it cannot reach it ({@link PtydBridge.startProblem}):
+ * `must_start_as_root` when the runner says so, else `not_answering` once that has lasted longer
+ * than a restart takes ({@link SECURE_GRACE_MS}).
+ */
+export type RunnerStartProblem = 'must_start_as_root' | 'not_answering';
+
 /** What core says about a connected runner's socket lock ({@link PtydBridge.lockState}). */
 export type RunnerLockState = 'secured' | 'starting' | 'not_secured';
 
@@ -104,6 +111,8 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private _lockHint: 'pending' | 'locked' | 'impossible' | undefined;
   /** When the current connection was handed out (Date.now()). */
   private connectedAt = 0;
+  /** Since when core has not been connected (Date.now()); null while connected or before start(). */
+  private downSince: number | null = null;
 
   /**
    * `requireSecured`: start nothing in a current runner whose socket's directory is not locked
@@ -172,8 +181,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
    * entrypoint says so in a file of browser/ (the runner user's; a root start makes browser/ afresh);
    * it counts only while the folder is locked and core is not connected ({@link runnerStartProblem}).
    */
-  get startProblem(): 'must_start_as_root' | null {
-    return runnerStartProblem(this.socketPath, this.client !== undefined);
+  get startProblem(): RunnerStartProblem | null {
+    if (this.client) return null;
+    const known = runnerStartProblem(this.socketPath, false);
+    if (known) return known;
+    return this.downSince !== null && Date.now() - this.downSince >= SECURE_GRACE_MS ? 'not_answering' : null;
   }
 
   /** Why nothing may start in the connected runner now, if anything forbids it. */
@@ -184,6 +196,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   }
 
   start(): void {
+    this.downSince = Date.now();
     void this.loop();
   }
 
@@ -257,6 +270,8 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   }
 
   private setStatus(status: PtydStatus): void {
+    if (status === 'connected') this.downSince = null;
+    else this.downSince ??= Date.now();
     if (status === this._status) return;
     this._status = status;
     this.emit('status', status);

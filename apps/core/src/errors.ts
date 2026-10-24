@@ -44,6 +44,10 @@ export const RUNNER_STARTING =
 export const runnerStarting = () => unavailable('runner_starting', RUNNER_STARTING);
 
 /** The runner runs as another user than root on a socket folder an earlier start locked (PtydBridge.startProblem). */
+/** Core has not reached the runner for longer than a restart takes (PtydBridge.startProblem). */
+export const RUNNER_NOT_ANSWERING =
+  'The runner has not answered for a while. See why with `docker compose logs runner`. If the runner service sets `user:` in the compose file, remove it: the runner must start as root.';
+
 export const RUNNER_MUST_START_AS_ROOT =
   'Runner cannot start: it must start as root to secure its service socket. Remove `user:` from the runner service in the compose file, then start it again (`make up`, or `docker compose up -d`).';
 

@@ -20,6 +20,7 @@ import {
 import { runs } from './db/schema.js';
 import {
   RUNNER_MUST_START_AS_ROOT,
+  RUNNER_NOT_ANSWERING,
   RUNNER_NOT_SECURED,
   RUNNER_SECURITY_UPDATE,
   RUNNER_STARTING,
@@ -343,4 +344,43 @@ describe('a runner that has just started and not locked its socket yet', () => {
       runnerProblem: null,
     });
   });
+});
+
+describe('a runner that stays unreachable', () => {
+  it('gets a hint that is true for every cause once it has not answered for longer than a restart takes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const u = await createTestApp();
+    let runner: PtydServer | undefined;
+    try {
+      u.ptyd.start();
+      const health = async () => (await u.app.inject({ url: '/api/health' })).json();
+      // A restart's few seconds: nothing to explain yet.
+      expect(u.ptyd.startProblem).toBeNull();
+      expect(await health()).not.toHaveProperty('runnerProblem');
+      vi.setSystemTime(Date.now() + SECURE_GRACE_MS - 100);
+      expect(u.ptyd.startProblem).toBeNull();
+      vi.setSystemTime(Date.now() + 200);
+      expect(u.ptyd.startProblem).toBe('not_answering');
+      expect(await health()).toMatchObject({
+        status: 'ok',
+        runnerProblem: 'not_answering',
+        runnerMessage: RUNNER_NOT_ANSWERING,
+      });
+      expect(RUNNER_NOT_ANSWERING).toContain('docker compose logs runner');
+      expect(RUNNER_NOT_ANSWERING).toContain('`user:`');
+      const deep = (await u.app.inject({ url: '/api/health/deep' })).json();
+      expect(deep.checks.runner.detail).toContain(RUNNER_NOT_ANSWERING);
+
+      // The runner comes up: the hint goes.
+      runner = new PtydServer({ socketPath: u.config.ptydSocket });
+      await runner.listen();
+      await u.ptyd.waitUntilConnected(10_000);
+      expect(u.ptyd.startProblem).toBeNull();
+      expect(await health()).not.toHaveProperty('runnerProblem');
+    } finally {
+      vi.useRealTimers();
+      await runner?.close();
+      await u.close();
+    }
+  }, 20_000);
 });
