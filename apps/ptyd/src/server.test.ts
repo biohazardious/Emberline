@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -65,6 +74,68 @@ afterEach(async () => {
   await server.close();
   // A session that is still exiting may add a file during removal (ENOTEMPTY): retry.
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
+  it('refuses spawn and exec while its directory is not locked, and keeps answering everything else', async () => {
+    const socket = path.join(dir, 'locked.sock');
+    const guarded = new PtydServer({ socketPath: socket, requireLock: true });
+    await guarded.listen();
+    try {
+      // The test's directory is its own user's, not root's: never locked.
+      expect(guarded.isLocked()).toBe(false);
+      const client = await PtydClient.connect(socket);
+      await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
+        code: 'not_secured',
+      });
+      await expect(client.exec({ file: 'true', cwd: dir })).rejects.toMatchObject({ code: 'not_secured' });
+      expect((await client.hello()).protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
+      expect((await client.list()).sessions).toEqual([]);
+      client.close();
+      // It knows which socket it bound: the one the entrypoint checks before it locks.
+      const st = lstatSync(socket);
+      expect(guarded.socketIdentity).toEqual({ dev: st.dev, ino: st.ino });
+    } finally {
+      await guarded.close();
+    }
+  });
+
+  it("tells the entrypoint it listens, with its own socket's device and inode, on the ready pipe", async () => {
+    const socket = path.join(dir, 'ready.sock');
+    // ptyd's own entrypoint in this process's node (fd 3 is inherited only by a direct child).
+    const child = spawn(
+      process.execPath,
+      ['--import', 'tsx', '--conditions=@emberline/source', path.join(import.meta.dirname, 'main.ts')],
+      {
+        env: {
+          ...process.env,
+          EMBERLINE_PTYD_SOCKET: socket,
+          EMBERLINE_PTYD_READY_FD: '3',
+          EMBERLINE_PTYD_REQUIRE_LOCK: '1',
+        },
+        stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
+      },
+    );
+    try {
+      const ready = await new Promise<string>((resolve, reject) => {
+        let text = '';
+        const pipe = child.stdio[3] as NodeJS.ReadableStream;
+        pipe.on('data', (chunk: Buffer) => (text += chunk.toString()));
+        pipe.on('end', () => resolve(text));
+        child.on('exit', (code) => reject(new Error(`ptyd exited with ${code}`)));
+      });
+      const st = lstatSync(socket);
+      expect(ready).toBe(`ready ${st.dev} ${st.ino}\n`);
+      const client = await PtydClient.connect(socket);
+      await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
+        code: 'not_secured',
+      });
+      client.close();
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise((resolve) => child.once('exit', resolve));
+    }
+  }, 30_000);
 });
 
 describe("the host's Yama ptrace setting", () => {

@@ -5,7 +5,10 @@
  * Env:
  *   EMBERLINE_PTYD_SOCKET   socket path (default $XDG_RUNTIME_DIR/emberline/ptyd.sock or <tmp>/emberline/ptyd.sock)
  *   EMBERLINE_PTYD_LOG_DIR  directory for raw session logs (disabled when unset)
+ *   EMBERLINE_PTYD_REQUIRE_LOCK  `1`: refuse spawn and exec until the socket's directory is locked
+ *   EMBERLINE_PTYD_READY_FD  a file descriptor to write `ready <dev> <ino>` to once listening, then close
  */
+import { closeSync, writeSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PtydServer } from './server.js';
@@ -21,7 +24,26 @@ const server = new PtydServer({
   socketPath: process.env.EMBERLINE_PTYD_SOCKET ?? defaultSocketPath(),
   logDir: process.env.EMBERLINE_PTYD_LOG_DIR || undefined,
   log,
+  requireLock: process.env.EMBERLINE_PTYD_REQUIRE_LOCK === '1',
 });
+
+/**
+ * Tells the runner's entrypoint that ptyd listens, and which socket is its own: the entrypoint locks
+ * the socket's directory only for that socket, never just because some socket has the name.
+ */
+function signalReady(): void {
+  const fd = Number(process.env.EMBERLINE_PTYD_READY_FD);
+  const id = server.socketIdentity;
+  if (!Number.isInteger(fd) || fd < 3 || !id) return;
+  try {
+    writeSync(fd, `ready ${id.dev} ${id.ino}\n`);
+    closeSync(fd);
+  } catch (error) {
+    // Nobody waits for it: the entrypoint gave up, and stops the container.
+    log(`could not signal readiness: ${(error as Error).message}`);
+    process.exit(1);
+  }
+}
 
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
@@ -35,7 +57,7 @@ async function shutdown(signal: string): Promise<void> {
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-server.listen().catch((error: unknown) => {
+server.listen().then(signalReady, (error: unknown) => {
   log(`failed to start: ${(error as Error).message}`);
   process.exit(1);
 });

@@ -311,5 +311,6 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
 # runs ptyd (so every agent) as node. `docker compose exec runner …` is therefore root; use
 # `exec -u node` for the runner's user.
 WORKDIR /workspaces
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD test -S /run/emberline/ptyd.sock
+# Healthy once ptyd listens and the entrypoint has locked its socket's directory (core waits for it).
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD ["/opt/emberline/wrappers/runner-health.sh"]
 CMD ["/opt/emberline/wrappers/runner-entrypoint.sh"]

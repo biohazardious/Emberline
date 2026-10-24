@@ -170,7 +170,8 @@ export const PtydRequest = z.object({
 });
 export type PtydRequest = z.infer<typeof PtydRequest>;
 
-export const PtydErrorCode = z.enum(['bad_request', 'not_found', 'conflict', 'internal']);
+/** `not_secured`: ptyd started under the runner's entrypoint, which has not locked its socket's directory yet. */
+export const PtydErrorCode = z.enum(['bad_request', 'not_found', 'conflict', 'internal', 'not_secured']);
 export type PtydErrorCode = z.infer<typeof PtydErrorCode>;
 
 export const PtydResponse = z.discriminatedUnion('ok', [

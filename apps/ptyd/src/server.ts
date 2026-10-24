@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, unlink } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -27,6 +27,18 @@ export interface PtydServerOptions extends SessionConfig {
   log?: (message: string) => void;
   /** Where the kernel's Yama ptrace setting is read (tests). */
   ptraceScopeFile?: string;
+  /**
+   * The runner's entrypoint locks the socket's directory once ptyd listens (EMBERLINE_PTYD_REQUIRE_LOCK):
+   * until it is root's and writable by root alone, with ptyd's own socket at the path, `spawn` and
+   * `exec` are refused. Agents share ptyd's user; one started before the lock could replace the socket.
+   */
+  requireLock?: boolean;
+}
+
+/** A path's device and inode, as `stat -c '%d %i'` prints them. */
+export interface SocketIdentity {
+  dev: number;
+  ino: number;
 }
 
 /**
@@ -74,6 +86,9 @@ export class PtydServer {
   private server?: net.Server;
   /** Read once at start: a kernel setting of the host, the same for the container's life. */
   private readonly ptraceScope: number | null;
+  /** The socket this ptyd bound, read right after the bind (see {@link requireLock}). */
+  private bound?: SocketIdentity;
+  private locked = false;
 
   constructor(private readonly options: PtydServerOptions) {
     this.ptraceScope = readPtraceScope(options.ptraceScopeFile);
@@ -81,6 +96,42 @@ export class PtydServer {
 
   get socketPath(): string {
     return this.options.socketPath;
+  }
+
+  /** The device and inode of the socket ptyd bound (for the entrypoint's readiness check). */
+  get socketIdentity(): SocketIdentity | undefined {
+    return this.bound;
+  }
+
+  /**
+   * Whether the socket's directory is locked: a real directory of root's that only root can write,
+   * with the socket ptyd bound still at the path. Once locked, only root could undo it, so it is kept.
+   */
+  isLocked(): boolean {
+    if (this.locked) return true;
+    if (!this.bound) return false;
+    try {
+      const dir = lstatSync(path.dirname(this.options.socketPath));
+      const sock = lstatSync(this.options.socketPath);
+      this.locked =
+        dir.isDirectory() &&
+        dir.uid === 0 &&
+        (dir.mode & 0o022) === 0 &&
+        sock.isSocket() &&
+        sock.dev === this.bound.dev &&
+        sock.ino === this.bound.ino;
+    } catch {
+      return false;
+    }
+    return this.locked;
+  }
+
+  private assertLocked(): void {
+    if (this.options.requireLock && !this.isLocked())
+      throw new PtydError(
+        'not_secured',
+        "the runner has not locked its service's socket yet: nothing starts until it has",
+      );
   }
 
   async listen(): Promise<void> {
@@ -97,6 +148,8 @@ export class PtydServer {
       });
     });
     await chmod(socketPath, 0o600);
+    const sock = lstatSync(socketPath);
+    this.bound = { dev: sock.dev, ino: sock.ino };
     this.server = server;
     this.options.log?.(`ptyd listening on ${socketPath}`);
   }
@@ -170,6 +223,7 @@ export class PtydServer {
 
   private readonly handlers: { [M in Exclude<PtydMethod, 'attach'>]: Handler<M> } = {
     spawn: (_conn, params) => {
+      this.assertLocked();
       const id = params.id ?? randomUUID();
       if (this.sessions.has(id)) throw new PtydError('conflict', `session ${id} already exists`);
       if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
@@ -186,6 +240,7 @@ export class PtydServer {
     hello: () => ({ protocolVersion: PTYD_PROTOCOL_VERSION, ptraceScope: this.ptraceScope }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
+      this.assertLocked();
       const { execId } = params;
       if (execId && this.execs.has(execId))
         throw new PtydError('conflict', `exec ${execId} is already running`);
