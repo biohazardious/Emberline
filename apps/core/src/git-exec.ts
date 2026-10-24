@@ -46,6 +46,22 @@ export const HARDENED_GIT_ARGS: readonly string[] = Object.entries(OVERRIDES).fl
 ]);
 
 /**
+ * For every git command that reaches a remote over http(s): TLS as git's defaults have it, no proxy
+ * and no extra header from any config. `-c` wins over a config file's unscoped key; a URL-scoped one
+ * (`http.<url>.sslVerify`) would win over it, so those, and the TLS keys that cannot be reset to
+ * git's default (`http.sslCAInfo`, `http.sslCert`, …), are refused on remote commands (see
+ * {@link assertSafeGitConfig}). An empty `http.extraHeader` resets the list.
+ */
+export const REMOTE_HTTP_ARGS: readonly string[] = [
+  '-c',
+  'http.sslVerify=true',
+  '-c',
+  'http.proxy=',
+  '-c',
+  'http.extraHeader=',
+];
+
+/**
  * The transports a git command that reaches a remote may use: https, http and ssh, and nothing
  * else. `protocol.allow=never` makes every scheme default to `never`, and the explicit allows name
  * the three. So `file` (a local path), `ext` (a command), `git` (unauthenticated) and the rest are
@@ -66,6 +82,7 @@ export const REMOTE_PROTOCOL_ARGS: readonly string[] = [
   'protocol.http.allow=always',
   '-c',
   'protocol.ssh.allow=always',
+  ...REMOTE_HTTP_ARGS,
 ];
 
 /**
@@ -91,6 +108,17 @@ export const NO_SUBMODULES: readonly string[] = [
  */
 const BLOCKED_CONFIG_KEY =
   /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs|proxy)|url\..+\.(insteadof|pushinsteadof)|http\..+\.proxy|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
+
+/**
+ * Refused only on commands that reach a remote ({@link REMOTE_HTTP_ARGS}): every TLS key, plain or
+ * URL-scoped (`http.sslCAInfo`, `http.<url>.sslVerify`, a client certificate or key, the TLS
+ * backend, version, ciphers, a pinned key), except the plain `http.sslVerify` that `-c` pins; and a
+ * URL-scoped `http.<url>.extraHeader`, which wins over the reset. They would weaken or redirect TLS
+ * for origin's address and its credential.
+ */
+const REMOTE_BLOCKED_CONFIG_KEY =
+  /^http\.(.+\.)?(ssl[a-z]*|pinnedpubkey|schannel[a-z]*)$|^http\..+\.extraheader$/i;
+const PINNED_REMOTE_KEY = /^http\.sslverify$/i;
 
 /**
  * The whole environment of every git process core runs: nothing from core's environment or the
@@ -126,13 +154,16 @@ export function hardenedGitEnv(): Record<string, string> {
 
 export class UnsafeGitConfigError extends Error {
   constructor(readonly keys: string[]) {
-    super(`refusing to run git: repository config sets command-executing keys (${keys.join(', ')})`);
+    super(`refusing to run git: repository config sets keys Emberline does not allow (${keys.join(', ')})`);
     this.name = 'UnsafeGitConfigError';
   }
 }
 
-/** Throws when the repository config (including files it includes) sets a blocked key. */
-export async function assertSafeGitConfig(cwd: string): Promise<void> {
+/**
+ * Throws when the repository config (including files it includes) sets a blocked key; `remote`: also
+ * a key that would weaken TLS or add a header on a command that reaches a remote.
+ */
+export async function assertSafeGitConfig(cwd: string, { remote = false } = {}): Promise<void> {
   const res = await execCommand(
     systemCommand({
       file: RUNNER_BIN.git,
@@ -150,7 +181,12 @@ export async function assertSafeGitConfig(cwd: string): Promise<void> {
   const blocked = res.stdout
     .split('\n')
     .map((key) => key.trim())
-    .filter((key) => key && BLOCKED_CONFIG_KEY.test(key));
+    .filter(
+      (key) =>
+        key &&
+        (BLOCKED_CONFIG_KEY.test(key) ||
+          (remote && REMOTE_BLOCKED_CONFIG_KEY.test(key) && !PINNED_REMOTE_KEY.test(key))),
+    );
   if (blocked.length > 0) throw new UnsafeGitConfigError([...new Set(blocked)]);
 }
 
@@ -191,9 +227,10 @@ export interface ExecGitOptions {
   /** Extra `GIT_*` variables (other keys are dropped); hardening variables always win. */
   env?: Record<string, string | undefined>;
   /**
-   * The command reaches a remote: restrict the transports to https/http/ssh ({@link
-   * REMOTE_PROTOCOL_ARGS}). The caller has already refused a local-path or file target with a clear
-   * message (assertSupportedRemote); this makes git refuse it too.
+   * The command reaches a remote: restrict the transports to https/http/ssh and pin TLS, proxy and
+   * extra headers ({@link REMOTE_PROTOCOL_ARGS}), and refuse config that weakens TLS. The caller has
+   * already refused a local-path or file target with a clear message (assertSupportedRemote); this
+   * makes git refuse it too.
    */
   remote?: boolean;
 }
@@ -229,7 +266,7 @@ export async function execGitFile(
   options: ExecGitOptions & { encoding?: 'buffer' } = {},
 ): Promise<{ stdout: string | Buffer; stderr: string }> {
   const repo = repoDirOf(args, options);
-  await assertSafeGitConfig(repo);
+  await assertSafeGitConfig(repo, { remote: options.remote });
   const { stdout, stderr } = await execFileChecked(
     systemCommand({
       file: RUNNER_BIN.git,

@@ -305,11 +305,16 @@ describe('push main', () => {
       TOKEN,
       Buffer.from(`alice:${TOKEN}`).toString('base64'),
       ...configEnv,
-      'extraheader',
       'authorization',
     ]) {
       expect(all).not.toContain(marker.toLowerCase());
     }
+    // An extra header shows only as the empty value that resets the list (REMOTE_HTTP_ARGS): none is set.
+    const headers = all.match(/extraheader[^"]*/g) ?? [];
+    expect(
+      headers.every((h) => h === 'extraheader='),
+      headers.join(', '),
+    ).toBe(true);
     expect(
       forge.seen.some((r) => r.path.endsWith('git-receive-pack') && r.authorization?.startsWith('Basic ')),
     ).toBe(true);

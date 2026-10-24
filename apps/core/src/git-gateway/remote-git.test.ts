@@ -58,6 +58,7 @@ function expectHardenedClone(session: {
   expect(args).toContain('-c core.hooksPath=/dev/null');
   expect(args).toContain('-c core.askPass=');
   expect(args).toContain(`-c core.sshCommand=${RUNNER_BIN.ssh} -F /dev/null`);
+  expect(args).toContain('-c http.sslVerify=true');
   expect(args).toContain('-c submodule.recurse=false');
   expect(session.env?.GIT_CONFIG_GLOBAL).toBe('/dev/null');
   expect(session.env?.GIT_CONFIG_NOSYSTEM).toBe('1');

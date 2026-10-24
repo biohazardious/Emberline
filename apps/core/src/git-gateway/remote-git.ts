@@ -7,7 +7,7 @@
  */
 import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
-import { execGitFile, HARDENED_GIT_ARGS, NO_SUBMODULES } from '../git-exec.js';
+import { execGitFile, HARDENED_GIT_ARGS, NO_SUBMODULES, REMOTE_HTTP_ARGS } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
 import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
 import { oldValueRefusal } from './receive-pack.js';
@@ -36,8 +36,8 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
     `protocol.${scheme}.allow=always`,
     '-c',
     'http.followRedirects=false',
-    '-c',
-    'http.proxy=',
+    // TLS as git's defaults have it, no proxy, no extra header from any config.
+    ...REMOTE_HTTP_ARGS,
     '-c',
     'credential.helper=',
     ...NO_SUBMODULES,
