@@ -298,7 +298,15 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && chmod +x /opt/emberline/wrappers/* \
   && ln -sf /opt/emberline/wrappers/agy /opt/emberline/wrappers/antigravity \
   && mkdir -p /run/emberline /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
-  && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools
+  && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools \
+  && mkdir -p /opt/emberline/docker/config /opt/emberline/docker/buildx/instances /opt/emberline/docker/buildx/defaults \
+    /opt/emberline/docker/buildx/activity /opt/emberline/docker/buildx/refs \
+  && touch /opt/emberline/docker/buildx/.lock \
+  && chown node:node /opt/emberline/docker/buildx/activity /opt/emberline/docker/buildx/refs /opt/emberline/docker/buildx/.lock \
+  && chmod 0600 /opt/emberline/docker/buildx/.lock
+# /opt/emberline/docker: the Docker CLI's config and buildx directories for Emberline's own commands
+# (DOCKER_CLI_ENV in apps/core/src/command-exec.ts), root's so no agent can add a plugin, a config or
+# a builder; buildx may write only its lock, activity times and build records.
 USER node
 WORKDIR /workspaces
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD test -S /run/emberline/ptyd.sock

@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   builderPruneArgs,
   RECLAIM_IMAGE,
@@ -110,37 +110,56 @@ describe('compose command lines', () => {
     const { file, args } = composeShell(['compose', 'up']);
     expect(file).toBe(RUNNER_BIN.sh);
     expect(args.slice(2)).toEqual(['sh', 'compose', 'up']);
-    expect(args[1]).toContain(
-      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | BUILDX_CONFIG="$b" ${RUNNER_BIN.docker} "$@"`,
-    );
+    expect(args[1]).toContain(`printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec ${RUNNER_BIN.docker} "$@"`);
   });
 
-  it("buildx gets a fresh private directory that is gone when the command ends, and docker's exit code is kept", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'compose-shell-'));
-    try {
+  describe("the runner's Docker CLI directories", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(path.join(tmpdir(), 'compose-shell-'));
       // The script as the runner runs it, with a recorder in the Docker CLI's place.
-      const docker = path.join(dir, 'docker');
       writeFileSync(
-        docker,
-        `#!/bin/sh\n{ echo "args=$*"; echo "buildx=$BUILDX_CONFIG"; ls -ld "$BUILDX_CONFIG" | cut -c1-10; echo "stdin=$(cat)"; } > ${dir}/seen\nexit 7\n`,
+        path.join(dir, 'docker'),
+        `#!/bin/sh\n{ echo "args=$*"; echo "config=$DOCKER_CONFIG"; echo "buildx=$BUILDX_CONFIG"; echo "stdin=$(cat)"; } > ${dir}/seen\nexit 7\n`,
       );
-      chmodSync(docker, 0o755);
+      chmodSync(path.join(dir, 'docker'), 0o755);
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const runShell = (buildx: string) => {
       const { args } = composeShell(['compose', 'up']);
-      const script = args[1]!.replaceAll(RUNNER_BIN.docker, docker);
+      const script = args[1]!.replaceAll(RUNNER_BIN.docker, path.join(dir, 'docker'));
       const run = spawnSync(RUNNER_BIN.sh, ['-c', script, ...args.slice(2)], {
-        env: { [COMPOSE_OVERRIDE_ENV]: 'services: {}', BUILDX_CONFIG: '/home/node/.docker/buildx' },
+        env: {
+          [COMPOSE_OVERRIDE_ENV]: 'services: {}',
+          DOCKER_CONFIG: '/image/config',
+          BUILDX_CONFIG: buildx,
+        },
       });
-      expect(run.status).toBe(7);
       const seen = readFileSync(path.join(dir, 'seen'), 'utf8');
+      const value = (name: string) => new RegExp(`^${name}=(.*)$`, 'm').exec(seen)?.[1] ?? '';
+      return { status: run.status, seen, value };
+    };
+
+    it("the image's directories when the runner has them; docker's exit code is kept", () => {
+      mkdirSync(path.join(dir, 'buildx'));
+      const { status, seen, value } = runShell(path.join(dir, 'buildx'));
+      expect(status).toBe(7);
       expect(seen).toContain('args=compose up');
       expect(seen).toContain('stdin=services: {}');
-      expect(seen).toContain('drwx------');
-      const buildx = /^buildx=(.*)$/m.exec(seen)?.[1] ?? '';
-      expect(buildx).toMatch(/^\/tmp\/tmp\.\w+$/);
-      expect(existsSync(buildx), 'the buildx directory was left behind').toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+      expect(value('config')).toBe('/image/config');
+      expect(value('buildx')).toBe(path.join(dir, 'buildx'));
+    });
+
+    it('an older runner image without them: a fresh private directory, gone when the command ends', () => {
+      const { status, seen, value } = runShell('/nonexistent/buildx');
+      expect(status).toBe(7);
+      expect(seen).toContain('stdin=services: {}');
+      const fresh = value('buildx').replace(/\/buildx$/, '');
+      expect(fresh).toMatch(/^\/tmp\/tmp\.\w+$/);
+      expect(value('config')).toBe(`${fresh}/config`);
+      expect(existsSync(fresh), 'the directory was left behind').toBe(false);
+    });
   });
 });
 

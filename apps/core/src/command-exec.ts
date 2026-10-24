@@ -65,16 +65,18 @@ export function systemCommand(request: ExecRequest): ExecRequest {
 /**
  * The Docker CLI's own settings on every command core runs with it ({@link dockerCommand}). Agents
  * can write the runner user's `~/.docker`: a `cli-plugins/docker-compose` or `docker-buildx` there
- * would run in place of the image's, and its `config.json` sets proxies for every build and
- * container. With a config directory and a home that do not exist (agents cannot create them: `/` is
- * root's), only the image's plugins in /usr/local/lib/docker/cli-plugins run and no config applies.
- * buildx needs a directory it can write; the commands that build or prune get a fresh one (see
- * composeShell), every other command needs none.
+ * would run in place of the image's, its `config.json` sets proxies for every build and container,
+ * and a builder defined in `buildx/instances` (one named `default` too) takes every build. So the CLI
+ * gets the runner image's own directories, which are root's: an empty config directory (only the
+ * plugins in /usr/local/lib/docker/cli-plugins run, no config applies) and a buildx directory whose
+ * builders and defaults are empty and fixed; buildx may write only its lock, activity times and build
+ * records there. No home: nothing else of the runner user's is read. A runner image without these
+ * directories (before 0.6.1) gets a fresh private one for each build or prune (see composeShell).
  */
 export const DOCKER_CLI_ENV: Readonly<Record<string, string>> = {
   HOME: '/nonexistent',
-  DOCKER_CONFIG: '/nonexistent',
-  BUILDX_CONFIG: '/nonexistent/buildx',
+  DOCKER_CONFIG: '/opt/emberline/docker/config',
+  BUILDX_CONFIG: '/opt/emberline/docker/buildx',
 };
 
 /** A Docker CLI command of core's (the CLI itself, or the image's `sh` that runs it): a {@link systemCommand} with {@link DOCKER_CLI_ENV}. */

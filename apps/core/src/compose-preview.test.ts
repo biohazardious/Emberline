@@ -488,8 +488,8 @@ describe('compose previews (worktree.yml v2)', () => {
         expect(call.env).toMatchObject({
           PATH: SYSTEM_PATH,
           HOME: '/nonexistent',
-          DOCKER_CONFIG: '/nonexistent',
-          BUILDX_CONFIG: '/nonexistent/buildx',
+          DOCKER_CONFIG: '/opt/emberline/docker/config',
+          BUILDX_CONFIG: '/opt/emberline/docker/buildx',
           DOCKER_HOST: 'tcp://docker:2376',
         });
       }
