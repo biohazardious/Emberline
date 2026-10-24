@@ -4,7 +4,7 @@
  * nothing, until the runner image is updated. A current runner works as before.
  */
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -187,13 +187,20 @@ describe('a terminal viewer (M-A)', () => {
   });
 });
 
+/**
+ * Makes the socket's directory writable by anyone, so never locked whoever runs the tests (CI runs
+ * them as root, where the test's own directory is root's and writable by root alone: locked).
+ */
+const unlock = (socketPath: string) => chmodSync(path.dirname(socketPath), 0o777);
+
 describe('a current runner whose socket is not locked', () => {
   let u: TestApp;
   let ptydServer: PtydServer;
   let ucookie: string;
   beforeEach(async () => {
-    // The test's own directory, like a runner started with a compose `user:` (node's, not root's).
+    // Like a runner started with a compose `user:`: its socket's directory is not locked.
     u = await createTestApp({ requireSecuredRunner: true });
+    unlock(u.config.ptydSocket);
     // It says so itself (`hello` lock `impossible`), so it is not secured at once, not "starting".
     ptydServer = new PtydServer({ socketPath: u.config.ptydSocket, cannotLock: true });
     await ptydServer.listen();
@@ -258,6 +265,7 @@ describe('a runner that has just started and not locked its socket yet', () => {
   let ucookie: string;
   async function startWith(options: { cannotLock?: boolean; requireLock?: boolean }) {
     u = await createTestApp({ requireSecuredRunner: true });
+    unlock(u.config.ptydSocket);
     ptydServer = new PtydServer({ socketPath: u.config.ptydSocket, ...options });
     await ptydServer.listen();
     u.ptyd.start();

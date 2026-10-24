@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -76,13 +78,23 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
+/**
+ * A directory anyone may write, so never locked whoever runs the tests (CI runs them as root, where
+ * a fresh temporary directory is root's and writable by root alone, which is what locked means).
+ */
+function unlockedDir(name: string): string {
+  const unlocked = path.join(dir, name);
+  mkdirSync(unlocked);
+  chmodSync(unlocked, 0o777);
+  return unlocked;
+}
+
 describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
   it('refuses spawn and exec while its directory is not locked, and keeps answering everything else', async () => {
-    const socket = path.join(dir, 'locked.sock');
+    const socket = path.join(unlockedDir('unlocked'), 'locked.sock');
     const guarded = new PtydServer({ socketPath: socket, requireLock: true });
     await guarded.listen();
     try {
-      // The test's directory is its own user's, not root's: never locked.
       expect(guarded.isLocked()).toBe(false);
       const client = await PtydClient.connect(socket);
       await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
@@ -114,7 +126,7 @@ describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
   });
 
   it("tells the entrypoint it listens, with its own socket's device and inode, on the ready pipe", async () => {
-    const socket = path.join(dir, 'ready.sock');
+    const socket = path.join(unlockedDir('ready'), 'ready.sock');
     // ptyd's own entrypoint in this process's node (fd 3 is inherited only by a direct child).
     const child = spawn(
       process.execPath,
