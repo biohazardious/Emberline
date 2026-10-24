@@ -60,8 +60,10 @@ class FakeEngine {
   downGate: Promise<void> | null = null;
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file !== RUNNER_BIN.docker) return localCommandExecutor(request);
-    const args = request.args;
+    // The CLI itself, or the image's sh that runs it (a build or prune: see composeShell).
+    const shell = request.file === RUNNER_BIN.sh && request.args[1]?.includes(RUNNER_BIN.docker);
+    if (request.file !== RUNNER_BIN.docker && !shell) return localCommandExecutor(request);
+    const args = shell ? request.args.slice(3) : request.args;
     if (args[0] === 'version')
       return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
     this.calls.push(args);

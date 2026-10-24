@@ -12,6 +12,7 @@ import {
   localCommandExecutor,
   setCommandExecutor,
   RUNNER_BIN,
+  DOCKER_CLI_ENV,
   SYSTEM_PATH,
 } from './command-exec.js';
 import { loadConfig, parsePortRange, previewPortRangesOverlap } from './config.js';
@@ -240,8 +241,10 @@ describe('DockerEngine probe', () => {
       args: ['version', '--format', '{{json .Server.Version}}'],
       cwd: '/workspaces',
     });
-    // The image's Docker CLI, with the system PATH for what it starts.
-    expect(request.env).toEqual({ ...CLIENT_ENV, PATH: SYSTEM_PATH });
+    // The image's Docker CLI, with the system PATH for what it starts, no config directory or home
+    // (agents can write ~/.docker) and nothing of the runner's environment.
+    expect(request.env).toEqual({ ...CLIENT_ENV, ...DOCKER_CLI_ENV, PATH: SYSTEM_PATH });
+    expect(request.inheritEnv).toBe(false);
     expect(engine.runEnv('emberline-ab12cd34')).toEqual({
       ...CLIENT_ENV,
       EMBERLINE_COMPOSE_PROJECT: 'emberline-ab12cd34',

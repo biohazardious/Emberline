@@ -2,7 +2,7 @@
  * Starting and watching a compose preview: every step runs the Docker CLI (or curl) in the runner
  * through command-exec, with the engine's client variables. RunService records the outcome.
  */
-import { execCommand, type ExecResult, RUNNER_BIN, SYSTEM_PATH, systemCommand } from '../command-exec.js';
+import { dockerCommand, execCommand, type ExecResult, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 import {
   answeredHttp,
@@ -223,7 +223,8 @@ export async function composeProjects(
 /** `image prune` and `builder prune`, each `-f --filter until=72h`. Never throws. */
 export async function pruneImages(env: Record<string, string>): Promise<{ ok: boolean; output: string }> {
   const images = await run(imagePruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
-  const cache = await run(builderPruneArgs(), NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS);
+  const prune = composeShell(builderPruneArgs());
+  const cache = await run(prune.args, NEUTRAL_CWD, env, COMPOSE_DOWN_TIMEOUT_MS, { file: prune.file });
   return { ok: images.ok && cache.ok, output: [images.output, cache.output].filter(Boolean).join('\n') };
 }
 
@@ -299,15 +300,17 @@ async function run(
   opts: { file?: string; execId?: string } = {},
 ): Promise<Ran> {
   try {
-    // The image's Docker CLI by its path, and the system PATH for what it starts (credential helpers).
-    const result = await execCommand({
-      file: opts.file ?? RUNNER_BIN.docker,
-      args,
-      cwd,
-      env: { ...env, PATH: SYSTEM_PATH },
-      timeoutMs,
-      ...(opts.execId ? { execId: opts.execId } : {}),
-    });
+    // The image's Docker CLI by its path, with no config, plugin or variable of the runner's.
+    const result = await execCommand(
+      dockerCommand({
+        file: opts.file ?? RUNNER_BIN.docker,
+        args,
+        cwd,
+        env,
+        timeoutMs,
+        ...(opts.execId ? { execId: opts.execId } : {}),
+      }),
+    );
     const output = composeOutputTail(`${result.stdout}${result.stderr}`);
     const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled;
     const how = result.timedOut

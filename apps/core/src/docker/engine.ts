@@ -9,7 +9,7 @@
  */
 import path from 'node:path';
 import type { DockerEngineStatus } from '@emberline/protocol';
-import { type CommandExecutor, execCommand, RUNNER_BIN, SYSTEM_PATH } from '../command-exec.js';
+import { type CommandExecutor, dockerCommand, execCommand, RUNNER_BIN } from '../command-exec.js';
 import { DEFAULT_DOCKER_CERT_PATH } from '../config.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
@@ -211,13 +211,15 @@ export class DockerEngine {
       error: clean(error),
     });
     try {
-      const result = await (this.options.exec ?? execCommand)({
-        file: RUNNER_BIN.docker,
-        args: ['version', '--format', '{{json .Server.Version}}'],
-        cwd: this.options.cwd ?? '/',
-        env: { ...this.clientEnv(host), PATH: SYSTEM_PATH },
-        timeoutMs: PROBE_TIMEOUT_MS,
-      });
+      const result = await (this.options.exec ?? execCommand)(
+        dockerCommand({
+          file: RUNNER_BIN.docker,
+          args: ['version', '--format', '{{json .Server.Version}}'],
+          cwd: this.options.cwd ?? '/',
+          env: this.clientEnv(host),
+          timeoutMs: PROBE_TIMEOUT_MS,
+        }),
+      );
       if (result.exitCode === 127 && /ENOENT|not found/.test(result.stderr)) {
         return off('the runner image has no Docker CLI; rebuild it (make up)');
       }

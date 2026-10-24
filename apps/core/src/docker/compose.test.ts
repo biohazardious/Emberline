@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   builderPruneArgs,
@@ -105,13 +109,38 @@ describe('compose command lines', () => {
   it('the override reaches compose on stdin from a variable, never as a file or an argument', () => {
     const { file, args } = composeShell(['compose', 'up']);
     expect(file).toBe(RUNNER_BIN.sh);
-    expect(args).toEqual([
-      '-c',
-      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec ${RUNNER_BIN.docker} "$@"`,
-      'sh',
-      'compose',
-      'up',
-    ]);
+    expect(args.slice(2)).toEqual(['sh', 'compose', 'up']);
+    expect(args[1]).toContain(
+      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | BUILDX_CONFIG="$b" ${RUNNER_BIN.docker} "$@"`,
+    );
+  });
+
+  it("buildx gets a fresh private directory that is gone when the command ends, and docker's exit code is kept", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'compose-shell-'));
+    try {
+      // The script as the runner runs it, with a recorder in the Docker CLI's place.
+      const docker = path.join(dir, 'docker');
+      writeFileSync(
+        docker,
+        `#!/bin/sh\n{ echo "args=$*"; echo "buildx=$BUILDX_CONFIG"; ls -ld "$BUILDX_CONFIG" | cut -c1-10; echo "stdin=$(cat)"; } > ${dir}/seen\nexit 7\n`,
+      );
+      chmodSync(docker, 0o755);
+      const { args } = composeShell(['compose', 'up']);
+      const script = args[1]!.replaceAll(RUNNER_BIN.docker, docker);
+      const run = spawnSync(RUNNER_BIN.sh, ['-c', script, ...args.slice(2)], {
+        env: { [COMPOSE_OVERRIDE_ENV]: 'services: {}', BUILDX_CONFIG: '/home/node/.docker/buildx' },
+      });
+      expect(run.status).toBe(7);
+      const seen = readFileSync(path.join(dir, 'seen'), 'utf8');
+      expect(seen).toContain('args=compose up');
+      expect(seen).toContain('stdin=services: {}');
+      expect(seen).toContain('drwx------');
+      const buildx = /^buildx=(.*)$/m.exec(seen)?.[1] ?? '';
+      expect(buildx).toMatch(/^\/tmp\/tmp\.\w+$/);
+      expect(existsSync(buildx), 'the buildx directory was left behind').toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

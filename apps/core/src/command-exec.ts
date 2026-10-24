@@ -46,6 +46,7 @@ export const RUNNER_BIN = {
   cp: '/usr/bin/cp',
   head: '/usr/bin/head',
   curl: '/usr/bin/curl',
+  mktemp: '/usr/bin/mktemp',
   node: '/usr/local/bin/node',
   docker: '/usr/local/bin/docker',
 } as const;
@@ -59,6 +60,26 @@ export function systemCommand(request: ExecRequest): ExecRequest {
   if (!request.file.startsWith('/'))
     throw new Error(`a system command needs an absolute path: ${request.file}`);
   return { ...request, env: { ...request.env, PATH: SYSTEM_PATH }, inheritEnv: false };
+}
+
+/**
+ * The Docker CLI's own settings on every command core runs with it ({@link dockerCommand}). Agents
+ * can write the runner user's `~/.docker`: a `cli-plugins/docker-compose` or `docker-buildx` there
+ * would run in place of the image's, and its `config.json` sets proxies for every build and
+ * container. With a config directory and a home that do not exist (agents cannot create them: `/` is
+ * root's), only the image's plugins in /usr/local/lib/docker/cli-plugins run and no config applies.
+ * buildx needs a directory it can write; the commands that build or prune get a fresh one (see
+ * composeShell), every other command needs none.
+ */
+export const DOCKER_CLI_ENV: Readonly<Record<string, string>> = {
+  HOME: '/nonexistent',
+  DOCKER_CONFIG: '/nonexistent',
+  BUILDX_CONFIG: '/nonexistent/buildx',
+};
+
+/** A Docker CLI command of core's (the CLI itself, or the image's `sh` that runs it): a {@link systemCommand} with {@link DOCKER_CLI_ENV}. */
+export function dockerCommand(request: ExecRequest): ExecRequest {
+  return systemCommand({ ...request, env: { ...request.env, ...DOCKER_CLI_ENV } });
 }
 
 export type ExecResult = PtydResult<'exec'>;

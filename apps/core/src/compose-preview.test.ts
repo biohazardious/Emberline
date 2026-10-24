@@ -23,6 +23,7 @@ import {
   setCommandCanceller,
   setCommandExecutor,
   RUNNER_BIN,
+  SYSTEM_PATH,
 } from './command-exec.js';
 import type { CoreConfig } from './config.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
@@ -78,6 +79,8 @@ interface DockerCall {
   env: Record<string, string>;
   /** What the command got on stdin (the override), when it was run through the `sh` wrapper. */
   stdin?: string;
+  file: string;
+  inheritEnv?: boolean;
 }
 
 /** An engine in memory: `compose up/ps/logs/down/config` per project, plus `curl` against published ports. */
@@ -142,7 +145,7 @@ class FakeEngine {
     let stdin: string | undefined;
     if (request.file === RUNNER_BIN.docker) {
       args = request.args;
-    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(`exec ${RUNNER_BIN.docker}`)) {
+    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(RUNNER_BIN.docker)) {
       args = request.args.slice(3);
       stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
     } else {
@@ -155,6 +158,8 @@ class FakeEngine {
       cwd: request.cwd,
       env: request.env ?? {},
       ...(stdin !== undefined ? { stdin } : {}),
+      file: request.file,
+      inheritEnv: request.inheritEnv,
     });
     const project = args[2] ?? '';
     const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
@@ -465,6 +470,29 @@ describe('compose previews (worktree.yml v2)', () => {
         ['compose', '-p', previewComposeProjectName(run.id), 'down', '--remove-orphans'],
       ]);
       expect(engine.projects.size).toBe(0);
+    });
+
+    it("every docker command is the image's CLI with no config, plugin or variable of the runner's", async () => {
+      await start('tcp://docker:2376');
+      const p = await project();
+      const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+      await startPreview(run);
+      await waitStatus(run, 'running');
+      await api('POST', `/api/runs/${run.id}/preview/stop`, {});
+      const verbs = engine.calls.map((c) => c.args.find((a) => ['config', 'up', 'ps', 'down'].includes(a)));
+      expect(new Set(verbs)).toEqual(new Set(['config', 'up', 'ps', 'down']));
+      for (const call of engine.calls) {
+        expect([RUNNER_BIN.docker, RUNNER_BIN.sh]).toContain(call.file);
+        // ~/.docker (agents can write it: cli-plugins, config.json) is never read, nor anything inherited.
+        expect(call.inheritEnv, call.args.join(' ')).toBe(false);
+        expect(call.env).toMatchObject({
+          PATH: SYSTEM_PATH,
+          HOME: '/nonexistent',
+          DOCKER_CONFIG: '/nonexistent',
+          BUILDX_CONFIG: '/nonexistent/buildx',
+          DOCKER_HOST: 'tcp://docker:2376',
+        });
+      }
     });
 
     it('a port something else holds in the engine is retried on the next free one, re-recorded', async () => {

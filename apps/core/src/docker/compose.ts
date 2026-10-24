@@ -87,12 +87,21 @@ export function composeDownArgs(
 /**
  * Runs `docker <args>` with the override on stdin. The override never appears in the command line,
  * only in {@link COMPOSE_OVERRIDE_ENV}. The image's sh and Docker CLI by their paths (see
- * SYSTEM_PATH): a `docker` planted earlier on the runner's PATH never runs.
+ * SYSTEM_PATH): a `docker` planted earlier on the runner's PATH never runs. buildx (a build, a
+ * prune) keeps its state in a fresh private directory, removed when the command ends: a builder an
+ * agent defined in a directory buildx reads (one named `default` too) would take the build, or the
+ * prune, to an engine of its choosing.
  */
 export function composeShell(args: string[]): { file: string; args: string[] } {
   return {
     file: RUNNER_BIN.sh,
-    args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec ${RUNNER_BIN.docker} "$@"`, 'sh', ...args],
+    args: [
+      '-c',
+      `b=$(${RUNNER_BIN.mktemp} -d) || exit 125; trap '${RUNNER_BIN.rm} -rf -- "$b"' EXIT; ` +
+        `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | BUILDX_CONFIG="$b" ${RUNNER_BIN.docker} "$@"`,
+      'sh',
+      ...args,
+    ],
   };
 }
 

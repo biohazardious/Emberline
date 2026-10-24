@@ -13,6 +13,7 @@ import {
   localCommandExecutor,
   setCommandExecutor,
   RUNNER_BIN,
+  DOCKER_CLI_ENV,
   SYSTEM_PATH,
 } from './command-exec.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
@@ -141,14 +142,16 @@ describe('GET /api/projects/:id/container-preview', () => {
       ]),
     );
     expect(request!.args).not.toContain('--no-interpolate');
-    // Only the file, the remote-resource switches and the system PATH travel in the environment: no
-    // project or engine variables.
+    // Only the file, the remote-resource switches, the Docker CLI's own settings and the system PATH
+    // travel in the environment: no project or engine variables, nothing of the runner's.
     expect(request!.env).toEqual({
       [COMPOSE_OVERRIDE_ENV]: COMPOSE,
       COMPOSE_EXPERIMENTAL_GIT_REMOTE: 'false',
       COMPOSE_EXPERIMENTAL_OCI_REMOTE: 'false',
+      ...DOCKER_CLI_ENV,
       PATH: SYSTEM_PATH,
     });
+    expect(request!.inheritEnv).toBe(false);
     expect(request!.env![COMPOSE_OVERRIDE_ENV]).toBe(COMPOSE);
     expect(request!.timeoutMs).toBe(15_000);
     expect(request!.maxOutputBytes).toBe(1024 * 1024);

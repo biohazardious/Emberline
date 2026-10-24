@@ -135,7 +135,7 @@ class FakeEngine {
     let stdin: string | undefined;
     if (request.file === RUNNER_BIN.docker) {
       args = request.args;
-    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(`exec ${RUNNER_BIN.docker}`)) {
+    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(RUNNER_BIN.docker)) {
       args = request.args.slice(3);
       stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
     } else {

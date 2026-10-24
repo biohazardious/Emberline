@@ -12,7 +12,7 @@ import {
   type ComposeFileName,
   type ContainerPreviewService,
 } from '@emberline/protocol';
-import { type ExecResult, execCommand, SYSTEM_PATH } from '../command-exec.js';
+import { dockerCommand, type ExecResult, execCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { isMissing } from '../outputs/safe-fs.js';
 import { readWorktreeBytes } from '../runs/git.js';
@@ -247,14 +247,16 @@ export class ComposeConfigReader {
     const shell = composeShell(composeConfigArgs(mainComposeProjectName(projectId), projectPath));
     let ran: ExecResult;
     try {
-      ran = await execCommand({
-        file: shell.file,
-        args: shell.args,
-        cwd: projectPath,
-        env: { [COMPOSE_OVERRIDE_ENV]: content, ...NO_REMOTE_RESOURCES_ENV, PATH: SYSTEM_PATH },
-        timeoutMs: COMPOSE_CONFIG_TIMEOUT_MS,
-        maxOutputBytes: COMPOSE_CONFIG_MAX_OUTPUT_BYTES,
-      });
+      ran = await execCommand(
+        dockerCommand({
+          file: shell.file,
+          args: shell.args,
+          cwd: projectPath,
+          env: { [COMPOSE_OVERRIDE_ENV]: content, ...NO_REMOTE_RESOURCES_ENV },
+          timeoutMs: COMPOSE_CONFIG_TIMEOUT_MS,
+          maxOutputBytes: COMPOSE_CONFIG_MAX_OUTPUT_BYTES,
+        }),
+      );
     } catch (error) {
       return fail((error as Error).message, false);
     }
