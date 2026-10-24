@@ -12,7 +12,7 @@ import {
   type ComposeFileName,
   type ContainerPreviewService,
 } from '@emberline/protocol';
-import { type ExecResult, execCommand } from '../command-exec.js';
+import { type ExecResult, execCommand, SYSTEM_PATH } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { isMissing } from '../outputs/safe-fs.js';
 import { readWorktreeBytes } from '../runs/git.js';
@@ -251,7 +251,7 @@ export class ComposeConfigReader {
         file: shell.file,
         args: shell.args,
         cwd: projectPath,
-        env: { [COMPOSE_OVERRIDE_ENV]: content, ...NO_REMOTE_RESOURCES_ENV },
+        env: { [COMPOSE_OVERRIDE_ENV]: content, ...NO_REMOTE_RESOURCES_ENV, PATH: SYSTEM_PATH },
         timeoutMs: COMPOSE_CONFIG_TIMEOUT_MS,
         maxOutputBytes: COMPOSE_CONFIG_MAX_OUTPUT_BYTES,
       });

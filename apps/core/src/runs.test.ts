@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
-import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor, RUNNER_BIN } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
 import { rmTemp } from './test-rm.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
@@ -1041,7 +1041,7 @@ describe('runs', () => {
   it("a running command preview reports its framing, probed on the runner's localhost", async () => {
     const probes: string[] = [];
     setCommandExecutor(async (request: ExecRequest) => {
-      if (request.file === 'curl' && request.args.includes('-D')) {
+      if (request.file === RUNNER_BIN.curl && request.args.includes('-D')) {
         probes.push(request.args.at(-1) ?? '');
         return {
           exitCode: 0,

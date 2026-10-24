@@ -1,4 +1,4 @@
-import { execCommand, execFileChecked } from './command-exec.js';
+import { execCommand, execFileChecked, RUNNER_BIN, SYSTEM_PATH, systemCommand } from './command-exec.js';
 
 /**
  * Core runs git inside repositories that agents control: worktrees share the main repo's
@@ -7,16 +7,23 @@ import { execCommand, execFileChecked } from './command-exec.js';
  * and refuses repos whose config sets the ones that cannot be neutralized generically.
  *
  * Since Phase 3 every git process runs in the runner (command-exec.ts), so these settings protect
- * the runner's own credentials (SSH keys, OAuth tokens) from a repo planted by another agent.
+ * the runner's own credentials (SSH keys, OAuth tokens) from a repo planted by another agent. It is
+ * the runner image's own git (`/usr/bin/git`), with ssh at `/usr/bin/ssh`: the runner's PATH starts
+ * with directories agents can write (see SYSTEM_PATH).
  */
+const SSH_COMMAND = `${RUNNER_BIN.ssh} -F /dev/null`;
+/** The runner image's git-core (`git --exec-path`): root-owned, where git's own helpers live. */
+const GIT_CORE_DIR = '/usr/lib/git-core';
+
 const OVERRIDES: Record<string, string> = {
   'core.fsmonitor': 'false',
   'core.hooksPath': '/dev/null',
   // A repository's own hooks never run: this neutralizes the key when git reads this repository's
   // config (core.hooksPath on another repository git enters is handled by refusing those targets).
   'core.alternateRefsCommand': '',
-  // Ignore ~/.ssh/config (runner-writable): a ProxyCommand there would run in core on push.
-  'core.sshCommand': 'ssh -F /dev/null',
+  // Ignore ~/.ssh/config (runner-writable): a ProxyCommand there would run in core on push. The
+  // system ssh by its path: a planted `ssh` earlier on PATH never runs.
+  'core.sshCommand': SSH_COMMAND,
   // git asks this program for a password on a 401, even with GIT_TERMINAL_PROMPT=0; its prompt
   // holds the URL, so a token in it would be handed to the program. The env also empties GIT_ASKPASS.
   'core.askPass': '',
@@ -86,17 +93,28 @@ const BLOCKED_CONFIG_KEY =
   /^(diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|include\.path|includeif\..+\.path|remote\..+\.(uploadpack|receivepack|vcs|proxy)|url\..+\.(insteadof|pushinsteadof)|http\..+\.proxy|core\.(gitproxy|alternaterefscommand)|gpg\.program|gpg\..+\.program)$/i;
 
 /**
- * Hardening variables for every git process; nothing else from core's environment is forwarded.
+ * The whole environment of every git process core runs: nothing from core's environment or the
+ * runner's is forwarded (`inheritEnv: false`), so no `GIT_*`, proxy, TLS, `LD_*` or `HOME` variable
+ * an agent could set reaches it.
+ * - `PATH` is the system one and `GIT_EXEC_PATH` the image's git-core, so git's helpers
+ *   (`git-remote-https`) and ssh are the image's own; `GIT_SSH_COMMAND` is core's ssh command.
  * - System and global config live in images/volumes the runner can influence, so both are disabled.
  *   This also stops git reading `$XDG_CONFIG_HOME/git/config` (git looks there only when
- *   GIT_CONFIG_GLOBAL is unset), so `HOME`/`XDG_CONFIG_HOME` cannot choose config; `HOME` stays only
- *   for ssh key lookup, and ssh's own config is pinned with `core.sshCommand`.
+ *   GIT_CONFIG_GLOBAL is unset). `HOME` names no directory, so no `~/.config/git/attributes` or
+ *   `ignore` applies either; ssh finds its keys from the passwd entry, not `HOME`, and its own config
+ *   is pinned with `core.sshCommand`.
+ * - `TZ` is core's own (the runner had the same), so commits core makes keep their time zone.
  * - No password prompt: `GIT_TERMINAL_PROMPT=0`, and an empty `GIT_ASKPASS`/`SSH_ASKPASS` (git and
  *   ssh treat an empty value as unset) with `core.askPass=` in the args, so neither a config key nor
  *   an inherited env var can run an askpass program (R7-I2).
  */
 export function hardenedGitEnv(): Record<string, string> {
   return {
+    PATH: SYSTEM_PATH,
+    HOME: '/nonexistent',
+    ...(process.env.TZ ? { TZ: process.env.TZ } : {}),
+    GIT_EXEC_PATH: GIT_CORE_DIR,
+    GIT_SSH_COMMAND: SSH_COMMAND,
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
@@ -115,13 +133,15 @@ export class UnsafeGitConfigError extends Error {
 
 /** Throws when the repository config (including files it includes) sets a blocked key. */
 export async function assertSafeGitConfig(cwd: string): Promise<void> {
-  const res = await execCommand({
-    file: 'git',
-    args: ['-C', cwd, 'config', '--list', '--name-only'],
-    cwd: '/',
-    env: hardenedGitEnv(),
-    timeoutMs: 10_000,
-  });
+  const res = await execCommand(
+    systemCommand({
+      file: RUNNER_BIN.git,
+      args: ['-C', cwd, 'config', '--list', '--name-only'],
+      cwd: '/',
+      env: hardenedGitEnv(),
+      timeoutMs: 10_000,
+    }),
+  );
   if (res.exitCode !== 0) {
     // Outside a repository this still succeeds (system/global config are disabled), so a failure
     // means config git cannot parse, e.g. an include pointing at a non-config file. Fail closed.
@@ -210,14 +230,16 @@ export async function execGitFile(
 ): Promise<{ stdout: string | Buffer; stderr: string }> {
   const repo = repoDirOf(args, options);
   await assertSafeGitConfig(repo);
-  const { stdout, stderr } = await execFileChecked({
-    file: 'git',
-    args: [...HARDENED_GIT_ARGS, ...(options.remote ? REMOTE_PROTOCOL_ARGS : []), ...args],
-    cwd: options.cwd ?? '/',
-    env: { ...gitVariables(options.env), ...hardenedGitEnv() },
-    timeoutMs: options.timeout ?? 30_000,
-    maxOutputBytes: options.maxBuffer,
-    encoding: options.encoding === 'buffer' ? 'base64' : 'utf8',
-  });
+  const { stdout, stderr } = await execFileChecked(
+    systemCommand({
+      file: RUNNER_BIN.git,
+      args: [...HARDENED_GIT_ARGS, ...(options.remote ? REMOTE_PROTOCOL_ARGS : []), ...args],
+      cwd: options.cwd ?? '/',
+      env: { ...gitVariables(options.env), ...hardenedGitEnv() },
+      timeoutMs: options.timeout ?? 30_000,
+      maxOutputBytes: options.maxBuffer,
+      encoding: options.encoding === 'buffer' ? 'base64' : 'utf8',
+    }),
+  );
   return { stdout: options.encoding === 'buffer' ? Buffer.from(stdout, 'base64') : stdout, stderr };
 }

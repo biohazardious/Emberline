@@ -11,6 +11,8 @@ import {
   type ExecResult,
   localCommandExecutor,
   setCommandExecutor,
+  RUNNER_BIN,
+  SYSTEM_PATH,
 } from './command-exec.js';
 import { loadConfig, parsePortRange, previewPortRangesOverlap } from './config.js';
 import { buildWorkspaceDemo } from './factory/demo.js';
@@ -234,11 +236,12 @@ describe('DockerEngine probe', () => {
     expect(engine.status).toEqual({ enabled: true, checked: true, available: true, version: '29.8.2' });
     const request = exec.mock.calls[0]![0] as ExecRequest;
     expect(request).toMatchObject({
-      file: 'docker',
+      file: RUNNER_BIN.docker,
       args: ['version', '--format', '{{json .Server.Version}}'],
       cwd: '/workspaces',
     });
-    expect(request.env).toEqual(CLIENT_ENV);
+    // The image's Docker CLI, with the system PATH for what it starts.
+    expect(request.env).toEqual({ ...CLIENT_ENV, PATH: SYSTEM_PATH });
     expect(engine.runEnv('emberline-ab12cd34')).toEqual({
       ...CLIENT_ENV,
       EMBERLINE_COMPOSE_PROJECT: 'emberline-ab12cd34',
@@ -383,7 +386,7 @@ describe('Docker engine in core: /api/system, run env, first prompt, worktree.ym
     t.config.claudeCommand = fake;
     dockerAnswer = ok('"29.8.2"\n');
     setCommandExecutor(async (request) => {
-      if (request.file !== 'docker') return localCommandExecutor(request);
+      if (request.file !== RUNNER_BIN.docker) return localCommandExecutor(request);
       if (dockerDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, dockerDelayMs));
       return dockerAnswer;
     });

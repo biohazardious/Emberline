@@ -76,6 +76,7 @@ import {
 } from '@emberline/protocol';
 import { asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from 'fastify';
+import { RUNNER_BIN } from '../command-exec.js';
 import {
   cloneGitEnv,
   execGitFile,
@@ -607,12 +608,14 @@ export function registerProjectRoutes(
             ];
         try {
           const session = await ptyd.get().spawn({
-            file: 'git',
+            // The image's own git, with only the hardened env (system PATH, no global/system config,
+            // no prompt, no askpass) and nothing of the runner's; LC_ALL=C with a branch so
+            // import-status can read git's English "Remote branch … not found".
+            file: RUNNER_BIN.git,
             args,
             cwd: config.workspacesDir,
-            // The hardened env (no global/system config, no prompt, no askpass); LC_ALL=C with a
-            // branch so import-status can read git's English "Remote branch … not found".
             env: cloneGitEnv(Boolean(branch)),
+            inheritEnv: false,
             // `noLog`: ptyd keeps no on-disk log of the clone, so a token a server echoes into the
             // terminal is never stored where agents can read it. The live view stays raw, unstored.
             meta: { kind: 'clone', noLog: '1', projectId: id, title: `git clone · ${body.name}` },

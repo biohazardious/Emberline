@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor, RUNNER_BIN } from './command-exec.js';
 import { unavailable } from './errors.js';
 import { runProducedChanges, withMainWorkspaceLock } from './factory/merge.js';
 import { syncWorktreeToMainWorkspace } from './factory/service.js';
@@ -229,12 +229,13 @@ describe('a merge refused before it starts', () => {
     expect(git(a, 'show', '--name-only', '--format=', 'HEAD')).toBe('feature-a.js');
     expect(existsSync(scratch)).toBe(false);
     const onScratch = requests
-      .filter((r) => r.file !== 'git' && r.args.includes(scratch))
+      .filter((r) => r.file !== RUNNER_BIN.git && r.args.includes(scratch))
       .map((r) => [r.file, ...r.args.filter((x) => x !== scratch)].join(' '));
+    // The image's own rm and cp, by their paths.
     expect(onScratch).toEqual([
-      'rm -f --',
-      `cp -- ${scratch.slice(0, -'.emberline-output'.length)}`,
-      'rm -f --',
+      `${RUNNER_BIN.rm} -f --`,
+      `${RUNNER_BIN.cp} -- ${scratch.slice(0, -'.emberline-output'.length)}`,
+      `${RUNNER_BIN.rm} -f --`,
     ]);
     // The runner's own git commands do not read it.
     expect(git(a, 'status', '--porcelain')).toBe('');
@@ -349,7 +350,7 @@ describe('a merge refused before it starts', () => {
     const gitDir = git(a, 'rev-parse', '--path-format=absolute', '--git-dir');
     expect(readFileSync(path.join(gitDir, 'MERGE_MODE'), 'utf8')).toBe('no-ff');
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('--quit'))
+      if (request.file === RUNNER_BIN.git && request.args.includes('--quit'))
         throw new Error('index.lock: File exists');
       return localCommandExecutor(request);
     });
@@ -377,7 +378,7 @@ describe('a merge refused before it starts', () => {
     expect(() => git(a, 'merge', '-q', 'main')).toThrow();
     writeFileSync(path.join(a, 'app.js'), 'line1\nline2 both\nline3\n');
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('--quit'))
+      if (request.file === RUNNER_BIN.git && request.args.includes('--quit'))
         throw new Error('index.lock: File exists');
       return localCommandExecutor(request);
     });
@@ -469,7 +470,11 @@ describe('a merge refused before it starts', () => {
     const before = git(a, 'rev-parse', 'HEAD');
     let asked = 0;
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('update-ref') && !request.args.includes('-d'))
+      if (
+        request.file === RUNNER_BIN.git &&
+        request.args.includes('update-ref') &&
+        !request.args.includes('-d')
+      )
         throw unavailable('ptyd_unavailable', 'the runner (ptyd) is not reachable');
       return localCommandExecutor(request);
     });
@@ -488,7 +493,7 @@ describe('a merge refused before it starts', () => {
     const before = git(a, 'rev-parse', 'HEAD');
     const mainBefore = git(main, 'rev-parse', 'HEAD');
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('add') && !request.env?.GIT_INDEX_FILE)
+      if (request.file === RUNNER_BIN.git && request.args.includes('add') && !request.env?.GIT_INDEX_FILE)
         throw new Error('index.lock: File exists');
       return localCommandExecutor(request);
     });
@@ -508,7 +513,7 @@ describe('a merge refused before it starts', () => {
     writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
     const before = git(a, 'rev-parse', 'HEAD');
     setCommandExecutor(async (request) => {
-      if (request.file === 'cp') throw new Error('No space left on device');
+      if (request.file === RUNNER_BIN.cp) throw new Error('No space left on device');
       return localCommandExecutor(request);
     });
     try {

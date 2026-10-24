@@ -17,11 +17,48 @@ export interface ExecRequest {
   cwd: string;
   /** Extra variables only; core's own environment is never forwarded. */
   env?: Record<string, string>;
+  /**
+   * false: the command gets only `env`, none of the runner's base environment (ptyd protocol 4; an
+   * older runner ignores it, and the variables in `env` still win over its base). See {@link systemCommand}.
+   */
+  inheritEnv?: boolean;
   timeoutMs?: number;
   maxOutputBytes?: number;
   encoding?: 'utf8' | 'base64';
   /** Lets {@link cancelCommand} stop this command while it runs (unique while it runs). */
   execId?: string;
+}
+
+/**
+ * The runner's root-owned system directories. The runner's own PATH starts with directories the
+ * agents' user owns (/opt/ai-tools/bin is the runner-tools volume), so a `git`, `ssh` or `cp` planted
+ * there would run in place of the real one. A command core relies on is therefore started by its
+ * absolute path ({@link RUNNER_BIN}), and whatever it starts in turn is looked up here only.
+ */
+export const SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+/** The runner image's own binaries (root-owned, 755) that core runs for itself. */
+export const RUNNER_BIN = {
+  git: '/usr/bin/git',
+  ssh: '/usr/bin/ssh',
+  sh: '/usr/bin/sh',
+  rm: '/usr/bin/rm',
+  cp: '/usr/bin/cp',
+  head: '/usr/bin/head',
+  curl: '/usr/bin/curl',
+  node: '/usr/local/bin/node',
+  docker: '/usr/local/bin/docker',
+} as const;
+
+/**
+ * A command core relies on (git, the merge's file steps, its probes): started by its absolute path,
+ * with only the variables given plus {@link SYSTEM_PATH}, and nothing from the runner's environment.
+ * Agents' and projects' own commands are not run this way: they keep the runner's PATH.
+ */
+export function systemCommand(request: ExecRequest): ExecRequest {
+  if (!request.file.startsWith('/'))
+    throw new Error(`a system command needs an absolute path: ${request.file}`);
+  return { ...request, env: { ...request.env, PATH: SYSTEM_PATH }, inheritEnv: false };
 }
 
 export type ExecResult = PtydResult<'exec'>;
@@ -85,6 +122,7 @@ export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
       timeoutMs,
       maxOutputBytes: Math.min(request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES, MAX_EXEC_OUTPUT_BYTES),
       encoding: request.encoding ?? 'utf8',
+      ...(request.inheritEnv === false ? { inheritEnv: false } : {}),
       ...(request.execId && (ptyd.protocolVersion ?? 0) >= CANCEL_PROTOCOL_VERSION
         ? { execId: request.execId }
         : {}),
@@ -125,7 +163,8 @@ export const localCommandExecutor: CommandExecutor = (request) =>
     const max = request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES;
     const child = spawn(request.file, request.args, {
       cwd: request.cwd,
-      env: { ...process.env, ...request.env },
+      // As ptyd does: `inheritEnv: false` gets only the variables given.
+      env: request.inheritEnv === false ? { ...request.env } : { ...process.env, ...request.env },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group, as in ptyd: a timeout or a cancel also kills what the command started.
       detached: true,

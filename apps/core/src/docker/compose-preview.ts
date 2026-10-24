@@ -2,7 +2,7 @@
  * Starting and watching a compose preview: every step runs the Docker CLI (or curl) in the runner
  * through command-exec, with the engine's client variables. RunService records the outcome.
  */
-import { execCommand, type ExecResult } from '../command-exec.js';
+import { execCommand, type ExecResult, RUNNER_BIN, SYSTEM_PATH, systemCommand } from '../command-exec.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 import {
   answeredHttp,
@@ -267,13 +267,15 @@ async function composeLogsTail(target: ComposePreviewTarget): Promise<string | n
 async function answersHttp(target: ComposePreviewTarget): Promise<boolean> {
   const url = `http://${target.engineHost}:${target.hostPort}/`;
   try {
-    const result = await execCommand({
-      file: 'curl',
-      // A proxy in the runner's environment would answer for the engine.
-      args: ['-s', '--noproxy', '*', '-o', '/dev/null', '-m', '5', '-w', '%{http_code}', url],
-      cwd: NEUTRAL_CWD,
-      timeoutMs: 10_000,
-    });
+    const result = await execCommand(
+      systemCommand({
+        file: RUNNER_BIN.curl,
+        // A proxy in the runner's environment would answer for the engine; `-q` (first): no ~/.curlrc.
+        args: ['-q', '-s', '--noproxy', '*', '-o', '/dev/null', '-m', '5', '-w', '%{http_code}', url],
+        cwd: NEUTRAL_CWD,
+        timeoutMs: 10_000,
+      }),
+    );
     return answeredHttp(result.stdout);
   } catch {
     return false;
@@ -297,11 +299,12 @@ async function run(
   opts: { file?: string; execId?: string } = {},
 ): Promise<Ran> {
   try {
+    // The image's Docker CLI by its path, and the system PATH for what it starts (credential helpers).
     const result = await execCommand({
-      file: opts.file ?? 'docker',
+      file: opts.file ?? RUNNER_BIN.docker,
       args,
       cwd,
-      env,
+      env: { ...env, PATH: SYSTEM_PATH },
       timeoutMs,
       ...(opts.execId ? { execId: opts.execId } : {}),
     });

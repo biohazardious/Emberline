@@ -22,6 +22,7 @@ import {
   localCommandExecutor,
   setCommandCanceller,
   setCommandExecutor,
+  RUNNER_BIN,
 } from './command-exec.js';
 import type { CoreConfig } from './config.js';
 import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
@@ -125,12 +126,12 @@ class FakeEngine {
   };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file === 'curl' && request.args.includes('-D')) {
+    if (request.file === RUNNER_BIN.curl && request.args.includes('-D')) {
       const url = request.args.at(-1) ?? '';
       this.probes.push(url);
       return ok(this.frameHeaders.get(Number(new URL(url).port)) ?? 'HTTP/1.1 200 OK\r\n\r\n');
     }
-    if (request.file === 'curl') {
+    if (request.file === RUNNER_BIN.curl) {
       const url = request.args.at(-1) ?? '';
       this.curls.push(url);
       this.curlArgs.push(request.args);
@@ -139,9 +140,9 @@ class FakeEngine {
     }
     let args: string[];
     let stdin: string | undefined;
-    if (request.file === 'docker') {
+    if (request.file === RUNNER_BIN.docker) {
       args = request.args;
-    } else if (request.file === 'sh' && request.args[1]?.includes('exec docker')) {
+    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(`exec ${RUNNER_BIN.docker}`)) {
       args = request.args.slice(3);
       stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
     } else {

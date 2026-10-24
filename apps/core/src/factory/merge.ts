@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type SyncWorktreeResponse } from '@emberline/protocol';
-import { execFileChecked, isRunnerUnavailable } from '../command-exec.js';
+import { execFileChecked, isRunnerUnavailable, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -69,12 +69,14 @@ async function readGitDirFile(worktreePath: string, name: string): Promise<strin
   const file = (
     await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', name], { cwd: worktreePath })
   ).stdout.trim();
-  // A leading `.` tells an empty file from a missing one.
-  const { stdout } = await execFileChecked({
-    file: 'sh',
-    args: ['-c', 'test ! -e "$1" || { printf .; cat -- "$1"; }', 'sh', file],
-    cwd: worktreePath,
-  });
+  // A leading `.` tells an empty file from a missing one. The system sh and cat (systemCommand).
+  const { stdout } = await execFileChecked(
+    systemCommand({
+      file: RUNNER_BIN.sh,
+      args: ['-c', 'test ! -e "$1" || { printf .; cat -- "$1"; }', 'sh', file],
+      cwd: worktreePath,
+    }),
+  );
   return stdout.startsWith('.') ? stdout.slice(1) : null;
 }
 
@@ -179,13 +181,16 @@ async function buildRunOutputCommit(
   ).stdout.trim();
   const scratchIndex = `${index}.emberline-output`;
   const env = { GIT_INDEX_FILE: scratchIndex };
-  const inRunner = (file: string, args: string[]) => execFileChecked({ file, args, cwd: worktreePath });
+  // The runner image's own rm, sh and cp (systemCommand): a planted one never copies the index.
+  const inRunner = (file: string, args: string[]) =>
+    execFileChecked(systemCommand({ file, args, cwd: worktreePath }));
   try {
-    await inRunner('rm', ['-f', '--', scratchIndex]);
+    await inRunner(RUNNER_BIN.rm, ['-f', '--', scratchIndex]);
     // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
     // Only a worktree without an index starts from HEAD; a copy that fails fails the merge.
-    const hasIndex = (await inRunner('sh', ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
-    if (hasIndex) await inRunner('cp', ['--', index, scratchIndex]);
+    const hasIndex =
+      (await inRunner(RUNNER_BIN.sh, ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
+    if (hasIndex) await inRunner(RUNNER_BIN.cp, ['--', index, scratchIndex]);
     else await execGitFile(['read-tree', head], { ...inWorktree, env });
     await stageRunOutput(worktreePath, env);
     const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
@@ -224,7 +229,7 @@ async function buildRunOutputCommit(
       )
     ).stdout.trim();
   } finally {
-    await inRunner('rm', ['-f', '--', scratchIndex]).catch(() => undefined);
+    await inRunner(RUNNER_BIN.rm, ['-f', '--', scratchIndex]).catch(() => undefined);
   }
 }
 

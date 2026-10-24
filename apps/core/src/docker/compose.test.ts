@@ -22,6 +22,7 @@ import {
   parseComposePs,
   parseComposeServices,
 } from './compose.js';
+import { RUNNER_BIN } from '../command-exec.js';
 
 describe('compose command lines', () => {
   it('up: the project from the run, the project file, the override from stdin, then the service', () => {
@@ -103,10 +104,10 @@ describe('compose command lines', () => {
   });
   it('the override reaches compose on stdin from a variable, never as a file or an argument', () => {
     const { file, args } = composeShell(['compose', 'up']);
-    expect(file).toBe('sh');
+    expect(file).toBe(RUNNER_BIN.sh);
     expect(args).toEqual([
       '-c',
-      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`,
+      `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec ${RUNNER_BIN.docker} "$@"`,
       'sh',
       'compose',
       'up',

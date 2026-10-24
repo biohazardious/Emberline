@@ -15,7 +15,7 @@ import {
   type UpdatesResponse,
   type UpdateStatus,
 } from '@emberline/protocol';
-import { execCommand } from '../command-exec.js';
+import { execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { badRequest, notFound } from '../errors.js';
 import { getFactorySettings } from '../factory/settings.js';
@@ -144,7 +144,9 @@ export class UpdateService {
     if (!server || !spec) throw notFound('no MCP server run through npx with that id');
     const dirs = this.npxCacheDirs(splitPackageSpec(spec).name).map((d) => d.dir);
     if (dirs.length > 0) {
-      const result = await execCommand({ file: 'rm', args: ['-rf', '--', ...dirs], cwd: '/' });
+      const result = await execCommand(
+        systemCommand({ file: RUNNER_BIN.rm, args: ['-rf', '--', ...dirs], cwd: '/' }),
+      );
       if (result.exitCode !== 0) throw badRequest(`could not clear the npx cache: ${result.stderr.trim()}`);
     }
     await this.check();

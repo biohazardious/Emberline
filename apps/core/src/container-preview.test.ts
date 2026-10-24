@@ -12,6 +12,8 @@ import {
   type ExecResult,
   localCommandExecutor,
   setCommandExecutor,
+  RUNNER_BIN,
+  SYSTEM_PATH,
 } from './command-exec.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { ComposeConfigReader, findHeadComposeFile } from './docker/compose-config.js';
@@ -49,10 +51,10 @@ beforeEach(async () => {
   compose.requests = [];
   compose.gate = null;
   setCommandExecutor(async (request) => {
-    if (request.file === 'docker' && request.args[0] === 'version') {
+    if (request.file === RUNNER_BIN.docker && request.args[0] === 'version') {
       return engine.up ? ok('"29.8.2"\n') : { ...ok(''), exitCode: 1, stderr: 'Cannot connect' };
     }
-    if (request.file === 'sh' && request.args.includes('config')) {
+    if (request.file === RUNNER_BIN.sh && request.args.includes('config')) {
       compose.requests.push(request);
       if (compose.next instanceof Error) throw compose.next;
       if (compose.gate) await compose.gate;
@@ -139,11 +141,13 @@ describe('GET /api/projects/:id/container-preview', () => {
       ]),
     );
     expect(request!.args).not.toContain('--no-interpolate');
-    // Only the file and the remote-resource switches travel in the environment: no project or engine variables.
+    // Only the file, the remote-resource switches and the system PATH travel in the environment: no
+    // project or engine variables.
     expect(request!.env).toEqual({
       [COMPOSE_OVERRIDE_ENV]: COMPOSE,
       COMPOSE_EXPERIMENTAL_GIT_REMOTE: 'false',
       COMPOSE_EXPERIMENTAL_OCI_REMOTE: 'false',
+      PATH: SYSTEM_PATH,
     });
     expect(request!.env![COMPOSE_OVERRIDE_ENV]).toBe(COMPOSE);
     expect(request!.timeoutMs).toBe(15_000);

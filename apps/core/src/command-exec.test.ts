@@ -17,6 +17,8 @@ import {
   localCommandExecutor,
   ptydCommandCanceller,
   ptydCommandExecutor,
+  RUNNER_BIN,
+  SYSTEM_PATH,
   setCommandCanceller,
   setCommandExecutor,
 } from './command-exec.js';
@@ -64,12 +66,15 @@ describe('command execution through the runner', () => {
       delete process.env.EMBERLINE_CORE_SECRET_FOR_TEST;
     }
     expect(seen.length).toBeGreaterThanOrEqual(2); // config check + the command
-    // Only git's own hardening variables are forwarded: the GIT_* set and the ssh-askpass pair that
-    // disables an askpass prompt. Nothing else from core's environment (the planted secret) is passed.
+    // Only git's own hardening variables are sent: the GIT_* set, the ssh-askpass pair that disables
+    // an askpass prompt, the system PATH, a HOME that names no directory and core's TZ. Nothing else
+    // from core's environment (the planted secret), and nothing of the runner's (inheritEnv false).
     const allowed = (key: string) =>
-      key.startsWith('GIT_') || key === 'SSH_ASKPASS' || key === 'SSH_ASKPASS_REQUIRE';
+      key.startsWith('GIT_') || ['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'PATH', 'HOME', 'TZ'].includes(key);
     for (const request of seen) {
-      expect(request.file).toBe('git');
+      expect(request.file).toBe(RUNNER_BIN.git);
+      expect(request.inheritEnv).toBe(false);
+      expect(request.env?.PATH).toBe(SYSTEM_PATH);
       expect(Object.keys(request.env ?? {}).every(allowed), JSON.stringify(request.env)).toBe(true);
     }
   });

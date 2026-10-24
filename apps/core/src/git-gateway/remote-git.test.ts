@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
+import {
+  type ExecRequest,
+  localCommandExecutor,
+  RUNNER_BIN,
+  SYSTEM_PATH,
+  setCommandExecutor,
+} from '../command-exec.js';
 import { projects, runs } from '../db/schema.js';
 import { basicAuthValue, type GitHttpCredential } from '../git-credentials.js';
 import { pushWorktreeBranch } from '../runs/git.js';
@@ -38,11 +44,20 @@ const commit = (cwd: string, file: string) => {
 };
 /** Anything an agent in the runner could see: every exec, the planted git's and askPass's dumps, b's requests. */
 /** The import clone carries core's git hardening: no global/system config, no prompt, no askpass. */
-function expectHardenedClone(session: { args: string[]; env?: Record<string, string> }) {
+function expectHardenedClone(session: {
+  file: string;
+  args: string[];
+  env?: Record<string, string>;
+  inheritEnv?: boolean;
+}) {
+  // The image's git, with only core's variables (nothing of the runner's environment).
+  expect(session.file).toBe(RUNNER_BIN.git);
+  expect(session.inheritEnv).toBe(false);
+  expect(session.env?.PATH).toBe(SYSTEM_PATH);
   const args = session.args.join(' ');
   expect(args).toContain('-c core.hooksPath=/dev/null');
   expect(args).toContain('-c core.askPass=');
-  expect(args).toContain('-c core.sshCommand=ssh -F /dev/null');
+  expect(args).toContain(`-c core.sshCommand=${RUNNER_BIN.ssh} -F /dev/null`);
   expect(args).toContain('-c submodule.recurse=false');
   expect(session.env?.GIT_CONFIG_GLOBAL).toBe('/dev/null');
   expect(session.env?.GIT_CONFIG_NOSYSTEM).toBe('1');
@@ -184,7 +199,7 @@ describe('run push through the gateway', () => {
 
     it('a refusal that is not about access (non-fast-forward) gets no hint, even with an account for the origin', async () => {
       setCommandExecutor(async (request) => {
-        if (request.file === 'git' && request.args.includes('push')) {
+        if (request.file === RUNNER_BIN.git && request.args.includes('push')) {
           return {
             exitCode: 1,
             signal: null,
@@ -246,8 +261,10 @@ describe('run push through the gateway', () => {
     await expect(pushWorktreeBranch(wt, 'emberline/run-1', 'main', account())).rejects.toMatchObject({
       statusCode: 409,
     });
-    expect(readFileSync(path.join(outside, 'planted-git.log'), 'utf8')).toContain('/api/internal/git/'); // the planted git ran…
-    expectAgentsSeeNoToken(refused, String(refused)); // …and saw no token
+    // The git planted first on PATH never ran a command of core's (core runs the image's git by its
+    // path); only this test's own helpers went through it.
+    expect(readFileSync(path.join(outside, 'planted-git.log'), 'utf8')).not.toContain('/api/internal/git/');
+    expectAgentsSeeNoToken(refused, String(refused));
     expect(t.runs.gitGateway.size).toBe(0);
   });
 
@@ -287,12 +304,14 @@ describe('import clone', () => {
         args: string[];
         cwd: string;
         env?: Record<string, string>;
+        inheritEnv?: boolean;
         meta: Record<string, string>;
       }) => {
         spawned.push(params);
         clone = promisify(execFile)(params.file, params.args, {
           cwd: params.cwd,
-          ...(params.env ? { env: { ...process.env, ...params.env } } : {}),
+          // As ptyd: `inheritEnv: false` gets only the variables sent.
+          env: params.inheritEnv === false ? { ...params.env } : { ...process.env, ...params.env },
         }).then(
           (r) => {
             output = `${r.stdout}${r.stderr}`;

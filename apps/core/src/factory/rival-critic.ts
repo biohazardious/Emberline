@@ -3,7 +3,7 @@ import path from 'node:path';
 import { type AgentId, type AgentModelId, CrossCriticIssue } from '@emberline/protocol';
 import { resolveClaudeCliModelFlag } from '@emberline/adapter-claude';
 import { z } from 'zod';
-import { execCommand } from '../command-exec.js';
+import { execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { branchBase } from './slop-guard.js';
 
@@ -113,11 +113,13 @@ export async function collectReviewDiff(
     .filter(Boolean);
   for (const file of untracked) {
     if (diff.length > MAX_DIFF_CHARS) break;
-    const text = await execCommand({
-      file: 'head',
-      args: ['-n', String(MAX_UNTRACKED_FILE_LINES), '--', file],
-      cwd: workspacePath,
-    })
+    const text = await execCommand(
+      systemCommand({
+        file: RUNNER_BIN.head,
+        args: ['-n', String(MAX_UNTRACKED_FILE_LINES), '--', file],
+        cwd: workspacePath,
+      }),
+    )
       .then((r) => (r.exitCode === 0 ? r.stdout : ''))
       .catch(() => '');
     diff += `\n--- /dev/null\n+++ b/${file} (new, untracked)\n${text}`;

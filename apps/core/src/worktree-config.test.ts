@@ -24,6 +24,7 @@ import {
   localCommandExecutor,
   setCommandCanceller,
   setCommandExecutor,
+  RUNNER_BIN,
 } from './command-exec.js';
 import { projectWorktreeConfig, runs } from './db/schema.js';
 import { unavailable } from './errors.js';
@@ -1475,7 +1476,7 @@ describe('editing worktree.yml from Project settings', () => {
     const base = (await status(project.id)).head!.sha256;
     const count = commitCount(project);
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('--abbrev-ref')) {
+      if (request.file === RUNNER_BIN.git && request.args.includes('--abbrev-ref')) {
         throw new PtydClientError('disconnected', 'ptyd connection closed');
       }
       return localCommandExecutor(request);
@@ -1507,7 +1508,7 @@ describe('editing worktree.yml from Project settings', () => {
     const base = (await status(project.id)).head!.sha256;
     const count = commitCount(project);
     setCommandExecutor(async (request) => {
-      if (request.file === 'git' && request.args.includes('--abbrev-ref')) {
+      if (request.file === RUNNER_BIN.git && request.args.includes('--abbrev-ref')) {
         throw wrap(unavailable('runner_outdated', 'The runner is too old. Update it with make up.'));
       }
       return localCommandExecutor(request);

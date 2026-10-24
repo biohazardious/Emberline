@@ -29,6 +29,7 @@ import {
   localCommandExecutor,
   setCommandCanceller,
   setCommandExecutor,
+  RUNNER_BIN,
 } from './command-exec.js';
 import { runEvents, runs } from './db/schema.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
@@ -113,15 +114,15 @@ class FakeEngine {
   };
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file === 'curl') {
+    if (request.file === RUNNER_BIN.curl) {
       const port = Number(new URL(request.args.at(-1) ?? '').port);
       return ok(this.published.has(port) ? '200' : '000');
     }
     let args: string[];
     let stdin: string | undefined;
-    if (request.file === 'docker') {
+    if (request.file === RUNNER_BIN.docker) {
       args = request.args;
-    } else if (request.file === 'sh' && request.args[1]?.includes('exec docker')) {
+    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(`exec ${RUNNER_BIN.docker}`)) {
       args = request.args.slice(3);
       stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
     } else {

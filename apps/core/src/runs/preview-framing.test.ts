@@ -4,6 +4,7 @@ import {
   type ExecResult,
   localCommandExecutor,
   setCommandExecutor,
+  RUNNER_BIN,
 } from '../command-exec.js';
 import { framingFromHeaders, PreviewFramingCache } from './preview-framing.js';
 
@@ -117,8 +118,11 @@ describe('PreviewFramingCache', () => {
     expect(a).toEqual({ state: 'refused', reason: 'X-Frame-Options: DENY' });
     expect(b).toBe(a);
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.file).toBe('curl');
+    // The image's curl with no runner environment; `-q` first, so no ~/.curlrc applies.
+    expect(seen[0]?.file).toBe(RUNNER_BIN.curl);
+    expect(seen[0]?.inheritEnv).toBe(false);
     expect(seen[0]?.args).toEqual([
+      '-q',
       '-s',
       '--noproxy',
       '*',

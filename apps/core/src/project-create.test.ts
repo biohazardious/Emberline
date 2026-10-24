@@ -17,7 +17,7 @@ import {
 } from '@emberline/protocol';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { localCommandExecutor, setCommandExecutor, RUNNER_BIN } from './command-exec.js';
 import type * as GitExec from './git-exec.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings, readWizardTickets } from './db/project-settings.js';
@@ -810,7 +810,7 @@ describe('wizard: compose preview for the Docker Compose deploy target (spec §7
       cookie = await setupAndLogin(t.app);
       headers = authHeaders(cookie);
       setCommandExecutor(async (request) =>
-        request.file === 'docker' && request.args[0] === 'version'
+        request.file === RUNNER_BIN.docker && request.args[0] === 'version'
           ? {
               exitCode: engine.up ? 0 : 1,
               signal: null,

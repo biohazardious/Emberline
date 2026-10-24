@@ -17,6 +17,7 @@ import {
   type ExecResult,
   localCommandExecutor,
   setCommandExecutor,
+  RUNNER_BIN,
 } from './command-exec.js';
 import { runs } from './db/schema.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
@@ -59,7 +60,7 @@ class FakeEngine {
   downGate: Promise<void> | null = null;
 
   readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file !== 'docker') return localCommandExecutor(request);
+    if (request.file !== RUNNER_BIN.docker) return localCommandExecutor(request);
     const args = request.args;
     if (args[0] === 'version')
       return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');

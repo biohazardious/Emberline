@@ -4,7 +4,7 @@
  * `frame-ancestors` decide. Only what the headers state is judged; anything else is `unknown`.
  */
 import type { PreviewFraming } from '@emberline/protocol';
-import { execCommand } from '../command-exec.js';
+import { execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
 
 const UNKNOWN: PreviewFraming = { state: 'unknown', reason: null };
 const ALLOWED: PreviewFraming = { state: 'allowed', reason: null };
@@ -60,12 +60,15 @@ interface Probe {
 
 async function probe(url: string): Promise<Probe> {
   try {
-    const result = await execCommand({
-      file: 'curl',
-      args: ['-s', '--noproxy', '*', '-o', '/dev/null', '-D', '-', '--max-time', '5', url],
-      cwd: NEUTRAL_CWD,
-      timeoutMs: PROBE_TIMEOUT_MS,
-    });
+    // The system curl, no runner environment, and `-q` (first) so no ~/.curlrc applies.
+    const result = await execCommand(
+      systemCommand({
+        file: RUNNER_BIN.curl,
+        args: ['-q', '-s', '--noproxy', '*', '-o', '/dev/null', '-D', '-', '--max-time', '5', url],
+        cwd: NEUTRAL_CWD,
+        timeoutMs: PROBE_TIMEOUT_MS,
+      }),
+    );
     return {
       framing: framingFromHeaders(result.stdout),
       answered: /(^|\n)HTTP\/\S+ \d{3}/.test(result.stdout),

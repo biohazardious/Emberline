@@ -12,6 +12,7 @@ import type {
   ClaudeUsageTelemetry,
   ProviderTokenTelemetry,
 } from '@emberline/protocol';
+import { RUNNER_BIN } from '../command-exec.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 
 export const BROWSER_DAEMON_VERSION = '1.5.3';
@@ -1250,11 +1251,12 @@ export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: str
       if (ptyd.status !== 'connected') return null;
 
       resetBridgeErrorLog();
+      // The image's node by its path, which starts the daemon with itself (process.execPath).
       const launcher = await ptyd.get().spawn({
-        file: 'node',
+        file: RUNNER_BIN.node,
         args: [
           '-e',
-          `const { spawn } = require('node:child_process'); const p = spawn('node', [${JSON.stringify(scriptPath)}], { detached: true, stdio: 'ignore', env: { ...process.env, EMBERLINE_BROWSER_SOCKET: ${JSON.stringify(browserSock)} } }); p.unref(); process.exit(0);`,
+          `const { spawn } = require('node:child_process'); const p = spawn(process.execPath, [${JSON.stringify(scriptPath)}], { detached: true, stdio: 'ignore', env: { ...process.env, EMBERLINE_BROWSER_SOCKET: ${JSON.stringify(browserSock)} } }); p.unref(); process.exit(0);`,
         ],
         cwd: '/workspaces',
       });

@@ -7,7 +7,7 @@ import {
   type BuildDemoResponse,
   type WorktreeChecks,
 } from '@emberline/protocol';
-import { CommandFailedError, execCommand } from '../command-exec.js';
+import { CommandFailedError, execCommand, RUNNER_BIN, SYSTEM_PATH } from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -636,9 +636,11 @@ export async function captureBrowserViewportSnapshot(params: {
       'done',
       'cat "$f"; rm -f "$f"',
     ].join('\n');
+    // Core's own script: the image's sh, and the system PATH for the browser, mktemp, cat and rm.
     const shot = await execCommand({
-      file: 'sh',
+      file: RUNNER_BIN.sh,
       args: ['-c', script, 'sh', params.targetUrl],
+      env: { PATH: SYSTEM_PATH },
       cwd: '/',
       timeoutMs: 20_000,
       encoding: 'base64',

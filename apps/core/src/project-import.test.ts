@@ -25,7 +25,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { type ExecRequest, localCommandExecutor, setCommandExecutor } from './command-exec.js';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor, RUNNER_BIN } from './command-exec.js';
 import type * as GitExec from './git-exec.js';
 import { HARDENED_GIT_ARGS } from './git-exec.js';
 import { parseWorktreeYml } from './worktree-config/load.js';
@@ -77,7 +77,7 @@ afterEach(async () => {
 function onlyGitObjectReads(list: readonly ExecRequest[]): boolean {
   const n = HARDENED_GIT_ARGS.length;
   return list.every((e) => {
-    if (e.file !== 'git') return false;
+    if (e.file !== RUNNER_BIN.git) return false;
     if (e.args[0] === '-C' && e.args[2] === 'config' && e.args[3] === '--list') return true;
     const hardened = HARDENED_GIT_ARGS.every((a, i) => e.args[i] === a);
     return (
@@ -239,7 +239,7 @@ describe('create source import_folder', () => {
     expect(t.tickets.list(project.id)).toEqual([]);
     expect(t.db.select().from(projectWorktreeConfig).all()).toEqual([]);
     // only git reads ran
-    expect(execs.every((e) => e.file === 'git')).toBe(true);
+    expect(execs.every((e) => e.file === RUNNER_BIN.git)).toBe(true);
   });
 
   it("records where the project came from, and removing a folder import keeps the user's repository", async () => {

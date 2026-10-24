@@ -10,6 +10,7 @@
  * id: a `name:` in the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
  */
 import { COMPOSE_SERVICE_NAME } from '@emberline/protocol';
+import { RUNNER_BIN } from '../command-exec.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
 /** Variable that carries the override YAML to the `sh -c` wrapper (see {@link composeShell}). */
@@ -85,12 +86,13 @@ export function composeDownArgs(
 
 /**
  * Runs `docker <args>` with the override on stdin. The override never appears in the command line,
- * only in {@link COMPOSE_OVERRIDE_ENV}.
+ * only in {@link COMPOSE_OVERRIDE_ENV}. The image's sh and Docker CLI by their paths (see
+ * SYSTEM_PATH): a `docker` planted earlier on the runner's PATH never runs.
  */
 export function composeShell(args: string[]): { file: string; args: string[] } {
   return {
-    file: 'sh',
-    args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec docker "$@"`, 'sh', ...args],
+    file: RUNNER_BIN.sh,
+    args: ['-c', `printf '%s' "$${COMPOSE_OVERRIDE_ENV}" | exec ${RUNNER_BIN.docker} "$@"`, 'sh', ...args],
   };
 }
 
