@@ -41,6 +41,8 @@ import {
   REMOTE_PROTOCOL_ARGS,
   UnsafeGitConfigError,
 } from './git-exec.js';
+import { GitGateway } from './git-gateway/gateway.js';
+import { type AccountRemote, accountPushBranch, accountRemoteBranches } from './git-gateway/remote-git.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { fetchBranchObjects, listRemoteBranches, pushBranch, remoteBranchHead } from './repository/git.js';
 import { pushWorktreeBranch } from './runs/git.js';
@@ -387,6 +389,140 @@ describe('TLS, proxy and extra headers from repo config on a command that reache
     await everyRemotePath(work, url);
     expect(http.seen.length).toBeGreaterThan(0);
     expect(proxy.hits).toEqual([]);
+  });
+});
+
+describe("an address for a host name, or any other http key, in repo config never sends core's remote git elsewhere", () => {
+  // The agent's listener: it answers any path (a capability URL too) from a repository that already
+  // has the commit core is about to push, so ls-remote says "already there" and a push is reported
+  // done without pushing. The host names cannot resolve, so only `http.curloptResolve` reaches it.
+  let fake: Awaited<ReturnType<typeof startGitHttp>>;
+  beforeEach(async () => {
+    fake = await startGitHttp(root, { serveAs: 'origin.git' });
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  /** The work repo, and origin.git (the agent's repository) already at its HEAD. */
+  function workAtFake(): { work: string; oid: string } {
+    const { work } = workAndOrigin();
+    git(work, 'push', '-q', path.join(root, 'origin.git'), 'main');
+    return { work, oid: git(work, 'rev-parse', 'HEAD') };
+  }
+  const resolveTo = (host: string) => `${host}:${fake.port}:127.0.0.1`;
+  const fakeOrigin = () => `http://origin.invalid:${fake.port}/alice/app.git`;
+  const gatewayBase = () => `http://gateway.invalid:${fake.port}`;
+  const account = (): AccountRemote => ({
+    gateway: new GitGateway({ baseUrl: gatewayBase(), runnerHosts: [] }),
+    projectId: 'p1',
+    url: 'https://forge.invalid/alice/app.git',
+    credential: { serverUrl: 'https://forge.invalid', username: 'alice', token: 'forge-token' },
+  });
+  const nothingReachedTheFake = () =>
+    expect(
+      fake.seen.map((r) => r.url),
+      'the agent listener was reached',
+    ).toEqual([]);
+
+  // The plain key is reset by `-c http.curloptResolve=`; the URL-scoped one would win over the reset, so it is refused.
+  const variants: [string, (base: string) => string][] = [
+    ['http.curloptResolve', () => 'http.curloptResolve'],
+    ['http.<url>.curloptResolve', (base) => `http.${base}.curloptResolve`],
+  ];
+  for (const [name, key] of variants) {
+    it(`${name}: Push main, Refresh and a run push without an account never reach the agent's listener`, async () => {
+      const { work, oid } = workAtFake();
+      git(work, 'config', key(fakeOrigin()), resolveTo('origin.invalid'));
+      const access = { url: fakeOrigin(), account: null };
+      const pushed = await pushBranch(work, access, 'main', oid).catch((e: unknown) => e);
+      expect(pushed).not.toBe('pushed');
+      await expect(remoteBranchHead(work, access, 'main')).rejects.toThrow();
+      await expect(fetchBranchObjects(work, access, 'main', '0'.repeat(40))).rejects.toThrow();
+      git(work, 'remote', 'add', 'origin', fakeOrigin());
+      git(work, 'checkout', '-q', '-b', 'emberline/run-1');
+      await expect(pushWorktreeBranch(work, 'emberline/run-1', 'main')).rejects.toThrow();
+      nothingReachedTheFake();
+    });
+
+    it(`${name}: with a forge account, a push is never reported done by the agent's listener and no capability reaches it`, async () => {
+      const { work, oid } = workAtFake();
+      git(work, 'config', key(gatewayBase()), resolveTo('gateway.invalid'));
+      const pushed = await pushBranch(work, { url: account().url, account: account() }, 'main', oid).catch(
+        (e: unknown) => e,
+      );
+      expect(pushed).not.toBe('pushed');
+      await expect(accountRemoteBranches(account(), work)).rejects.toThrow();
+      git(work, 'checkout', '-q', '-b', 'emberline/run-1');
+      await expect(accountPushBranch(account(), work, 'emberline/run-1')).rejects.toThrow();
+      nothingReachedTheFake();
+    });
+  }
+
+  it('the URL-scoped key is refused by name, on both paths; a local command still runs', async () => {
+    const { work } = workAtFake();
+    git(work, 'config', `http.${gatewayBase()}.curloptResolve`, resolveTo('gateway.invalid'));
+    const refused = await assertSafeGitConfig(work, { remote: true }).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnsafeGitConfigError);
+    expect((refused as UnsafeGitConfigError).keys).toEqual([`http.${gatewayBase()}.curloptresolve`]);
+    const viaGateway = await accountRemoteBranches(account(), work).catch((e: unknown) => e);
+    expect(String((viaGateway as Error).message)).toContain('curloptresolve');
+    await expect(assertSafeGitConfig(work)).resolves.toBeUndefined();
+  });
+
+  // Keys outside the allowlist that would win over core's own pins on the account path (P4), or change
+  // where the traffic goes: refused there too, and on the no-account path.
+  const refusedKeys: [string, () => string, string][] = [
+    ['http.<gateway>.extraHeader', () => `http.${gatewayBase()}.extraHeader`, 'X-Planted: 1'],
+    ['http.<gateway>.followRedirects', () => `http.${gatewayBase()}.followRedirects`, 'true'],
+    ['http.<gateway>.sslVerify', () => `http.${gatewayBase()}.sslVerify`, 'false'],
+    ['http.cookieFile', () => 'http.cookieFile', '/dev/null'],
+    ['http.delegation', () => 'http.delegation', 'always'],
+  ];
+  for (const [name, key, value] of refusedKeys) {
+    it(`${name} is refused on the account path and without an account`, async () => {
+      const { work, oid } = workAtFake();
+      git(work, 'config', key(), value);
+      await expect(accountRemoteBranches(account(), work)).rejects.toThrow(/does not allow/);
+      await expect(
+        pushBranch(work, { url: http.url('origin.git'), account: null }, 'main', oid),
+      ).rejects.toThrow(/does not allow/);
+      nothingReachedTheFake();
+    });
+  }
+
+  it('the harmless http keys still work on every remote path, plain and for the address', async () => {
+    const { work, url } = workAndOrigin();
+    const allowed: [string, string][] = [
+      ['http.postBuffer', '524288000'],
+      ['http.lowSpeedLimit', '1'],
+      ['http.lowSpeedTime', '600'],
+      ['http.keepAliveIdle', '30'],
+      ['http.keepAliveInterval', '10'],
+      ['http.keepAliveCount', '3'],
+      ['http.version', 'HTTP/1.1'],
+      ['http.userAgent', 'git/test'],
+      ['http.maxRequests', '2'],
+      ['http.minSessions', '1'],
+      ['http.noEPSV', 'true'],
+      ['http.emptyAuth', 'false'],
+      [`http.${url}.postBuffer`, '1048576'],
+      // Pinned by core on every remote command: ignored, not refused.
+      ['http.sslVerify', 'true'],
+      ['http.proxy', ''],
+      ['http.extraHeader', ''],
+      ['http.curloptResolve', ''],
+    ];
+    for (const [key, value] of allowed) git(work, 'config', key, value);
+    await expect(assertSafeGitConfig(work, { remote: true })).resolves.toBeUndefined();
+    const oid = git(work, 'rev-parse', 'HEAD');
+    await expect(pushBranch(work, { url, account: null }, 'main', oid)).resolves.toBe('pushed');
+    await expect(remoteBranchHead(work, { url, account: null }, 'main')).resolves.toBe(oid);
+    git(work, 'remote', 'add', 'origin', url);
+    git(work, 'checkout', '-q', '-b', 'emberline/run-1');
+    await expect(pushWorktreeBranch(work, 'emberline/run-1', 'main')).resolves.toMatchObject({
+      branch: 'emberline/run-1',
+    });
   });
 });
 

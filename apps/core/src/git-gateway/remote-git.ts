@@ -3,7 +3,9 @@
  * against a capability URL of the gateway. The capability URL is only the explicit URL argument of
  * that one command (for the import clone, a command-scope `insteadOf` for the real URL); nothing is
  * written to `.git/config`; submodules are never recursed into; only the gateway's scheme is
- * allowed; no redirect, proxy or credential helper applies.
+ * allowed; no redirect, proxy, credential helper or address of the repository's config applies (a
+ * repository whose config sets an `http.*` key that could, such as `http.<gateway>.curloptResolve`,
+ * is refused).
  */
 import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
@@ -36,7 +38,7 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
     `protocol.${scheme}.allow=always`,
     '-c',
     'http.followRedirects=false',
-    // TLS as git's defaults have it, no proxy, no extra header from any config.
+    // TLS as git's defaults have it, no proxy, extra header or host address from any config.
     ...REMOTE_HTTP_ARGS,
     '-c',
     'credential.helper=',
@@ -72,7 +74,7 @@ async function remoteHeads(
             url,
             ...(branch ? [`refs/heads/${branch}`] : []),
           ],
-          { cwd, timeout: MINUTE },
+          { cwd, timeout: MINUTE, remote: 'gateway' },
         )
       ).stdout,
   );
@@ -148,7 +150,7 @@ export async function accountFetchBranchObjects(
         url,
         `refs/heads/${branch}`,
       ],
-      { cwd: repoPath, timeout: 10 * MINUTE, env: PLAN_ENV },
+      { cwd: repoPath, timeout: 10 * MINUTE, env: PLAN_ENV, remote: 'gateway' },
     ),
   );
 }
@@ -223,7 +225,7 @@ export async function accountPushBranch(
             url,
             `${newOid}:${ref}`,
           ],
-          { cwd: repoPath, timeout: 10 * MINUTE },
+          { cwd: repoPath, timeout: 10 * MINUTE, remote: 'gateway' },
         );
         return 'pushed' as const;
       } catch (error) {

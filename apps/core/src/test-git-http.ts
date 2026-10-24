@@ -14,9 +14,18 @@ export interface SeenRequest {
   headers: IncomingMessage['headers'];
 }
 
-function backend(req: IncomingMessage, res: ServerResponse, root: string, seen: SeenRequest[]): void {
+function backend(
+  req: IncomingMessage,
+  res: ServerResponse,
+  root: string,
+  seen: SeenRequest[],
+  serveAs?: string,
+): void {
   const url = new URL(req.url ?? '/', 'http://x');
   seen.push({ url: req.url ?? '/', headers: req.headers });
+  // A fake listener: whatever repository the path names (a capability URL), it is `serveAs`.
+  if (serveAs)
+    url.pathname = `/${serveAs}${/\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(url.pathname)?.[0] ?? ''}`;
   if (url.pathname.startsWith('/private/')) {
     req.resume();
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="test"' }).end();
@@ -62,18 +71,26 @@ function backend(req: IncomingMessage, res: ServerResponse, root: string, seen: 
   });
 }
 
-/** Serves `<root>` (a directory of bare repos) over smart HTTP; `url(name)` is `http://…/<name>`. */
-export async function startGitHttp(root: string): Promise<{
+/**
+ * Serves `<root>` (a directory of bare repos) over smart HTTP; `url(name)` is `http://…/<name>`.
+ * `serveAs`: every request is answered from that repository, whatever its path names.
+ */
+export async function startGitHttp(
+  root: string,
+  { serveAs }: { serveAs?: string } = {},
+): Promise<{
   url: (repo: string) => string;
+  port: number;
   seen: SeenRequest[];
   close: () => Promise<void>;
 }> {
   const seen: SeenRequest[] = [];
-  const server = createServer((req, res) => backend(req, res, root, seen));
+  const server = createServer((req, res) => backend(req, res, root, seen, serveAs));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {
     url: (repo) => `http://127.0.0.1:${port}/${repo}`,
+    port,
     seen,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
