@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeNextCronDate } from './cron/service.js';
 import { runEvents } from './db/schema.js';
 import { parseForgeRemote } from './forge/service.js';
+import { startGitHttp } from './test-git-http.js';
 import { authHeaders, createTestApp, seedForgeAccount, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -38,7 +39,11 @@ beforeEach(async () => {
   cookie = await setupAndLogin(t.app);
 });
 
+let gitHttp: { url: (repo: string) => string; close: () => Promise<void> } | null = null;
+
 afterEach(async () => {
+  await gitHttp?.close();
+  gitHttp = null;
   await ptydServer.close();
   await t.close();
 });
@@ -61,6 +66,10 @@ async function createGitProjectWithBareRemote(name: string) {
   git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
   git('remote', 'add', 'origin', remoteDir);
   git('push', '-q', '-u', 'origin', 'main');
+  // Emberline pushes only over https/http/ssh (a local-path origin would run that repository's own
+  // hooks), so the bare remote is served over smart HTTP for the run's push.
+  gitHttp = await startGitHttp(t.dir);
+  git('remote', 'set-url', 'origin', gitHttp.url('remote.git'));
 
   return { project, remoteDir };
 }
