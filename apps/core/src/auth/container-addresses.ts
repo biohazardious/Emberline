@@ -6,7 +6,7 @@ import { normalizeIp } from './sessions.js';
 
 /** How often the container host names are resolved again (containers get new addresses on restart). */
 export const CONTAINER_ADDRESSES_REFRESH_MS = 60_000;
-/** On the git gateway a miss resolves the names again at most this often (a restarted runner has a new address). */
+/** On the git gateway a miss resolves the names again at most this often (a restarted `ops` container has a new address). */
 export const MISS_REFRESH_MS = 5_000;
 /** A request waits at most this long for the first resolution. */
 const FIRST_RESOLVE_WAIT_MS = 2_000;
@@ -74,8 +74,9 @@ const defaultNetworks = (): string[] =>
     .flatMap((i) => (i && i.cidr && !i.internal ? [i.cidr] : []));
 
 /**
- * The addresses of Emberline's own containers (compose services `runner` and `docker`), resolved by
- * name and refreshed periodically. Only answers that can be a container next to core count: loopback,
+ * The addresses of Emberline's own containers, resolved by name and refreshed periodically: for the
+ * session cookie check the services `runner` and `docker`; for the git gateway the service where
+ * core's git runs, `ops` (EMBERLINE_RUNNER_HOSTS; the runner in the dev stack, which has no ops). Only answers that can be a container next to core count: loopback,
  * or a private address on one of core's own networks, so a LAN host that happens to be called
  * `docker` or `runner` is neither trusted nor refused. A name that does not resolve (`ENOTFOUND`,
  * `ENODATA`: its container was removed, or is stopped or restarting) drops its addresses until a
@@ -149,7 +150,7 @@ export class ContainerAddresses {
   }
 
   /**
-   * The git gateway's check. A miss may be a runner that restarted with a new address, so the names
+   * The git gateway's check. A miss may be an `ops` container that restarted with a new address, so the names
    * are resolved again, at most once per {@link MISS_REFRESH_MS}; a miss meanwhile waits for a
    * resolution in flight. The cookie check uses {@link has}: a stranger's cookie never costs a lookup.
    */

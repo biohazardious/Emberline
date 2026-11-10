@@ -50,6 +50,7 @@ export async function runSuggestion(params: {
 }): Promise<string> {
   const model = resolveClaudeCliModelFlag(params.model as AgentModelId) ?? params.model;
   const result = await execCommand({
+    target: 'runner',
     file: params.command,
     args: [
       '-p',

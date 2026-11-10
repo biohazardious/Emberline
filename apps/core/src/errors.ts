@@ -33,23 +33,31 @@ export const RUNNER_SECURITY_UPDATE =
   'Security update required: update the runner image. This Emberline needs the runner image of the same release, and until it is updated it starts no agent and runs no command in the runner. From source, run `make up`; with the published images, `docker compose pull && docker compose up -d`.';
 export const runnerOutdated = () => unavailable('runner_outdated', RUNNER_SECURITY_UPDATE);
 
-/** A current runner whose service socket is not locked (see PtydBridge): core starts nothing in it. */
+/**
+ * A current runner whose `hello` says it is not secured (ptyd runs as the agents' own user, or cannot
+ * start what it runs as them): agents could reach its socket, so core starts nothing in it.
+ */
 export const RUNNER_NOT_SECURED =
-  "Runner not secured: the runner has not locked its service's socket, so a coding agent could stand in for it, and Emberline starts no agent and runs no command in the runner. The runner locks it as it starts, as root: if it was started as another user (`user:` in the compose file), remove that and restart it (`make up`, or `docker compose up -d`); otherwise restart it and see its log.";
+  "Runner not secured: the runner's service does not run apart from the coding agents, so an agent could reach it, and Emberline starts no agent and runs no command in the runner. Restart the runner (`make up`, or `docker compose up -d`) and see why in its log (`docker compose logs runner`).";
 export const runnerNotSecured = () => unavailable('runner_not_secured', RUNNER_NOT_SECURED);
-
-/** A runner that has just started and not locked its socket yet: nothing starts for a few seconds. */
-export const RUNNER_STARTING =
-  'The runner is starting: it is securing its service, and Emberline starts nothing in it until then. Try again in a few seconds.';
-export const runnerStarting = () => unavailable('runner_starting', RUNNER_STARTING);
 
 /**
  * Core has not reached the runner for longer than a restart takes (PtydBridge.startProblem): true for
- * a stopped or crashing runner, and for one started as another user than root, which cannot start
- * its service on a socket folder an earlier start locked.
+ * a stopped or crashing runner, and for one started as another user (`user:` in the compose file),
+ * which stops at once because its service cannot listen; its log says to remove `user:`.
  */
 export const RUNNER_NOT_ANSWERING =
-  'The runner has not answered for a while. See why with `docker compose logs runner`. If the runner service sets `user:` in the compose file, remove it: the runner must start as root.';
+  'The runner has not answered for a while. See why with `docker compose logs runner`. A runner started as another user (`user:` in the compose file) stops at once, and its log says so: remove `user:` and start it again.';
+
+/** Where the upgrade notes are: what a compose file of this release adds (the `ops` service). */
+export const UPGRADE_NOTES_URL = 'https://github.com/biohazardious/Emberline/blob/main/CHANGELOG.md';
+
+/**
+ * Core's own commands run in the `ops` container (a ptyd in ops mode), and the compose file has no such
+ * service, or it does not answer as one: core starts nothing anywhere until it does (see PtydBridge).
+ */
+export const OPS_MISSING = `Update the compose file: the \`ops\` service is missing. Emberline runs its own commands (git, merges, the Docker CLI) in it, and until it answers Emberline starts no agent and runs no command. See the upgrade notes: ${UPGRADE_NOTES_URL}`;
+export const opsMissing = () => unavailable('ops_missing', OPS_MISSING);
 
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {

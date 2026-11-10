@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -8,7 +8,6 @@ import { openDb } from './db/index.js';
 import { quotaWindows } from './db/schema.js';
 import { PtydServer } from '@emberline/ptyd/server';
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
-import { socketDirGuarded } from './ptyd-bridge.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
 
@@ -49,12 +48,11 @@ describe('ops endpoints', () => {
 
     /**
      * Core connected to a runner that answers `hello` with `version`, on a host whose Yama setting is
-     * `yama` (the file's content; none: no Yama), with ptyd's socket in a directory agents cannot
-     * change unless `guarded` is false.
+     * `yama` (the file's content; none: no Yama), that says it is secured unless `secured` is false.
      */
     async function withRunner(
       version: number,
-      { yama = '1\n', guarded = true }: { yama?: string | null; guarded?: boolean } = {},
+      { yama = '1\n', secured = true }: { yama?: string | null; secured?: boolean } = {},
     ) {
       t = await createTestApp();
       const yamaFile = path.join(t.dir, 'ptrace_scope');
@@ -64,7 +62,7 @@ describe('ops endpoints', () => {
       t.ptyd.start();
       await t.ptyd.waitUntilConnected();
       Object.defineProperty(t.ptyd, 'protocolVersion', { get: () => version });
-      Object.defineProperty(t.ptyd, 'socketGuarded', { get: () => guarded });
+      Object.defineProperty(t.ptyd, 'secured', { get: () => secured });
       const cookie = await setupAndLogin(t.app);
       const deep = await t.app.inject({ url: '/api/health/deep' });
       const system = (await t.app.inject({ url: '/api/system', headers: authHeaders(cookie) })).json();
@@ -142,44 +140,24 @@ describe('ops endpoints', () => {
       expect(system.runnerPtraceUnrestricted).toBe(false);
     });
 
-    it("a current runner whose socket's directory agents can change is degraded; an older one is told rebuilding locks it", async () => {
-      const current = await withRunner(5, { guarded: false });
+    it("a current runner that does not say it is secured is degraded; an older one is the protocol check's", async () => {
+      const current = await withRunner(5, { secured: false });
       // The dev stack allows it (EMBERLINE_ALLOW_UNSECURED_RUNNER), and says so.
       expect(current.deep.statusCode).toBe(200);
-      expect(current.deep.json().checks.runnerSocket.detail).toContain('EMBERLINE_ALLOW_UNSECURED_RUNNER');
+      expect(current.deep.json().checks.runnerSecured.detail).toContain('EMBERLINE_ALLOW_UNSECURED_RUNNER');
       // Everywhere else it is not secured: degraded, with what to do.
       t!.config.requireSecuredRunner = true;
       const required = await t!.app.inject({ url: '/api/health/deep' });
       expect(required.statusCode).toBe(503);
-      expect(required.json().checks.runnerSocket).toMatchObject({ ok: false });
-      expect(required.json().checks.runnerSocket.detail).toContain('Runner not secured');
+      expect(required.json().checks.runnerSecured).toMatchObject({ ok: false });
+      expect(required.json().checks.runnerSecured.detail).toContain('Runner not secured');
       await closeRunner();
-      const older = await withRunner(3, { guarded: false });
-      // Refused anyway (runnerProtocol); the socket check does not count it twice.
+      const older = await withRunner(3, { secured: false });
+      // Refused anyway (runnerProtocol); the secured check does not count it twice.
       expect(older.deep.statusCode).toBe(503);
-      expect(older.deep.json().checks.runnerSocket.ok).toBe(true);
-      expect(older.deep.json().checks.runnerSocket.detail).toContain(
-        'rebuilding the runner with `make up` locks it',
-      );
+      expect(older.deep.json().checks.runnerSecured).toMatchObject({ ok: true });
+      expect(older.deep.json().checks.runnerSecured.detail).toContain('runnerProtocol');
     });
-  });
-
-  it("the socket's directory counts as guarded only when it is root's and writable by root alone", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'sock-dir-'));
-    try {
-      // A directory of the test's own user (agents' user in the runner) never counts, whatever its mode.
-      if (process.getuid?.() !== 0) {
-        chmodSync(dir, 0o700);
-        expect(await socketDirGuarded(path.join(dir, 'ptyd.sock'))).toBe(false);
-      }
-      // `/` is root's, 0755 in every container.
-      expect(await socketDirGuarded('/ptyd.sock')).toBe(true);
-      expect(await socketDirGuarded(path.join(dir, 'missing', 'ptyd.sock'))).toBe(false);
-      // /tmp is root's but anyone may add entries (1777).
-      expect(await socketDirGuarded(path.join(tmpdir(), 'ptyd.sock'))).toBe(false);
-    } finally {
-      rmTemp(dir);
-    }
   });
 
   it('serves Prometheus metrics only with the configured bearer token', async () => {

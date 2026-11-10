@@ -647,7 +647,7 @@ describe("the runner's environment and PATH never reach core's commands", () => 
           bridge.start();
           await bridge.waitUntilConnected();
           ptyd = { server, bridge };
-          setCommandExecutor(ptydCommandExecutor(bridge));
+          setCommandExecutor(ptydCommandExecutor({ runner: bridge, ops: null }));
         } else {
           // Forwards all of process.env, unless a command says inheritEnv: false.
           setCommandExecutor(localCommandExecutor);

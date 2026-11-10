@@ -707,7 +707,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.setMaxListeners(0); // one listener per open UI socket
     this.gitGateway = new GitGateway({
       baseUrl: config.gitGatewayUrl ?? config.hookUrl,
-      runnerHosts: config.runnerHosts ?? ['runner'],
+      runnerHosts: config.runnerHosts ?? ['ops'],
       containerNetworks: config.containerNetworks ?? [],
     });
     this.demoTokens = new DemoTokens(db);

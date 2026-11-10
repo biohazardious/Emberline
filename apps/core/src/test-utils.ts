@@ -35,6 +35,8 @@ export interface TestApp {
   dir: string;
   db: OpenedDb['db'];
   ptyd: PtydBridge;
+  /** The ops bridge, only with `opsSocket` set (not started); without it the runner's stands in, as in the dev stack. */
+  ops: PtydBridge | null;
   runs: RunService;
   tickets: TicketService;
   scheduler: Scheduler;
@@ -78,7 +80,9 @@ export async function createTestApp(
     port: 0,
     dataDir: dir,
     ptydSocket: path.join(dir, 'ptyd.sock'),
-    // The test's own directory is not root's; the refusal has its own tests.
+    // As the dev stack: no ops service, core's commands run in the runner (command-routing.test.ts sets one).
+    opsSocket: null,
+    // A test ptyd runs as the test's user, never secured; the refusal has its own tests.
     requireSecuredRunner: false,
     workspacesDir: dir,
     workspacesHostDir: undefined,
@@ -104,7 +108,10 @@ export async function createTestApp(
   beforeStart?.(opened.db);
   // What core's start does with what an older version left: seal it with the installed key.
   encryptStoredSecrets(opened.db.$client, installedSecretsKey());
-  const ptyd = new PtydBridge(config.ptydSocket, { requireSecured: config.requireSecuredRunner });
+  const ops = config.opsSocket
+    ? new PtydBridge(config.opsSocket, { mode: 'ops', requireSecured: config.requireSecuredRunner })
+    : null;
+  const ptyd = new PtydBridge(config.ptydSocket, { requireSecured: config.requireSecuredRunner, ops });
   const runs = new RunService(opened.db, config, ptyd);
   // No periodic ticks in tests: event-driven kicks plus explicit tick() calls.
   const scheduler = new Scheduler(opened.db, runs, ptyd, config, {
@@ -130,6 +137,7 @@ export async function createTestApp(
       config,
       db: opened.db,
       ptyd,
+      ...(ops ? { opsPtyd: ops } : {}),
       runs,
       tickets,
       scheduler,
@@ -149,6 +157,7 @@ export async function createTestApp(
     dir,
     db: opened.db,
     ptyd,
+    ops,
     runs,
     tickets,
     scheduler,
@@ -168,6 +177,7 @@ export async function createTestApp(
       runs.dispose();
       scheduler.dispose();
       ptyd.stop();
+      ops?.stop();
       opened.close();
       rmTemp(dir);
     },

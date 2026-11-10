@@ -1,17 +1,27 @@
 import { spawn } from 'node:child_process';
 import { MAX_EXEC_OUTPUT_BYTES, type PtydResult } from '@emberline/protocol';
 import { PtydClientError } from '@emberline/ptyd/client';
-import { HttpError, runnerNotSecured, runnerOutdated, runnerStarting, unavailable } from './errors.js';
+import { HttpError, unavailable } from './errors.js';
 import { redactCapabilityUrls, withoutUrlCredentials } from './git-gateway/redact-text.js';
 import { isOutdatedRunner, type PtydBridge } from './ptyd-bridge.js';
 
 /**
+ * Where a command runs: `ops`, the ops container (core's own commands: git, the merge's file steps,
+ * the Docker CLI, curl to the network), where no agent can see or trace them; `runner`, beside the
+ * agents (workspace code, agent CLIs, localhost previews, the runner home). Without an ops service
+ * (the dev stack) both run in the runner.
+ */
+export type CommandTarget = 'ops' | 'runner';
+
+/**
  * Every process core starts for a workspace (git, package installs, builds, tests) runs through
- * this module. In production the executor is the runner (ptyd `exec`), so nothing an agent wrote
- * — hooks, package scripts, git config — ever executes in the core container (S6). Tests install
- * a local executor (see `vitest.setup.ts`).
+ * this module. In production the executor is ptyd `exec` in the ops container or the runner (see
+ * {@link CommandTarget}), so nothing an agent wrote — hooks, package scripts, git config — ever
+ * executes in the core container (S6). Tests install a local executor (see `vitest.setup.ts`).
  */
 export interface ExecRequest {
+  /** Set by {@link systemCommand}, {@link dockerCommand} and {@link runnerSystemCommand}; `runner` for workspace commands. */
+  target: CommandTarget;
   file: string;
   args: string[];
   cwd: string;
@@ -51,15 +61,56 @@ export const RUNNER_BIN = {
   docker: '/usr/local/bin/docker',
 } as const;
 
-/**
- * A command core relies on (git, the merge's file steps, its probes): started by its absolute path,
- * with only the variables given plus {@link SYSTEM_PATH}, and nothing from the runner's environment.
- * Agents' and projects' own commands are not run this way: they keep the runner's PATH.
- */
-export function systemCommand(request: ExecRequest): ExecRequest {
+/** A request before {@link systemCommand} or {@link runnerSystemCommand} says where it runs. */
+export type UntargetedRequest = Omit<ExecRequest, 'target'>;
+
+function hardened(request: UntargetedRequest): UntargetedRequest {
   if (!request.file.startsWith('/'))
     throw new Error(`a system command needs an absolute path: ${request.file}`);
   return { ...request, env: { ...request.env, PATH: SYSTEM_PATH }, inheritEnv: false };
+}
+
+/**
+ * A command core relies on (git, the merge's file steps, its probes): started by its absolute path,
+ * with only the variables given plus {@link SYSTEM_PATH}, and nothing from the runner's environment.
+ * It runs in the ops container. Agents' and projects' own commands are not run this way: they keep
+ * the runner's PATH.
+ */
+export function systemCommand(request: UntargetedRequest): ExecRequest {
+  return { ...hardened(request), target: 'ops' };
+}
+
+/**
+ * The same hardening as {@link systemCommand}, for a command of core's that must run beside the
+ * agents (in the runner). Which call site runs where (the rule: whatever talks to something inside
+ * the runner — localhost previews, the browser daemon, `/opt/ai-tools` CLIs, agent CLIs, the runner
+ * home — runs there; everything else core relies on runs in ops):
+ *
+ * ops ({@link systemCommand} / {@link dockerCommand}):
+ * - git-exec.ts: assertSafeGitConfig, execGitFile (every git command of core's)
+ * - factory/merge.ts: the merge's file steps (sh/cat of git-dir files, rm, sh test, cp of the index)
+ * - docker/engine.ts: the engine probe (Docker CLI)
+ * - docker/compose-config.ts: `compose config` of the main workspace (sh + Docker CLI, compose.ts's composeShell)
+ * - docker/compose-preview.ts: compose up/ps/logs/down/images (Docker CLI) and the readiness curl to
+ *   the engine's published port (curl to the network)
+ * - routes/projects.ts: the import clone terminal (ptyd `spawn` of git, on the ops bridge)
+ * - factory/project-import.ts, routes/project-import.ts, routes/container-preview.ts,
+ *   routes/worktree-config.ts: the clone terminal's state, list and screen (ops bridge)
+ * - routes/terminals.ts: a terminal whose id is a clone session of the ops bridge (list, remove, viewer)
+ *
+ * runner ({@link runnerSystemCommand}, or a workspace command with `target: 'runner'`):
+ * - factory/rival-critic.ts: `head` of untracked files (read as the agents see them) and the reviewer's CLI
+ * - factory/demo.ts: the build gate's workspace commands and the headless Chromium screenshot of a preview
+ * - runs/preview-framing.ts: curl to a preview (a command preview listens on the runner's localhost)
+ * - runs/suggest.ts: the answer suggestion (agent CLI)
+ * - worktree-config/lifecycle.ts: worktree.yml commands (workspace code)
+ * - updates/service.ts: clearing the npx cache in the runner home (not mounted in ops)
+ * - factory/browser-daemon.ts: the browser daemon (ptyd `spawn` of the image's node, runner bridge)
+ * - routes/projects.ts: the provider login terminal (agent CLIs); routes/terminals.ts: shell and agent
+ *   terminals; toolchain/service.ts: tool installs (all ptyd `spawn` on the runner bridge)
+ */
+export function runnerSystemCommand(request: UntargetedRequest): ExecRequest {
+  return { ...hardened(request), target: 'runner' };
 }
 
 /**
@@ -71,7 +122,7 @@ export function systemCommand(request: ExecRequest): ExecRequest {
  * plugins in /usr/local/lib/docker/cli-plugins run, no config applies) and a buildx directory whose
  * builders and defaults are empty and fixed; buildx may write only its lock, activity times and build
  * records there. No home: nothing else of the runner user's is read. Core uses no runner image
- * without them (an outdated runner runs no command of core's: see PtydBridge).
+ * without them (an outdated ptyd, in the runner or ops, runs no command of core's: see PtydBridge).
  */
 export const DOCKER_CLI_ENV: Readonly<Record<string, string>> = {
   HOME: '/nonexistent',
@@ -80,7 +131,7 @@ export const DOCKER_CLI_ENV: Readonly<Record<string, string>> = {
 };
 
 /** A Docker CLI command of core's (the CLI itself, or the image's `sh` that runs it): a {@link systemCommand} with {@link DOCKER_CLI_ENV}. */
-export function dockerCommand(request: ExecRequest): ExecRequest {
+export function dockerCommand(request: UntargetedRequest): ExecRequest {
   return systemCommand({ ...request, env: { ...request.env, ...DOCKER_CLI_ENV } });
 }
 
@@ -103,16 +154,33 @@ export function cancelCommand(execId: string): Promise<boolean> {
   return canceller(execId).catch(() => false);
 }
 
-/** Cancels through ptyd `execCancel`; an outdated runner runs nothing of core's, so nothing to cancel. */
-export function ptydCommandCanceller(ptyd: PtydBridge): CommandCanceller {
+/** The two ptyds commands run in; `ops` null: none (the dev stack), its commands run in the runner. */
+export interface CommandBridges {
+  runner: PtydBridge;
+  ops: PtydBridge | null;
+}
+
+/**
+ * Cancels through ptyd `execCancel` on whichever side runs it (execIds are unique while they run);
+ * an outdated ptyd runs nothing of core's, so nothing to cancel there.
+ */
+export function ptydCommandCanceller({ runner, ops }: CommandBridges): CommandCanceller {
   return async (execId) => {
-    if (isOutdatedRunner(ptyd.protocolVersion)) return false;
-    return (await ptyd.get().execCancel(execId)).cancelled;
+    for (const bridge of ops ? [ops, runner] : [runner]) {
+      if (bridge.status !== 'connected' || isOutdatedRunner(bridge.protocolVersion)) continue;
+      const cancelled = await bridge
+        .get()
+        .execCancel(execId)
+        .then((r) => r.cancelled)
+        .catch(() => false);
+      if (cancelled) return true;
+    }
+    return false;
   };
 }
 
 let executor: CommandExecutor = () =>
-  Promise.reject(new Error('command execution is not configured; core runs commands in the runner'));
+  Promise.reject(new Error('command execution is not configured; core runs commands through ptyd'));
 
 export function setCommandExecutor(next: CommandExecutor): void {
   executor = next;
@@ -122,13 +190,17 @@ export function execCommand(request: ExecRequest): Promise<ExecResult> {
   return executor(request);
 }
 
-/** Runs commands in the runner container through ptyd. */
-export function ptydCommandExecutor(ptyd: PtydBridge): CommandExecutor {
+/**
+ * Runs each command through ptyd where its {@link ExecRequest.target} says: `ops` in the ops
+ * container, `runner` in the runner; with no ops bridge (the dev stack) both in the runner.
+ */
+export function ptydCommandExecutor({ runner, ops }: CommandBridges): CommandExecutor {
   return async (request) => {
-    const client = ptyd.get();
-    // Fail closed: an outdated or not secured runner runs no command of core's.
-    if (isOutdatedRunner(ptyd.protocolVersion)) throw runnerOutdated();
-    if (ptyd.unsecured) throw ptyd.lockState === 'starting' ? runnerStarting() : runnerNotSecured();
+    const bridge = request.target === 'ops' && ops ? ops : runner;
+    // Fail closed: an outdated or not secured ptyd runs no command of core's, and while the ops
+    // service is missing nothing runs anywhere (the runner's bridge refuses too: ops_missing).
+    bridge.assertCanStart();
+    const client = bridge.get();
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const call = client.exec({
       file: request.file,
@@ -251,7 +323,7 @@ export function isRunnerUnavailable(error: unknown): boolean {
 /**
  * The error along `cause` that says the runner could not run the command (see
  * {@link isRunnerUnavailable}), the most specific one anywhere in the chain: a 503 that the runner
- * is too old or not secured, else a 503 that it is not reachable, else the first dropped or unanswered connection.
+ * is too old or not secured or that the ops service is missing, else a 503 that it is not reachable, else the first dropped or unanswered connection.
  */
 export function runnerUnavailableCause(error: unknown): Error | undefined {
   let unreachable: Error | undefined;
@@ -260,7 +332,7 @@ export function runnerUnavailableCause(error: unknown): Error | undefined {
     if (
       e instanceof HttpError &&
       e.statusCode === 503 &&
-      (e.code === 'runner_outdated' || e.code === 'runner_not_secured' || e.code === 'runner_starting')
+      (e.code === 'runner_outdated' || e.code === 'runner_not_secured' || e.code === 'ops_missing')
     )
       return e;
     if (e instanceof HttpError && e.statusCode === 503 && e.code === 'ptyd_unavailable') unreachable ??= e;

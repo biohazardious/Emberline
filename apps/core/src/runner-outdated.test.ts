@@ -4,7 +4,7 @@
  * nothing, until the runner image is updated. A current runner works as before.
  */
 import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
-import { chmodSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,13 +18,8 @@ import {
   setCommandCanceller,
 } from './command-exec.js';
 import { runs } from './db/schema.js';
-import {
-  RUNNER_NOT_ANSWERING,
-  RUNNER_NOT_SECURED,
-  RUNNER_SECURITY_UPDATE,
-  RUNNER_STARTING,
-} from './errors.js';
-import { PtydBridge, SECURE_GRACE_MS } from './ptyd-bridge.js';
+import { RUNNER_NOT_ANSWERING, RUNNER_NOT_SECURED, RUNNER_SECURITY_UPDATE } from './errors.js';
+import { NOT_ANSWERING_AFTER_MS, PtydBridge } from './ptyd-bridge.js';
 import { rmTemp } from './test-rm.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -62,8 +57,10 @@ describe('a runner older than core', () => {
     version = 3;
     expect(t.ptyd.outdated).toBe(true);
 
-    const exec = ptydCommandExecutor(t.ptyd);
-    await expect(exec({ file: '/usr/bin/true', args: [], cwd: '/' })).rejects.toMatchObject(outdated);
+    const exec = ptydCommandExecutor({ runner: t.ptyd, ops: null });
+    await expect(exec({ target: 'runner', file: '/usr/bin/true', args: [], cwd: '/' })).rejects.toMatchObject(
+      outdated,
+    );
     await expect(t.ptyd.get().exec({ file: '/usr/bin/true', cwd: '/' })).rejects.toMatchObject(outdated);
     await expect(t.ptyd.get().spawn({ file: 'true', cwd: t.dir })).rejects.toMatchObject(outdated);
     await expect(t.ptyd.get().write(running.id, 'echo typed\r')).rejects.toMatchObject(outdated);
@@ -103,7 +100,7 @@ describe('a runner older than core', () => {
     // Reading and stopping are allowed.
     expect((await t.ptyd.get().list()).sessions.map((s) => s.id)).toContain(running.id);
     expect((await t.ptyd.get().snapshot(running.id)).data).toBeTypeOf('string');
-    setCommandCanceller(ptydCommandCanceller(t.ptyd));
+    setCommandCanceller(ptydCommandCanceller({ runner: t.ptyd, ops: null }));
     expect(await cancelCommand('nothing')).toBe(false);
     await t.ptyd.get().remove(running.id);
     expect((await t.ptyd.get().list()).sessions).toHaveLength(0);
@@ -113,7 +110,12 @@ describe('a runner older than core', () => {
     version = 5;
     expect(t.ptyd.outdated).toBe(false);
     expect(() => t.ptyd.assertCanStart()).not.toThrow();
-    const result = await ptydCommandExecutor(t.ptyd)({ file: '/bin/echo', args: ['ok'], cwd: '/' });
+    const result = await ptydCommandExecutor({ runner: t.ptyd, ops: null })({
+      target: 'runner',
+      file: '/bin/echo',
+      args: ['ok'],
+      cwd: '/',
+    });
     expect(result).toMatchObject({ exitCode: 0, stdout: 'ok\n' });
     const terminal = await t.app.inject({
       method: 'POST',
@@ -187,44 +189,49 @@ describe('a terminal viewer (M-A)', () => {
   });
 });
 
-/**
- * Makes the socket's directory writable by anyone, so never locked whoever runs the tests (CI runs
- * them as root, where the test's own directory is root's and writable by root alone: locked).
- */
-const unlock = (socketPath: string) => chmodSync(path.dirname(socketPath), 0o777);
-
-describe('a current runner whose socket is not locked', () => {
+describe('a current runner that does not say it is secured', () => {
   let u: TestApp;
   let ptydServer: PtydServer;
   let ucookie: string;
-  beforeEach(async () => {
-    // Like a runner started with a compose `user:`: its socket's directory is not locked.
+  /** `secured`: what the runner's `hello` says (a test ptyd runs as the test's user: false). */
+  async function startWith(secured?: boolean) {
+    if (secured !== undefined) {
+      const hello = PtydClient.prototype.hello;
+      vi.spyOn(PtydClient.prototype, 'hello').mockImplementation(async function (this: PtydClient) {
+        return { ...(await hello.call(this)), secured };
+      });
+    }
     u = await createTestApp({ requireSecuredRunner: true });
-    unlock(u.config.ptydSocket);
-    // It says so itself (`hello` `secured` false), so it is not secured at once, not "starting".
     ptydServer = new PtydServer({ socketPath: u.config.ptydSocket });
     await ptydServer.listen();
     u.ptyd.start();
     await u.ptyd.waitUntilConnected();
     ucookie = await setupAndLogin(u.app);
-  });
+  }
   afterEach(async () => {
+    vi.restoreAllMocks();
     await ptydServer.close();
     await u.close();
   });
 
   const notSecured = { statusCode: 503, code: 'runner_not_secured', message: RUNNER_NOT_SECURED };
 
-  it('gets nothing started or typed until it is locked, says so, and works once it is', async () => {
+  it('gets nothing started or typed, and says so', async () => {
+    await startWith();
     // A session that was running before (started on its own connection, as before the check).
     const own = await PtydClient.connect(u.config.ptydSocket);
     const running = (await own.spawn({ file: 'sleep', args: ['60'], cwd: u.dir })).id;
     own.close();
     expect(u.ptyd.protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
-    expect(u.ptyd.socketGuarded).toBe(false);
+    expect(u.ptyd.secured).toBe(false);
     expect(u.ptyd.unsecured).toBe(true);
     await expect(
-      ptydCommandExecutor(u.ptyd)({ file: '/bin/echo', args: ['x'], cwd: '/' }),
+      ptydCommandExecutor({ runner: u.ptyd, ops: null })({
+        target: 'runner',
+        file: '/bin/echo',
+        args: ['x'],
+        cwd: '/',
+      }),
     ).rejects.toMatchObject(notSecured);
     await expect(u.ptyd.get().spawn({ file: 'true', cwd: u.dir })).rejects.toMatchObject(notSecured);
     await expect(u.ptyd.get().write(running, 'x')).rejects.toMatchObject(notSecured);
@@ -242,82 +249,39 @@ describe('a current runner whose socket is not locked', () => {
     expect(terminal.json()).toMatchObject({ error: 'runner_not_secured', message: RUNNER_NOT_SECURED });
     const system = (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
     expect(system).toMatchObject({ runnerNotSecured: true, runnerOutdated: false });
+    expect(system).not.toHaveProperty('runnerStarting');
     const deep = (await u.app.inject({ url: '/api/health/deep' })).json();
-    expect(deep.checks.runnerSocket).toMatchObject({ ok: false, detail: RUNNER_NOT_SECURED });
+    expect(deep.checks.runnerSecured).toMatchObject({ ok: false, detail: RUNNER_NOT_SECURED });
     // Watching and stopping still work.
     expect((await u.ptyd.get().list()).sessions.map((s) => s.id)).toContain(running);
     await u.ptyd.get().remove(running);
+  });
 
-    // The runner's entrypoint locks the directory: everything works.
-    Object.defineProperty(u.ptyd, 'socketGuarded', { get: () => true });
+  it('works once it says it is secured, with nothing shown', async () => {
+    await startWith(true);
     expect(u.ptyd.unsecured).toBe(false);
-    expect(await ptydCommandExecutor(u.ptyd)({ file: '/bin/echo', args: ['ok'], cwd: '/' })).toMatchObject({
-      exitCode: 0,
-    });
-    const after = (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
-    expect(after.runnerNotSecured).toBe(false);
-  });
-});
-
-describe('a runner that has just started and not locked its socket yet', () => {
-  let u: TestApp;
-  let ptydServer: PtydServer;
-  let ucookie: string;
-  async function startWith(options: { mode?: 'runner' | 'ops' }) {
-    u = await createTestApp({ requireSecuredRunner: true });
-    unlock(u.config.ptydSocket);
-    ptydServer = new PtydServer({ socketPath: u.config.ptydSocket, ...options });
-    await ptydServer.listen();
-    u.ptyd.start();
-    await u.ptyd.waitUntilConnected();
-    ucookie = await setupAndLogin(u.app);
-  }
-  afterEach(async () => {
-    vi.useRealTimers();
-    await ptydServer.close();
-    await u.close();
-  });
-  const system = async () =>
-    (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
-
-  it('is "starting" (nothing starts) for the grace period, then "not secured"', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    // A ptyd that says it is secured while core's own check of the directory does not hold yet.
-    await startWith({ mode: 'ops' });
-    expect(u.ptyd.lockState).toBe('starting');
-    expect(await system()).toMatchObject({ runnerStarting: true, runnerNotSecured: false });
-    await expect(
-      ptydCommandExecutor(u.ptyd)({ file: '/bin/echo', args: ['x'], cwd: '/' }),
-    ).rejects.toMatchObject({ statusCode: 503, code: 'runner_starting', message: RUNNER_STARTING });
-    await expect(u.ptyd.get().spawn({ file: 'true', cwd: u.dir })).rejects.toMatchObject({
-      code: 'runner_starting',
-    });
-
-    vi.setSystemTime(Date.now() + SECURE_GRACE_MS - 100);
-    expect(u.ptyd.lockState).toBe('starting');
-    vi.setSystemTime(Date.now() + 200);
-    expect(u.ptyd.lockState).toBe('not_secured');
-    expect(await system()).toMatchObject({ runnerStarting: false, runnerNotSecured: true });
-    await expect(u.ptyd.get().spawn({ file: 'true', cwd: u.dir })).rejects.toMatchObject({
-      code: 'runner_not_secured',
-    });
+    expect(
+      await ptydCommandExecutor({ runner: u.ptyd, ops: null })({
+        target: 'runner',
+        file: '/bin/echo',
+        args: ['ok'],
+        cwd: '/',
+      }),
+    ).toMatchObject({ exitCode: 0 });
+    const system = (await u.app.inject({ url: '/api/system', headers: authHeaders(ucookie) })).json();
+    expect(system).toMatchObject({ runnerNotSecured: false, runnerProblem: null });
+    const deep = (await u.app.inject({ url: '/api/health/deep' })).json();
+    expect(deep.checks.runnerSecured).toMatchObject({ ok: true });
   });
 
-  it('is "not secured" at once when the runner says it is not secured', async () => {
-    await startWith({ mode: 'runner' });
-    expect(u.ptyd.lockState).toBe('not_secured');
-    expect(await system()).toMatchObject({ runnerStarting: false, runnerNotSecured: true });
-  });
-
-  it('is "secured" once the folder is locked, with nothing shown', async () => {
-    await startWith({ mode: 'ops' });
-    Object.defineProperty(u.ptyd, 'socketGuarded', { get: () => true });
-    expect(u.ptyd.lockState).toBe('secured');
-    expect(await system()).toMatchObject({
-      runnerStarting: false,
-      runnerNotSecured: false,
-      runnerProblem: null,
+  it('a runner that does not say (absent `secured`) counts as not secured', async () => {
+    const hello = PtydClient.prototype.hello;
+    vi.spyOn(PtydClient.prototype, 'hello').mockImplementation(async function (this: PtydClient) {
+      const { secured: _, ...rest } = await hello.call(this);
+      return rest;
     });
+    await startWith();
+    expect(u.ptyd.unsecured).toBe(true);
   });
 });
 
@@ -332,7 +296,7 @@ describe('a runner that stays unreachable', () => {
       // A restart's few seconds: nothing to explain yet.
       expect(u.ptyd.startProblem).toBeNull();
       expect(await health()).not.toHaveProperty('runnerProblem');
-      vi.setSystemTime(Date.now() + SECURE_GRACE_MS - 100);
+      vi.setSystemTime(Date.now() + NOT_ANSWERING_AFTER_MS - 100);
       expect(u.ptyd.startProblem).toBeNull();
       vi.setSystemTime(Date.now() + 200);
       expect(u.ptyd.startProblem).toBe('not_answering');

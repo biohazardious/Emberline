@@ -39,7 +39,7 @@ beforeEach(async () => {
   bridge = new PtydBridge(path.join(dir, 'ptyd.sock'));
   bridge.start();
   await bridge.waitUntilConnected();
-  const viaRunner = ptydCommandExecutor(bridge);
+  const viaRunner = ptydCommandExecutor({ runner: bridge, ops: null });
   setCommandExecutor((request) => {
     seen.push(request);
     return viaRunner(request);
@@ -80,9 +80,10 @@ describe('command execution through the runner', () => {
   });
 
   it('cancels a running command in the runner by its execId (ptyd protocol 3)', async () => {
-    setCommandCanceller(ptydCommandCanceller(bridge));
+    setCommandCanceller(ptydCommandCanceller({ runner: bridge, ops: null }));
     // Never ends on its own: a result at all is the cancel's.
     const running = execCommand({
+      target: 'runner',
       file: 'sleep',
       args: ['3600'],
       cwd: dir,
@@ -93,17 +94,26 @@ describe('command execution through the runner', () => {
     expect(await cancelCommand('setup-x')).toBe(true);
     expect(await running).toMatchObject({ cancelled: true, exitCode: null });
     // An older runner cannot cancel: false, never a throw.
-    const outdated = { get: () => bridge.get(), protocolVersion: 2 } as unknown as PtydBridge;
-    setCommandCanceller(ptydCommandCanceller(outdated));
+    const outdated = {
+      get: () => bridge.get(),
+      protocolVersion: 2,
+      status: 'connected',
+    } as unknown as PtydBridge;
+    setCommandCanceller(ptydCommandCanceller({ runner: outdated, ops: null }));
     expect(await cancelCommand('setup-x')).toBe(false);
   });
 
   it('reports the runner protocol and refuses exec on an outdated runner', async () => {
     expect(bridge.protocolVersion).toBe(PTYD_PROTOCOL_VERSION);
-    const outdated = { get: () => bridge.get(), protocolVersion: 1 } as unknown as PtydBridge;
-    await expect(ptydCommandExecutor(outdated)({ file: 'true', args: [], cwd: dir })).rejects.toMatchObject({
-      code: 'runner_outdated',
-    });
+    Object.defineProperty(bridge, 'protocolVersion', { get: () => 1 });
+    await expect(
+      ptydCommandExecutor({ runner: bridge, ops: null })({
+        target: 'runner',
+        file: 'true',
+        args: [],
+        cwd: dir,
+      }),
+    ).rejects.toMatchObject({ code: 'runner_outdated' });
   });
 
   it('a runner exec that never answers is a timeout, whichever timer fires first, and still a 503', async () => {
@@ -112,11 +122,16 @@ describe('command execution through the runner', () => {
       // Connected, but the reply never comes, and the client's own timer never fires.
       const stuck = {
         protocolVersion: PTYD_PROTOCOL_VERSION,
+        assertCanStart() {},
         get: () => ({ exec: () => new Promise(() => undefined) }),
       } as unknown as PtydBridge;
-      const failed = ptydCommandExecutor(stuck)({ file: 'git', args: [], cwd: dir, timeoutMs: 10 }).catch(
-        (e: unknown) => e,
-      );
+      const failed = ptydCommandExecutor({ runner: stuck, ops: null })({
+        target: 'runner',
+        file: 'git',
+        args: [],
+        cwd: dir,
+        timeoutMs: 10,
+      }).catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(15_010);
       const error = await failed;
       expect(error).toMatchObject({ statusCode: 503, code: 'ptyd_unavailable' });
@@ -129,7 +144,7 @@ describe('command execution through the runner', () => {
 
   it('rejects non-zero exits with the command output, like execFile', async () => {
     await expect(
-      execFileChecked({ file: 'sh', args: ['-c', 'echo bad >&2; exit 2'], cwd: dir }),
+      execFileChecked({ target: 'runner', file: 'sh', args: ['-c', 'echo bad >&2; exit 2'], cwd: dir }),
     ).rejects.toMatchObject({
       code: 2,
       stderr: 'bad\n',
@@ -164,6 +179,7 @@ describe('command execution through the runner', () => {
 describe('a failed command', () => {
   it("says what failed without an address's credentials, and keeps its command line and raw output off a log", () => {
     const request = {
+      target: 'ops' as const,
       file: 'git',
       args: ['ls-remote', '--', 'https://alice:tok3n@git.example.com/o/r.git', 'x'],
       cwd: '/',

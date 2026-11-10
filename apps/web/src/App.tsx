@@ -46,10 +46,10 @@ import { ProviderMark } from './components/ProviderMark';
 import { RunInspector } from './components/RunInspector';
 import { ScopedPage } from './components/ScopedPage';
 import {
+  OpsMissingBanner,
   RunnerNotAnsweringBanner,
   RunnerNotSecuredBanner,
   RunnerSecurityUpdateBanner,
-  RunnerStartingBanner,
   RunnerTraceBanner,
   SecurityBanner,
 } from './components/SecurityBanner';
@@ -974,9 +974,9 @@ function Shell() {
         </header>
 
         <SecurityBanner />
+        <OpsMissingBanner missing={system.data?.opsMissing} />
         <RunnerSecurityUpdateBanner outdated={system.data?.runnerOutdated} />
         <RunnerNotSecuredBanner notSecured={system.data?.runnerNotSecured} />
-        <RunnerStartingBanner starting={system.data?.runnerStarting} />
         <RunnerNotAnsweringBanner problem={system.data?.runnerProblem} />
         <RunnerTraceBanner unrestricted={system.data?.runnerPtraceUnrestricted} />
 

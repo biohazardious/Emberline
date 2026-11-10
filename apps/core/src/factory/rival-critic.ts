@@ -3,7 +3,7 @@ import path from 'node:path';
 import { type AgentId, type AgentModelId, CrossCriticIssue } from '@emberline/protocol';
 import { resolveClaudeCliModelFlag } from '@emberline/adapter-claude';
 import { z } from 'zod';
-import { execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
+import { execCommand, RUNNER_BIN, runnerSystemCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { branchBase } from './slop-guard.js';
 
@@ -113,8 +113,9 @@ export async function collectReviewDiff(
     .filter(Boolean);
   for (const file of untracked) {
     if (diff.length > MAX_DIFF_CHARS) break;
+    // Read beside the agents, as they see the file (a link of theirs resolves in the runner, never in ops).
     const text = await execCommand(
-      systemCommand({
+      runnerSystemCommand({
         file: RUNNER_BIN.head,
         args: ['-n', String(MAX_UNTRACKED_FILE_LINES), '--', file],
         cwd: workspacePath,
@@ -167,6 +168,7 @@ export async function runRivalReview(params: {
   let result;
   try {
     result = await execCommand({
+      target: 'runner',
       file: command.file,
       args: command.args,
       cwd: params.workspacePath,

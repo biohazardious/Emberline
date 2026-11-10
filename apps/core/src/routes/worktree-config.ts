@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import { projects } from '../db/schema.js';
 import { badRequest, notFound } from '../errors.js';
 import { assertNotCloning } from '../factory/project-import.js';
+import { opsBridgeOf } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import { saveWorktreeConfig, worktreeYmlErrors } from '../worktree-config/edit.js';
 import {
@@ -19,7 +20,9 @@ import {
   worktreeConfigStatus,
 } from '../worktree-config/trust.js';
 
-export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }: CoreDeps): void {
+export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd, opsPtyd }: CoreDeps): void {
+  // The import clone's terminal is on the ops bridge (the runner's in the dev stack).
+  const clones = opsBridgeOf({ ptyd, opsPtyd });
   const projectOr404 = (id: string) => {
     const row = db.select().from(projects).where(eq(projects.id, id)).get();
     if (!row) throw notFound('no such project');
@@ -30,7 +33,7 @@ export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }:
     '/api/projects/:id/worktree-config',
     async (request): Promise<WorktreeConfigStatusResponse> => {
       const project = projectOr404(request.params.id);
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return worktreeConfigStatus(db, project);
     },
   );
@@ -45,7 +48,7 @@ export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }:
           'send { sha256 } (the 64-character hex sha256 of the reviewed content) or { removal: true }',
         );
       }
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return 'removal' in body.data
         ? approveWorktreeConfigRemoval(db, project)
         : approveWorktreeConfig(db, project, body.data.sha256);
@@ -68,7 +71,7 @@ export function registerWorktreeConfigRoutes(app: FastifyInstance, { db, ptyd }:
     async (request): Promise<WorktreeConfigStatusResponse> => {
       const project = projectOr404(request.params.id);
       const body = SaveWorktreeConfigBody.parse(request.body ?? {});
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return saveWorktreeConfig(db, project, body);
     },
   );

@@ -12,6 +12,7 @@ import { projects } from '../db/schema.js';
 import { ComposeConfigReader } from '../docker/compose-config.js';
 import { notFound } from '../errors.js';
 import { assertNotCloning } from '../factory/project-import.js';
+import { opsBridgeOf } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import {
   applyContainerPreview,
@@ -19,7 +20,12 @@ import {
   containerPreviewOptions,
 } from '../worktree-config/container-preview.js';
 
-export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd, runs }: CoreDeps): void {
+export function registerContainerPreviewRoutes(
+  app: FastifyInstance,
+  { db, ptyd, opsPtyd, runs }: CoreDeps,
+): void {
+  // The import clone's terminal is on the ops bridge (the runner's in the dev stack).
+  const clones = opsBridgeOf({ ptyd, opsPtyd });
   const deps = { db, docker: runs.docker, reader: new ComposeConfigReader() };
   const projectOr404 = (id: string) => {
     const row = db.select().from(projects).where(eq(projects.id, id)).get();
@@ -32,7 +38,7 @@ export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd,
     '/api/projects/:id/container-preview',
     async (request): Promise<ContainerPreviewOptionsResponse> => {
       const project = projectOr404(request.params.id);
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return containerPreviewOptions(deps, project);
     },
   );
@@ -43,7 +49,7 @@ export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd,
     async (request): Promise<ContainerPreviewDiffResponse> => {
       const project = projectOr404(request.params.id);
       const body = ContainerPreviewChoice.parse(request.body ?? {});
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return containerPreviewDiff(deps, project, body);
     },
   );
@@ -54,7 +60,7 @@ export function registerContainerPreviewRoutes(app: FastifyInstance, { db, ptyd,
     async (request): Promise<WorktreeConfigStatusResponse> => {
       const project = projectOr404(request.params.id);
       const body = UseContainerPreviewBody.parse(request.body ?? {});
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return applyContainerPreview(deps, project, body);
     },
   );

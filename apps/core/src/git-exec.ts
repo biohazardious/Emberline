@@ -6,10 +6,10 @@ import { execCommand, execFileChecked, RUNNER_BIN, SYSTEM_PATH, systemCommand } 
  * commands, so every git call from core neutralizes them on the command line (highest precedence)
  * and refuses repos whose config sets the ones that cannot be neutralized generically.
  *
- * Since Phase 3 every git process runs in the runner (command-exec.ts), so these settings protect
- * the runner's own credentials (SSH keys, OAuth tokens) from a repo planted by another agent. It is
- * the runner image's own git (`/usr/bin/git`), with ssh at `/usr/bin/ssh`: the runner's PATH starts
- * with directories agents can write (see SYSTEM_PATH).
+ * Since 0.7.0 every git process of core's runs in the ops container (command-exec.ts), on the same
+ * workspaces the agents write, so these settings keep a planted repository's config from running
+ * anything there. It is the runner image's own git (`/usr/bin/git`), with ssh at `/usr/bin/ssh`
+ * (see SYSTEM_PATH).
  */
 /**
  * ssh never asks: the import clone runs in a PTY, where an unknown host key ("Are you sure you want
@@ -260,7 +260,7 @@ function gitVariables(env: ExecGitOptions['env']): Record<string, string> {
 }
 
 /**
- * Hardened replacement for `execFileAsync('git', args, options)`: runs in the runner (see
+ * Hardened replacement for `execFileAsync('git', args, options)`: runs in the ops container (see
  * command-exec.ts), resolves on exit code 0 and rejects with stdout/stderr/code otherwise.
  */
 export async function execGitFile(

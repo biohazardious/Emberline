@@ -338,6 +338,7 @@ export async function runWorktreeCommand(
 ): Promise<CommandOutcome> {
   try {
     const result = await execCommand({
+      target: 'runner',
       file: 'sh',
       args: ['-c', `exec 2>&1\n${command}`],
       cwd,

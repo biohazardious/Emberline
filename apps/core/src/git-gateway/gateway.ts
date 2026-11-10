@@ -406,7 +406,7 @@ export class GitGateway {
 
   private async handle(request: GitRequest, reply: FastifyReply, kind: 'advertise' | GitService) {
     if (!(await this.fromRunner(request.raw.socket.remoteAddress)))
-      return plain(reply, 403, 'Only the runner may use the git gateway.');
+      return plain(reply, 403, "Only Emberline's own git (the ops container) may use the git gateway.");
     const cap = this.live(request.params.capability);
     // Unknown, used up and expired get the same answer.
     if (!cap) return plain(reply, 404, 'No such git operation (it ended or expired).');

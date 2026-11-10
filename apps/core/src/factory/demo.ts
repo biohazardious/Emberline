@@ -7,7 +7,13 @@ import {
   type BuildDemoResponse,
   type WorktreeChecks,
 } from '@emberline/protocol';
-import { CommandFailedError, execCommand, RUNNER_BIN, systemCommand } from '../command-exec.js';
+import {
+  CommandFailedError,
+  type ExecRequest,
+  execCommand,
+  RUNNER_BIN,
+  runnerSystemCommand,
+} from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -35,7 +41,8 @@ async function runWorkspaceCommand(
   args: string[],
   options: { cwd?: string; timeout?: number; env?: Record<string, string> } = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const request = {
+  const request: ExecRequest = {
+    target: 'runner',
     file,
     args,
     cwd: options.cwd ?? '/',
@@ -641,9 +648,9 @@ export async function captureBrowserViewportSnapshot(params: {
       'cat "$f"',
     ].join('\n');
     // Core's own script: the image's sh, and the system PATH for the browser, mktemp, cat and rm,
-    // with nothing of the runner's environment.
+    // with nothing of the runner's environment. In the runner: the preview listens there.
     const shot = await execCommand(
-      systemCommand({
+      runnerSystemCommand({
         file: RUNNER_BIN.sh,
         args: ['-c', script, 'sh', params.targetUrl],
         cwd: '/',

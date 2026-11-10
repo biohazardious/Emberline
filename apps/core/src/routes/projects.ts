@@ -143,6 +143,7 @@ import {
   writeWorkspaceFileContent,
 } from '../factory/service.js';
 import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
+import { opsBridgeOf } from '../ptyd-bridge.js';
 import { decodeMaterials, writeMaterials } from '../factory/materials.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
 import { DemoTokens, demoBasePath, UI_DEMO_TOKEN_TTL_MS } from '../demo-token.js';
@@ -220,6 +221,7 @@ export function registerProjectRoutes(
     db,
     config,
     ptyd,
+    opsPtyd,
     tickets,
     runs,
     scheduler,
@@ -227,6 +229,9 @@ export function registerProjectRoutes(
     mainPush,
   }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed },
 ): void {
+  // The import clone holds a capability: it runs in the ops container, out of the agents' sight (the
+  // runner in the dev stack, which has none).
+  const clones = opsBridgeOf({ ptyd, opsPtyd });
   const saveActiveProjectId = (activeProjectId: string | null) => {
     db.insert(settings)
       .values({ key: ACTIVE_PROJECT_KEY, value: { activeProjectId } })
@@ -608,7 +613,7 @@ export function registerProjectRoutes(
               projectPath,
             ];
         try {
-          const session = await ptyd.get().spawn({
+          const session = await clones.get().spawn({
             // The image's own git, with only the hardened env (system PATH, no global/system config,
             // no prompt, no askpass) and nothing of the runner's; LC_ALL=C with a branch so
             // import-status can read git's English "Remote branch … not found".

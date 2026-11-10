@@ -33,11 +33,21 @@ try {
   });
   throw error; // unreachable for a key refusal (the process exited); other errors were rethrown above
 }
-const ptyd = new PtydBridge(config.ptydSocket, { requireSecured: config.requireSecuredRunner });
-// git, builds and tests for workspaces run in the runner container, never here.
-setCommandExecutor(ptydCommandExecutor(ptyd));
-setCommandCanceller(ptydCommandCanceller(ptyd));
-// Probed through the runner (ptyd exec) like any other command; see docker/engine.ts.
+// Core's own commands (git, the merge's file steps, the Docker CLI) run in the ops container; none
+// without it (an old compose file): everything is refused with ops_missing until it answers. The dev
+// stack has none (opsSocket null): they run in the runner.
+const ops = config.opsSocket
+  ? new PtydBridge(config.opsSocket, { mode: 'ops', requireSecured: config.requireSecuredRunner })
+  : null;
+const ptyd = new PtydBridge(config.ptydSocket, {
+  mode: 'runner',
+  requireSecured: config.requireSecuredRunner,
+  ops,
+});
+// git, builds and tests for workspaces run in the ops and runner containers, never here.
+setCommandExecutor(ptydCommandExecutor({ runner: ptyd, ops }));
+setCommandCanceller(ptydCommandCanceller({ runner: ptyd, ops }));
+// Probed through the ops container (ptyd exec) like any other command; see docker/engine.ts.
 let logDocker: (status: DockerEngine['status']) => void = () => undefined;
 const docker = new DockerEngine(config.dockerHost, {
   certPath: config.dockerCertPath,
@@ -50,7 +60,7 @@ const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);
 
 const app = await buildServer(
-  { config, db, ptyd, runs, tickets, scheduler },
+  { config, db, ptyd, ...(ops ? { opsPtyd: ops } : {}), runs, tickets, scheduler },
   { logger: { level: config.logLevel } },
 );
 if (secrets.source === 'created') {
@@ -86,26 +96,41 @@ process.on('unhandledRejection', (reason) => {
   app.log.error({ err: reason }, 'unhandled promise rejection');
 });
 // Once the runner is back (first connect) and the exits are noted: Review tickets whose pipeline a
-// restart cut off get it again, in every project, and factory chains that were on carry on.
+// restart cut off get it again, in every project, and factory chains that were on carry on; both need
+// the ops container too (their git runs there), so whichever of the two answers last starts them.
 let chainsResumed = false;
+let reconciled: Promise<unknown> = Promise.resolve();
+const resumeChains = () => {
+  if (chainsResumed || ptyd.status !== 'connected' || (ops && ops.status !== 'connected')) return;
+  chainsResumed = true;
+  void reconciled
+    .catch(() => undefined)
+    .then(() => tickets.resumeChains())
+    .catch((err: unknown) => app.log.error({ err }, 'resuming factory chains failed'));
+};
 ptyd.on('status', (status) => {
   app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`);
   if (status === 'connected') {
-    const reconciled = runs.reconcile();
-    // The engine is probed through the runner: probes start with the first connection (then every
-    // 60 s), and each reconnect probes at once (a concurrent probe is shared).
+    reconciled = runs.reconcile();
+    void scheduler.tick();
+    resumeChains();
+  }
+});
+// The engine is probed through ops (the runner in the dev stack): probes start with its first
+// connection (then every 60 s), and each reconnect probes at once (a concurrent probe is shared).
+const commands = ops ?? ptyd;
+commands.on('status', (status) => {
+  if (ops) app.log.info({ socket: config.opsSocket }, `ops ptyd ${status}`);
+  if (status === 'connected') {
     docker.start();
     void docker.probe();
-    void scheduler.tick();
-    if (!chainsResumed) {
-      chainsResumed = true;
-      void reconciled
-        .catch(() => undefined)
-        .then(() => tickets.resumeChains())
-        .catch((err: unknown) => app.log.error({ err }, 'resuming factory chains failed'));
+    if (ops) {
+      void scheduler.tick();
+      resumeChains();
     }
   }
 });
+ops?.start();
 ptyd.start();
 runs.startReconciler();
 scheduler.start();
@@ -121,6 +146,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       scheduler.dispose();
       docker.stop();
       ptyd.stop();
+      ops?.stop();
       closeDb();
       process.exit(0);
     });

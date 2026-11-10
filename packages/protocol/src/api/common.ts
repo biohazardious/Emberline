@@ -68,17 +68,20 @@ export const SystemStatus = z.object({
   /** The runner works but is older than PTYD_PROTOCOL_VERSION: an update brings extras, nothing breaks. */
   runnerUpdateAvailable: z.boolean(),
   /**
-   * The connected runner is current but its service socket is not locked (it was started as another
-   * user than root, or its start has not finished): core starts no agent and runs no command in it.
+   * The connected runner is current but does not say it is secured (`hello` `secured`: its service
+   * does not run apart from the agents): core starts no agent and runs no command in it.
    */
   runnerNotSecured: z.boolean(),
-  /** The runner is connected but still securing its service socket: nothing starts yet, for a few seconds. */
-  runnerStarting: z.boolean(),
   /**
    * `not_answering`: core has not reached the runner for longer than a restart takes (stopped,
-   * crashing, or started as another user than root). Null otherwise.
+   * crashing, or started with a compose `user:`, which stops it). Null otherwise.
    */
   runnerProblem: z.enum(['not_answering']).nullable(),
+  /**
+   * The compose file has no `ops` service (core's own commands run there), or it has not answered for
+   * longer than a restart takes, or cannot be used: core starts nothing anywhere until it answers.
+   */
+  opsMissing: z.boolean(),
   /**
    * The runner's host lets any process trace another of its user (Yama `ptrace_scope` 0, or no
    * Yama): agents could take over the runner's own service. False while unknown.

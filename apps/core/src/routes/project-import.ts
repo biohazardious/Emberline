@@ -26,13 +26,16 @@ import {
 } from '../factory/project-import.js';
 import { redactCapabilityUrls } from '../git-gateway/gateway.js';
 import { finishAccountClone } from '../git-gateway/remote-git.js';
+import { opsBridgeOf } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import { projectResponse, redactedProject, toProject } from './projects.js';
 
 export function registerProjectImportRoutes(
   app: FastifyInstance,
-  { db, config, ptyd, tickets, runs }: CoreDeps,
+  { db, config, ptyd, opsPtyd, tickets, runs }: CoreDeps,
 ): void {
+  // The import clone runs in the ops container (the runner in the dev stack): its terminal is there.
+  const clones = opsBridgeOf({ ptyd, opsPtyd });
   const projectOr404 = (id: string) => {
     const row = db.select().from(projects).where(eq(projects.id, id)).get();
     if (!row) throw notFound('no such project');
@@ -65,7 +68,7 @@ export function registerProjectImportRoutes(
     '/api/projects/:id/import-status',
     async (request): Promise<ImportStatusResponse> => {
       const project = projectOr404(request.params.id);
-      const status = await importStatus(ptyd, project);
+      const status = await importStatus(clones, project);
       if (status.status !== 'cloning') {
         // An account clone: release its capability and point origin at the real URL (once).
         const refusal = await finishAccountClone(runs.gitGateway, project, status.status === 'ready');
@@ -81,7 +84,7 @@ export function registerProjectImportRoutes(
     '/api/projects/:id/detect',
     async (request): Promise<ProjectDetectResponse> => {
       const project = projectOr404(request.params.id);
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       return detectProject(config.workspacesDir, project);
     },
   );
@@ -90,7 +93,7 @@ export function registerProjectImportRoutes(
     '/api/projects/:id/adopt/preview',
     async (request): Promise<AdoptPreviewResponse> => {
       const project = projectOr404(request.params.id);
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       const { files, commitMessage, worktreeConfig } = await planAdopt(
         config.workspacesDir,
         project,
@@ -105,7 +108,7 @@ export function registerProjectImportRoutes(
     async (request): Promise<AdoptProjectResponse> => {
       const project = projectOr404(request.params.id);
       const body = AdoptProjectBody.parse(request.body ?? {});
-      await assertNotCloning(ptyd, project.id);
+      await assertNotCloning(clones, project.id);
       await reconcileClonedBranch(project);
       const result = await executeAdopt(config.workspacesDir, project, body);
 

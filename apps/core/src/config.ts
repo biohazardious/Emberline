@@ -10,11 +10,17 @@ export interface CoreConfig {
   dataDir: string;
   /** Built web UI, served by core when set (production image). */
   webDir?: string;
+  /** The runner's ptyd (EMBERLINE_PTYD_SOCKET; the core image sets it). */
   ptydSocket: string;
   /**
-   * Start nothing in a runner whose socket's directory is not locked (see PtydBridge). Off only with
-   * `EMBERLINE_ALLOW_UNSECURED_RUNNER=1`, for the dev stack, whose ptyd runs without the runner's
-   * entrypoint; agents there could replace ptyd's socket.
+   * The ops container's ptyd, where core's own commands run (EMBERLINE_OPS_SOCKET, default
+   * `/run/emberline-ops/ptyd.sock`). Null only with `EMBERLINE_ALLOW_UNSECURED_RUNNER=1` and the
+   * variable set empty: the dev stack, which has no ops service; core's commands then run in the runner.
+   */
+  opsSocket: string | null;
+  /**
+   * Start nothing in a ptyd whose `hello` does not say it is secured (see PtydBridge). Off only with
+   * `EMBERLINE_ALLOW_UNSECURED_RUNNER=1`, for the dev stack, whose ptyd runs as the agents' user.
    */
   requireSecuredRunner: boolean;
   /** Shared with the runner container at the same path. */
@@ -36,7 +42,10 @@ export interface CoreConfig {
    * that arrives from their addresses is refused. `EMBERLINE_CONTAINER_HOSTS`, comma list; unset: none.
    */
   containerHosts?: string[];
-  /** Compose service names of the runner; only their addresses may use the git gateway. EMBERLINE_RUNNER_HOSTS, comma list. */
+  /**
+   * Compose service names whose addresses may use the git gateway: where core's git runs, the `ops`
+   * service (the dev stack sets its runner). EMBERLINE_RUNNER_HOSTS, comma list.
+   */
   runnerHosts?: string[];
   /** EMBERLINE_CONTAINER_NETWORKS: extra CIDR ranges container trust accepts (auth/cidr.ts); invalid entries dropped. */
   containerNetworks?: string[];
@@ -137,7 +146,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     port,
     dataDir: env.EMBERLINE_DATA_DIR ?? path.resolve('data'),
     webDir: env.EMBERLINE_WEB_DIR || undefined,
-    ptydSocket: env.EMBERLINE_PTYD_SOCKET ?? '/run/emberline/ptyd.sock',
+    ptydSocket: env.EMBERLINE_PTYD_SOCKET ?? '/run/emberline/ptyd/ptyd.sock',
+    opsSocket:
+      env.EMBERLINE_OPS_SOCKET?.trim() === '' && env.EMBERLINE_ALLOW_UNSECURED_RUNNER === '1'
+        ? null
+        : env.EMBERLINE_OPS_SOCKET?.trim() || '/run/emberline-ops/ptyd.sock',
     requireSecuredRunner: env.EMBERLINE_ALLOW_UNSECURED_RUNNER !== '1',
     workspacesDir: env.EMBERLINE_WORKSPACES_DIR ?? '/workspaces',
     workspacesHostDir: env.EMBERLINE_WORKSPACES_HOST_DIR?.startsWith('/')
@@ -151,7 +164,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),
-    runnerHosts: (env.EMBERLINE_RUNNER_HOSTS ?? 'runner')
+    runnerHosts: (env.EMBERLINE_RUNNER_HOSTS ?? 'ops')
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),

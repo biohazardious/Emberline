@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { projects } from '../db/schema.js';
 import { notFound } from '../errors.js';
+import { opsBridgeOf, type PtydBridge } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import { PRE_READY_CAP, sendBounded, TERMINAL_SEND_CAP } from './ws-send.js';
 
@@ -31,10 +32,30 @@ const COMMANDS = {
   claude: { file: 'claude', args: [], label: 'Claude' },
 } as const;
 
-export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd }: CoreDeps): void {
+/** The import clone sessions of the ops bridge; none while it cannot be reached. */
+async function cloneSessions(ops: PtydBridge): Promise<SessionInfo[]> {
+  try {
+    return (await ops.get().list()).sessions.filter((s) => s.meta.kind === 'clone');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The bridge a terminal is on: an import clone runs in the ops container, every other terminal in
+ * the runner (ids are unique per bridge). `ops` is the runner's own bridge in the dev stack.
+ */
+export async function terminalBridge(id: string, runner: PtydBridge, ops: PtydBridge): Promise<PtydBridge> {
+  if (ops === runner) return runner;
+  return (await cloneSessions(ops)).some((s) => s.id === id) ? ops : runner;
+}
+
+export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd, opsPtyd }: CoreDeps): void {
+  const ops = opsBridgeOf({ ptyd, opsPtyd });
   app.get('/api/terminals', async (): Promise<TerminalInfo[]> => {
     const { sessions } = await ptyd.get().list();
-    return sessions.map(toTerminal).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const clones = ops === ptyd ? [] : await cloneSessions(ops);
+    return [...sessions, ...clones].map(toTerminal).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   });
 
   app.post('/api/terminals', async (request, reply): Promise<TerminalInfo> => {
@@ -63,12 +84,14 @@ export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd 
   });
 
   app.delete<{ Params: { id: string } }>('/api/terminals/:id', async (request) => {
-    await ptyd.get().remove(request.params.id);
+    await (await terminalBridge(request.params.id, ptyd, ops)).get().remove(request.params.id);
     return { ok: true };
   });
 
   app.get<{ Params: { id: string } }>('/api/terminals/:id/ws', { websocket: true }, (socket, request) => {
-    attachTerminal(socket, request.params.id, ptyd, (message) => request.log.warn(message));
+    const id = request.params.id;
+    const bridge = { openViewer: async () => (await terminalBridge(id, ptyd, ops)).openViewer() };
+    attachTerminal(socket, id, bridge, (message) => request.log.warn(message));
   });
 }
 
@@ -82,7 +105,7 @@ export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd 
 export function attachTerminal(
   socket: WebSocket,
   sessionId: string,
-  ptyd: CoreDeps['ptyd'],
+  ptyd: Pick<PtydBridge, 'openViewer'>,
   warn: (m: string) => void,
 ) {
   let viewer: PtydClient | undefined;

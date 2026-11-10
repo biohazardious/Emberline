@@ -1,5 +1,5 @@
 /**
- * Starting and watching a compose preview: every step runs the Docker CLI (or curl) in the runner
+ * Starting and watching a compose preview: every step runs the Docker CLI (or curl) in the ops container
  * through command-exec, with the engine's client variables. RunService records the outcome.
  */
 import { dockerCommand, execCommand, type ExecResult, RUNNER_BIN, systemCommand } from '../command-exec.js';
@@ -228,7 +228,7 @@ export async function pruneImages(env: Record<string, string>): Promise<{ ok: bo
 }
 
 /**
- * A short read-only `docker <args>` in the runner (the Docker page's listings and logs): stdout in
+ * A short read-only `docker <args>` in the ops container (the Docker page's listings and logs): stdout in
  * `result`, the sanitised tail of the output in `output`. Never throws.
  */
 export function dockerQuery(args: string[], env: Record<string, string>): Promise<Ran> {
@@ -270,7 +270,7 @@ async function answersHttp(target: ComposePreviewTarget): Promise<boolean> {
     const result = await execCommand(
       systemCommand({
         file: RUNNER_BIN.curl,
-        // A proxy in the runner's environment would answer for the engine; `-q` (first): no ~/.curlrc.
+        // A proxy in ptyd's environment would answer for the engine; `-q` (first): no ~/.curlrc.
         args: ['-q', '-s', '--noproxy', '*', '-o', '/dev/null', '-m', '5', '-w', '%{http_code}', url],
         cwd: NEUTRAL_CWD,
         timeoutMs: 10_000,

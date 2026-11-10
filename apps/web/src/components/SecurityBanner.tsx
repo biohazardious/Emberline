@@ -70,31 +70,45 @@ export function RunnerTraceBanner({ unrestricted }: { unrestricted: boolean | un
 }
 
 /**
- * Shown while the runner is current but has not locked its service socket (`runnerNotSecured`):
- * started as another user than root, or its start did not finish. Core then starts nothing in it.
+ * Shown while the runner is current but does not say it is secured (`runnerNotSecured`): its service
+ * does not run apart from the coding agents. Core then starts nothing in it.
  */
 export function RunnerNotSecuredBanner({ notSecured }: { notSecured: boolean | undefined }) {
   if (!notSecured) return null;
   return (
     <div className="banner banner-error security-banner" role="alert">
       <span>
-        <strong>Runner not secured.</strong> The runner has not locked its service&apos;s socket, so a coding
-        agent could stand in for it, and Emberline starts no agent and runs no command in the runner. The
-        runner locks it as it starts, as root: if the compose file sets <code>user:</code> for the runner,
-        remove that and restart it (<code>make up</code>, or <code>docker compose up -d</code>); otherwise
-        restart the runner and see its log. Agents that were already running keep running: you can watch and
-        stop them.
+        <strong>Runner not secured.</strong> The runner&apos;s service does not run apart from the coding
+        agents, so an agent could reach it, and Emberline starts no agent and runs no command in the runner.
+        Restart the runner (<code>make up</code>, or <code>docker compose up -d</code>) and see why in its log
+        (<code>docker compose logs runner</code>). Agents that were already running keep running: you can
+        watch and stop them.
       </span>
     </div>
   );
 }
 
-/** Shown for the few seconds a runner takes to secure its service socket as it starts. */
-export function RunnerStartingBanner({ starting }: { starting: boolean | undefined }) {
-  if (!starting) return null;
+const UPGRADE_NOTES_URL = 'https://github.com/biohazardious/Emberline/blob/main/CHANGELOG.md';
+
+/**
+ * Shown while the compose file has no `ops` service (`opsMissing`), or it does not answer: core runs
+ * its own commands there, and starts nothing anywhere until it answers.
+ */
+export function OpsMissingBanner({ missing }: { missing: boolean | undefined }) {
+  if (!missing) return null;
   return (
-    <div className="banner banner-info" role="status">
-      Runner starting… It is securing its service; agents and commands start in a few seconds.
+    <div className="banner banner-error security-banner" role="alert">
+      <span>
+        <strong>
+          Update the compose file: the <code>ops</code> service is missing.
+        </strong>{' '}
+        Emberline runs its own commands (git, merges, the Docker CLI) in it, and until it answers Emberline
+        starts no agent and runs no command. Agents that were already running keep running: you can watch and
+        stop them.{' '}
+        <a href={UPGRADE_NOTES_URL} target="_blank" rel="noreferrer">
+          Upgrade notes
+        </a>
+      </span>
     </div>
   );
 }
@@ -104,8 +118,9 @@ export function RunnerNotAnsweringBanner({ problem }: { problem: string | null |
   if (problem !== 'not_answering') return null;
   return (
     <div className="banner banner-warn" role="status">
-      The runner has not answered for a while. See why with <code>docker compose logs runner</code>. If the
-      runner service sets <code>user:</code> in the compose file, remove it: the runner must start as root.
+      The runner has not answered for a while. See why with <code>docker compose logs runner</code>. A runner
+      started as another user (<code>user:</code> in the compose file) stops at once, and its log says so:
+      remove <code>user:</code> and start it again.
     </div>
   );
 }

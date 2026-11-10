@@ -23,7 +23,7 @@ import { ForgeService } from './forge/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
 import { isPtraceUnrestricted, registerOpsRoutes } from './ops.js';
-import type { PtydBridge, RunnerStartProblem } from './ptyd-bridge.js';
+import { opsBridgeOf, type PtydBridge, type RunnerStartProblem } from './ptyd-bridge.js';
 import { KeepMainPushed } from './repository/keep-pushed.js';
 import { RepositoryService } from './repository/service.js';
 import { registerContainerPreviewRoutes } from './routes/container-preview.js';
@@ -60,7 +60,13 @@ export const VERSION = '0.6.2';
 export interface CoreDeps {
   config: CoreConfig;
   db: Db;
+  /** The runner's ptyd: agents, terminals, workspace commands. */
   ptyd: PtydBridge;
+  /**
+   * The ops container's ptyd: core's own commands and the import clone. Omitted: none (the dev stack,
+   * `config.opsSocket` null, and tests), and the runner's stands in ({@link opsBridgeOf}).
+   */
+  opsPtyd?: PtydBridge;
   runs: RunService;
   tickets: TicketService;
   scheduler: Scheduler;
@@ -103,6 +109,16 @@ function runnerProblemFields(problem: RunnerStartProblem | null): Partial<Health
     runnerProblem: problem,
     runnerMessage: RUNNER_NOT_ANSWERING,
   };
+}
+
+/**
+ * For the banner: the ops service has not answered for longer than a restart takes, or answers but
+ * cannot be used (outdated, not secured). Commands are refused at once either way (PtydBridge).
+ */
+function opsShownMissing(deps: CoreDeps): boolean {
+  if (!deps.opsPtyd) return false;
+  const ops = deps.opsPtyd;
+  return ops.startProblem === 'not_answering' || (ops.status === 'connected' && !ops.available);
 }
 
 export async function buildServer(
@@ -187,19 +203,22 @@ export async function buildServer(
   // Stored pushes (from before a restart, or kept while the runner was away) run once core listens
   // and the runner is connected, and again on each reconnect.
   let listening = false;
+  const ops = opsBridgeOf(deps);
   const resumeMainPushes = () => {
-    if (listening && deps.ptyd.status === 'connected') mainPush.resumePending();
+    if (listening && deps.ptyd.status === 'connected' && ops.status === 'connected') mainPush.resumePending();
   };
   const onPtydStatus = (status: string) => {
     if (status === 'connected') resumeMainPushes();
   };
   deps.ptyd.on('status', onPtydStatus);
+  if (ops !== deps.ptyd) ops.on('status', onPtydStatus);
   app.addHook('onListen', async () => {
     listening = true;
     resumeMainPushes();
   });
   app.addHook('onClose', async () => {
     deps.ptyd.off('status', onPtydStatus);
+    ops.off('status', onPtydStatus);
     cron.stop();
     notifications.stop();
     review.stop();
@@ -241,9 +260,9 @@ export async function buildServer(
       deps.ptyd.status === 'connected' &&
       (deps.ptyd.protocolVersion ?? 0) >= PTYD_MIN_PROTOCOL_VERSION &&
       (deps.ptyd.protocolVersion ?? 0) < PTYD_PROTOCOL_VERSION,
-    runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.lockState === 'not_secured',
-    runnerStarting: deps.ptyd.status === 'connected' && deps.ptyd.lockState === 'starting',
+    runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.unsecured,
     runnerProblem: deps.ptyd.startProblem,
+    opsMissing: opsShownMissing(deps),
     runnerPtraceUnrestricted: deps.ptyd.status === 'connected' && isPtraceUnrestricted(deps.ptyd.ptraceScope),
     docker: deps.runs.docker.status,
   }));

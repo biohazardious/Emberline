@@ -441,7 +441,7 @@ describe('keep main pushed', () => {
     it('a restart before the runner connects keeps the stored push and says it waits for the runner', async () => {
       stored(merged().commitOid);
       await t.mainPush.stop();
-      setCommandExecutor(ptydCommandExecutor(t.ptyd)); // as in production: git runs in the runner
+      setCommandExecutor(ptydCommandExecutor({ runner: t.ptyd, ops: null })); // as in production: git runs in the runner
       const next = new KeepMainPushed(t.db, t.runs, t.repository);
       next.start();
       next.resumePending();
@@ -453,7 +453,7 @@ describe('keep main pushed', () => {
     it('the stored push runs once core listens and the runner connects', async () => {
       const m = merged();
       stored(m.commitOid);
-      setCommandExecutor(ptydCommandExecutor(t.ptyd));
+      setCommandExecutor(ptydCommandExecutor({ runner: t.ptyd, ops: null }));
       ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
       await ptydServer.listen();
       t.ptyd.start(); // core already listens (the git gateway)
@@ -490,7 +490,7 @@ describe('keep main pushed', () => {
     it('switching Keep main pushed off drops the waiting note: the kept push will not run', async () => {
       stored(merged().commitOid);
       await t.mainPush.stop();
-      setCommandExecutor(ptydCommandExecutor(t.ptyd)); // the runner is not connected
+      setCommandExecutor(ptydCommandExecutor({ runner: t.ptyd, ops: null })); // the runner is not connected
       const next = new KeepMainPushed(t.db, t.runs, t.repository);
       next.start();
       next.resumePending();

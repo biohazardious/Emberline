@@ -1,8 +1,8 @@
 /**
  * The Docker engine sidecar (compose service `docker`, on unless `EMBERLINE_DOCKER_ENGINE=0`): a rootless dind on the compose network
- * at `EMBERLINE_DOCKER_HOST` whose API requires mutual TLS. Only the runner holds the client
- * certificate (read-only mount at `dockerCertPath`). Core never talks to the engine directly: like
- * every other command, the probe runs the Docker CLI in the runner (command-exec.ts). While the
+ * at `EMBERLINE_DOCKER_HOST` whose API requires mutual TLS. Only the runner and the ops container hold
+ * the client certificate (read-only mount at `dockerCertPath`). Core never talks to the engine directly: like
+ * every other command, the probe runs the Docker CLI in the ops container (command-exec.ts). While the
  * engine answers, runs and worktree.yml commands get the client variables (`DOCKER_HOST`,
  * `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`) and a compose project name of their own; when it does
  * not (or is not configured), they get nothing and Docker is off.
@@ -74,9 +74,9 @@ export function mainPreviewComposeProjectName(projectId: string): string {
 export interface DockerEngineOptions {
   /** Client certificate directory in the runner (`DOCKER_CERT_PATH`). */
   certPath?: string;
-  /** How the CLI runs; the runner (ptyd exec) by default. */
+  /** How the CLI runs; ptyd exec in the ops container by default. */
   exec?: CommandExecutor;
-  /** Working directory of the probe in the runner. */
+  /** Working directory of the probe in the ops container. */
   cwd?: string;
   /** Called when `available`, `version` or `error` changed after a probe. */
   onChange?: (status: DockerEngineStatus) => void;
@@ -153,7 +153,7 @@ export class DockerEngine {
     if (maxAgeMs <= 0 || Date.now() - this.checkedAt > maxAgeMs) await this.probe();
   }
 
-  /** Runs `docker version` in the runner; concurrent callers share one probe. Never throws. */
+  /** Runs `docker version` in the ops container; concurrent callers share one probe. Never throws. */
   probe(): Promise<DockerEngineStatus> {
     if (!this.host) return Promise.resolve(this.status);
     this.inFlight ??= this.runProbe(this.host).finally(() => {

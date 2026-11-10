@@ -62,7 +62,7 @@ async function stageRunOutput(worktreePath: string, env?: Record<string, string>
 }
 
 /**
- * A file of the worktree's git directory, read in the runner: its text, or null when it does not
+ * A file of the worktree's git directory, read in the ops container: its text, or null when it does not
  * exist (any other failure is thrown).
  */
 async function readGitDirFile(worktreePath: string, name: string): Promise<string | null> {
@@ -165,7 +165,7 @@ async function endPendingOperation(worktreePath: string, pending: PendingOperati
  * unconcluded merge's other parents. It is built in a copy of the worktree's index and not put on
  * any branch, so the worktree, its index and its branch stay exactly as they were (the caller moves
  * the branch once the merge is allowed). The copy (`<git dir>/index.emberline-output`) is made and
- * removed in the runner, so it belongs to the user the runner's git runs as. git reads it only
+ * removed in the ops container, so it belongs to the user core's git runs as (node, as the agents' files). git reads it only
  * through GIT_INDEX_FILE, here; a copy an interrupted merge left behind is removed first, never
  * reused.
  */
@@ -181,16 +181,16 @@ async function buildRunOutputCommit(
   ).stdout.trim();
   const scratchIndex = `${index}.emberline-output`;
   const env = { GIT_INDEX_FILE: scratchIndex };
-  // The runner image's own rm, sh and cp (systemCommand): a planted one never copies the index.
-  const inRunner = (file: string, args: string[]) =>
+  // The runner image's own rm, sh and cp (systemCommand, in the ops container): a planted one never copies the index.
+  const inOps = (file: string, args: string[]) =>
     execFileChecked(systemCommand({ file, args, cwd: worktreePath }));
   try {
-    await inRunner(RUNNER_BIN.rm, ['-f', '--', scratchIndex]);
+    await inOps(RUNNER_BIN.rm, ['-f', '--', scratchIndex]);
     // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
     // Only a worktree without an index starts from HEAD; a copy that fails fails the merge.
     const hasIndex =
-      (await inRunner(RUNNER_BIN.sh, ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
-    if (hasIndex) await inRunner(RUNNER_BIN.cp, ['--', index, scratchIndex]);
+      (await inOps(RUNNER_BIN.sh, ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
+    if (hasIndex) await inOps(RUNNER_BIN.cp, ['--', index, scratchIndex]);
     else await execGitFile(['read-tree', head], { ...inWorktree, env });
     await stageRunOutput(worktreePath, env);
     const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
@@ -229,7 +229,7 @@ async function buildRunOutputCommit(
       )
     ).stdout.trim();
   } finally {
-    await inRunner(RUNNER_BIN.rm, ['-f', '--', scratchIndex]).catch(() => undefined);
+    await inOps(RUNNER_BIN.rm, ['-f', '--', scratchIndex]).catch(() => undefined);
   }
 }
 

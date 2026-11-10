@@ -303,8 +303,9 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 
   private async dispatch(): Promise<void> {
     this.closeExpired(new Date());
-    // An outdated or not secured runner starts nothing (fail closed): queued runs wait for it.
-    if (this.ptyd.status !== 'connected' || this.ptyd.outdated || this.ptyd.unsecured) return;
+    // An outdated or not secured runner starts nothing (fail closed), nor does any while the ops
+    // service is missing: queued runs wait for it.
+    if (this.ptyd.status !== 'connected' || this.ptyd.startRefusal()) return;
 
     const policy = getQuotaPolicy(this.db);
     await this.moveWaitingRuns(policy.inFlight === 'fallback');

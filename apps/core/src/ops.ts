@@ -6,12 +6,8 @@ import { PTYD_MIN_PROTOCOL_VERSION, PTYD_PROTOCOL_VERSION } from '@emberline/pro
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { runs, tickets } from './db/schema.js';
-import {
-  RUNNER_NOT_ANSWERING,
-  RUNNER_NOT_SECURED,
-  RUNNER_SECURITY_UPDATE,
-  RUNNER_STARTING,
-} from './errors.js';
+import { OPS_MISSING, RUNNER_NOT_ANSWERING, RUNNER_NOT_SECURED, RUNNER_SECURITY_UPDATE } from './errors.js';
+import type { PtydBridge } from './ptyd-bridge.js';
 import type { CoreDeps } from './server.js';
 
 /** Below this much free space a volume is reported as degraded. */
@@ -20,6 +16,44 @@ const MIN_FREE_BYTES = 512 * 1024 * 1024;
 interface CheckResult {
   ok: boolean;
   detail: string;
+}
+
+/** What `/api/health/deep` says of the ops container's ptyd; null without one (the dev stack). */
+export interface OpsHealth {
+  connected: boolean;
+  protocol: number | null;
+  secured: boolean;
+}
+
+function opsHealth(ops: PtydBridge | undefined): OpsHealth | null {
+  if (!ops) return null;
+  const connected = ops.status === 'connected';
+  return {
+    connected,
+    protocol: connected ? ops.protocolVersion : null,
+    secured: connected && ops.secured === true,
+  };
+}
+
+function opsCheck(deps: CoreDeps): CheckResult {
+  const ops = deps.opsPtyd;
+  if (!ops)
+    return {
+      ok: true,
+      detail:
+        "no ops service (EMBERLINE_OPS_SOCKET empty, the dev stack): core's own commands run in the runner",
+    };
+  if (ops.available)
+    return { ok: true, detail: `ptyd connected (ops mode, protocol ${ops.protocolVersion})` };
+  const why =
+    ops.foundMode !== null
+      ? `the socket answers as a ptyd in ${ops.foundMode} mode`
+      : ops.status !== 'connected'
+        ? `ptyd ${ops.status}`
+        : ops.outdated
+          ? `protocol ${ops.protocolVersion ?? 'unknown'}, core needs ${PTYD_MIN_PROTOCOL_VERSION}`
+          : 'not secured';
+  return { ok: false, detail: `${why}. ${OPS_MISSING}` };
 }
 
 export const PTRACE_SCOPE_HINT =
@@ -47,9 +81,10 @@ export function isPtraceUnrestricted(scope: number | null | undefined): boolean 
 
 /**
  * Operations endpoints:
- * - `GET /api/health/deep` (public): database, runner connection and protocol, whether agents could
- *   replace or trace the runner's service, writable workspaces and free disk; 503 when anything is
- *   degraded. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
+ * - `GET /api/health/deep` (public): database, runner connection and protocol, whether the runner's
+ *   service says it is secured or agents could trace it, the ops container's ptyd (`checks.ops`,
+ *   and `ops`: connected, protocol, secured), writable workspaces and free disk; 503 when anything
+ *   is degraded. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
  * - `GET /metrics`: Prometheus text format, only when `EMBERLINE_METRICS_TOKEN` is set and sent as
  *   a bearer token (404 otherwise, so the endpoint does not exist by default).
  */
@@ -95,24 +130,24 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
             : ''
       }`,
     };
-    // Only a runner of this version locks its socket's directory; an older one is the runner update's
-    // business (runnerProtocol). Without the lock core starts nothing (PtydBridge.unsecured).
-    const guarded = deps.ptyd.socketGuarded;
+    // A current runner says whether its service runs apart from the agents (`hello` `secured`); an
+    // older one is the runner update's business (runnerProtocol). Not secured, core starts nothing.
+    const secured = deps.ptyd.secured === true;
     const required = deps.config.requireSecuredRunner;
-    result.runnerSocket = {
-      ok: !connected || guarded !== false || !current || !required,
+    const usable = connected && (version ?? 0) >= PTYD_MIN_PROTOCOL_VERSION;
+    result.runnerSecured = {
+      ok: !usable || secured || !required,
       detail: !connected
         ? 'not connected'
-        : guarded
-          ? "the socket's directory is root's: no agent can replace the runner's service"
-          : !current
-            ? "an agent can replace the runner's service: its socket's directory is not root's (rebuilding the runner with `make up` locks it)"
+        : !usable
+          ? 'an older runner (see runnerProtocol)'
+          : secured
+            ? "the runner's service runs apart from the agents"
             : required
-              ? deps.ptyd.lockState === 'starting'
-                ? RUNNER_STARTING
-                : RUNNER_NOT_SECURED
-              : "the socket's directory is not root's, allowed by EMBERLINE_ALLOW_UNSECURED_RUNNER (the dev stack)",
+              ? RUNNER_NOT_SECURED
+              : 'the runner is not secured, allowed by EMBERLINE_ALLOW_UNSECURED_RUNNER (the dev stack)',
     };
+    result.ops = opsCheck(deps);
     result.runnerPtrace = ptraceCheck(connected, deps.ptyd.ptraceScope);
     result.workspaces = await access(deps.config.workspacesDir, fsConstants.W_OK).then(
       () => ({ ok: true, detail: 'writable' }),
@@ -137,7 +172,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: CoreDeps, startedA
     const result = await checks();
     const ok = Object.values(result).every((check) => check.ok);
     reply.code(ok ? 200 : 503);
-    return { status: ok ? 'ok' : 'degraded', checks: result };
+    return { status: ok ? 'ok' : 'degraded', checks: result, ops: opsHealth(deps.opsPtyd) };
   });
 
   app.get('/metrics', async (request, reply) => {

@@ -1,6 +1,6 @@
 /**
  * The Container preview box's read of a compose file: HEAD's committed file goes to
- * `docker compose config --format json` in the runner on stdin (never to disk, as the preview
+ * `docker compose config --format json` in the ops container on stdin (never to disk, as the preview
  * override in compose.ts), so what is listed is what a run worktree will start. No engine is
  * needed; interpolation reads only the main workspace's `.env` (compose's own lookup). Bounded in
  * time and output; cached per HEAD commit + file + `.env`.
@@ -147,7 +147,7 @@ export interface HeadComposeFile {
 export type HeadComposeLookup =
   { kind: 'present'; entry: HeadComposeFile } | { kind: 'absent' } | { kind: 'unknown'; error: string };
 
-/** The first of {@link COMPOSE_FILE_NAMES} in the main workspace's HEAD (git in the runner). */
+/** The first of {@link COMPOSE_FILE_NAMES} in the main workspace's HEAD (git in the ops container). */
 export async function findHeadComposeFile(projectPath: string): Promise<HeadComposeLookup> {
   const inRepo = { cwd: projectPath };
   let commit: string;
@@ -264,7 +264,7 @@ export class ComposeConfigReader {
     if (ran.truncated)
       return fail(`its configuration is larger than ${COMPOSE_CONFIG_MAX_OUTPUT_BYTES / 1024 / 1024} MB`);
     if (ran.exitCode !== 0) {
-      // 127: no Docker CLI in the runner (an old image): not the file's fault, ask again later.
+      // 127: no Docker CLI in the ops container (an old image): not the file's fault, ask again later.
       const line = firstErrorLine(ran.stderr, ran.stdout)?.replace(
         /^failed to parse -:/,
         `failed to parse ${entry.file}:`,
