@@ -43,9 +43,12 @@ RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquir
 # ---------------------------------------------------------------------------
 FROM ubuntu_node AS base
 ARG PNPM_VERSION
+# openssh: the tests clone from a throwaway sshd (core's ssh command; never started in an image).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates bash curl \
-  && rm -rf /var/lib/apt/lists/*
+    openssh-client openssh-server \
+  && rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_* \
+  && mkdir -p /run/sshd
 RUN npm install -g pnpm@${PNPM_VERSION}
 # Keep the pnpm store at a fixed path so it can be a volume / cache mount.
 ENV npm_config_store_dir=/pnpm-store
@@ -290,6 +293,9 @@ ENV SHELL=/bin/bash \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
+# GitHub's, GitLab's and Bitbucket's published SSH host keys: core's ssh never asks about an
+# unknown key (apps/core/src/git-exec.ts), so these hosts work without trusting one on first use.
+COPY --chmod=0644 apps/ptyd/ssh_known_hosts /etc/ssh/ssh_known_hosts
 RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && ln -sf /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
   && ln -sf /opt/emberline/hook/dist/mcp.js /usr/local/bin/emberline-mcp \

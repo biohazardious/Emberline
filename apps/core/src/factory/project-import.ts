@@ -240,7 +240,33 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
       status: 'failed',
       reason: branchProblemText(`The repository has no branch "${missing}".`),
     };
+  const hostKey = hostKeyProblemText(output);
+  if (hostKey) return { ...base, status: 'failed', reason: hostKey };
   return { ...base, status: 'failed' };
+}
+
+/**
+ * ssh's own words (OpenSSH is never translated) when core's ssh command, with strict host key
+ * checking and no prompt, refused the server: its key is unknown, or not the one known_hosts has.
+ */
+function hostKeyProblemText(output: string): string | null {
+  const unknown = /No \S+ host key is known for (\S+) and you have requested strict checking/.exec(output);
+  if (unknown)
+    return (
+      `The runner does not know the SSH host key of ${unknown[1]}, so it did not connect. ` +
+      "Add the host's key to the runner's known_hosts (~/.ssh/known_hosts of the runner's user), " +
+      'after checking it against the fingerprint your Git host publishes, then try again. ' +
+      'The keys of GitHub, GitLab and Bitbucket come with Emberline.'
+    );
+  const changed = /Host key for (\S+) has changed and you have requested strict checking/.exec(output);
+  if (changed)
+    return (
+      `The SSH host key of ${changed[1]} is not the one the runner knows, so it did not connect: ` +
+      'the host changed its key, or something between is pretending to be it. ' +
+      'Check the fingerprint your Git host publishes; if the key really changed, replace it in the ' +
+      "runner's known_hosts (for GitHub, GitLab or Bitbucket, update Emberline), then try again."
+    );
+  return null;
 }
 
 const branchProblemText = (what: string) =>

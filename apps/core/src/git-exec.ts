@@ -11,7 +11,13 @@ import { execCommand, execFileChecked, RUNNER_BIN, SYSTEM_PATH, systemCommand } 
  * the runner image's own git (`/usr/bin/git`), with ssh at `/usr/bin/ssh`: the runner's PATH starts
  * with directories agents can write (see SYSTEM_PATH).
  */
-const SSH_COMMAND = `${RUNNER_BIN.ssh} -F /dev/null`;
+/**
+ * ssh never asks: the import clone runs in a PTY, where an unknown host key ("Are you sure you want
+ * to continue connecting (yes/no)?") or a key's passphrase would wait for an answer no one can give.
+ * An unknown or changed host key fails instead (known_hosts of the runner's user, plus the runner
+ * image's /etc/ssh/ssh_known_hosts with GitHub's, GitLab's and Bitbucket's published keys).
+ */
+const SSH_COMMAND = `${RUNNER_BIN.ssh} -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes`;
 /** The runner image's git-core (`git --exec-path`): root-owned, where git's own helpers live. */
 const GIT_CORE_DIR = '/usr/lib/git-core';
 

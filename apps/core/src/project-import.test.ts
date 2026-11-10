@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -96,6 +97,17 @@ const git = (cwd: string, ...args: string[]) =>
     cwd,
     encoding: 'utf8',
   }).trim();
+
+/** An OpenSSH server to clone from (Debian/Ubuntu and Arch paths); its tests skip without one. */
+const SSHD = ['/usr/sbin/sshd', '/usr/bin/sshd'].find((p) => existsSync(p));
+const freePort = () =>
+  new Promise<number>((resolve, reject) => {
+    const server = createServer().listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as { port: number };
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
 
 /** A folder in the workspaces dir with `files`, committed on `branch` unless `git: false`. */
 function fixture(
@@ -869,6 +881,89 @@ describe('GET /api/projects/:id/import-status', () => {
     const s = await status(project.id);
     expect(s).toMatchObject({ status: 'ready', exitCode: 0, terminalId });
     expect(s.tail).toContain('Cloning');
+  });
+
+  describe.skipIf(!SSHD)('an ssh origin whose host key the runner does not know', () => {
+    let sshd: ChildProcess;
+    let port: number;
+    beforeEach(async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'sshd-'));
+      execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(dir, 'key')]);
+      port = await freePort();
+      const config = path.join(dir, 'sshd_config');
+      writeFileSync(
+        config,
+        [
+          `HostKey ${path.join(dir, 'key')}`,
+          'PidFile none',
+          'UsePAM no',
+          'StrictModes no',
+          'ListenAddress 127.0.0.1',
+          `Port ${port}`,
+        ].join('\n'),
+      );
+      sshd = spawnProcess(SSHD!, ['-D', '-e', '-f', config], { stdio: ['ignore', 'ignore', 'pipe'] });
+      await new Promise<void>((resolve, reject) => {
+        sshd.stderr!.on('data', (d: Buffer) => d.toString().includes('Server listening') && resolve());
+        sshd.on('exit', (code) => reject(new Error(`sshd exited with ${code}`)));
+      });
+      return () => {
+        sshd.kill();
+        rmTemp(dir);
+      };
+    });
+
+    it('the clone fails at once in its terminal, with what to do, instead of waiting at ssh\'s "yes/no" prompt', async () => {
+      // Core's own clone command, in a real PTY (where ssh would ask), against the unknown sshd.
+      const client = t.ptyd.get();
+      const spawn = client.spawn.bind(client);
+      const url = `ssh://git@127.0.0.1:${port}/x.git`;
+      vi.spyOn(client, 'spawn').mockImplementation((params) =>
+        spawn({ ...params, args: params.args?.map((a) => (a === 'https://example.com/x.git' ? url : a)) }),
+      );
+      const res = await api('POST', '/api/projects', {
+        name: 'Unknown Host',
+        source: 'import_url',
+        repoUrl: 'https://example.com/x.git',
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const { project } = res.json() as CreateProjectResponse;
+      await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
+        timeout: 10_000,
+      });
+      const s = await status(project.id);
+      expect(s.tail).toContain('Host key verification failed.');
+      expect(s.tail).not.toContain('Are you sure you want to continue connecting');
+      expect(s.reason).toBe(
+        `The runner does not know the SSH host key of [127.0.0.1]:${port}, so it did not connect. ` +
+          "Add the host's key to the runner's known_hosts (~/.ssh/known_hosts of the runner's user), " +
+          'after checking it against the fingerprint your Git host publishes, then try again. ' +
+          'The keys of GitHub, GitLab and Bitbucket come with Emberline.',
+      );
+    });
+  });
+
+  it('a host key that is not the one the runner knows fails with what to check', async () => {
+    // ssh's words when the key in known_hosts differs (strict checking, no prompt).
+    const { project } = await importUrl('Changed Key', () => ({
+      file: 'sh',
+      args: [
+        '-c',
+        'echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" >&2; ' +
+          'echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2; ' +
+          'echo "Host key for github.com has changed and you have requested strict checking." >&2; ' +
+          'echo "Host key verification failed." >&2; exit 128',
+      ],
+    }));
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
+      timeout: 10_000,
+    });
+    expect((await status(project.id)).reason).toBe(
+      'The SSH host key of github.com is not the one the runner knows, so it did not connect: ' +
+        'the host changed its key, or something between is pretending to be it. ' +
+        'Check the fingerprint your Git host publishes; if the key really changed, replace it in the ' +
+        "runner's known_hosts (for GitHub, GitLab or Bitbucket, update Emberline), then try again.",
+    );
   });
 
   it("once cloned, the default branch is the clone's checked-out branch (runs merge into it)", async () => {

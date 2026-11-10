@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Importing a repository from an ssh address (`git@github.com:…`) whose host the runner had never connected to stopped at ssh's "Are you sure you want to continue connecting (yes/no)?" in the clone terminal, which no one could answer, and the wizard waited for ever. Emberline's ssh now never asks: the runner image comes with GitHub's, GitLab's and Bitbucket's published host keys, so these hosts just work, and the clone from any other unknown host fails at once with what to do (add its key to the runner's `~/.ssh/known_hosts`, checked against the fingerprint the host publishes). A host key that changed fails the same way. A passphrase-protected key no longer waits for its passphrase either; the clone fails instead.
+
 ## [0.6.1] - 2026-10-24
 
 A clean-up release: every known bug and piece of technical debt left after 0.6.0, from the Answer dialog to held tickets, restarts, previews, project delete and how repository addresses and credentials are shown.
