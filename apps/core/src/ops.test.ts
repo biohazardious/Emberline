@@ -103,41 +103,42 @@ describe('ops endpoints', () => {
       expect(system).toMatchObject({ runnerOutdated: true, runnerUpdateAvailable: false });
     });
 
-    it("a host whose Yama lets agents trace the runner's service is degraded and named, with how to set it", async () => {
+    it("the host's Yama setting is information: with 0 agents can trace each other, nothing of Emberline's", async () => {
       for (const [yama, why] of [
         ['0\n', 'kernel.yama.ptrace_scope is 0'],
         [null, 'the host kernel has no Yama'],
       ] as const) {
         await closeRunner();
         const { deep, system } = await withRunner(5, { yama });
-        expect(deep.statusCode).toBe(503);
-        expect(deep.json().checks.runnerPtrace).toMatchObject({ ok: false });
+        // ptyd and core's own commands share neither the agents' user nor their pid namespace.
+        expect(deep.statusCode).toBe(200);
+        expect(deep.json().checks.runnerPtrace).toMatchObject({ ok: true });
         expect(deep.json().checks.runnerPtrace.detail).toContain(why);
+        expect(deep.json().checks.runnerPtrace.detail).toContain('agents can trace each other');
         expect(deep.json().checks.runnerPtrace.detail).toContain(
           'set kernel.yama.ptrace_scope=1 on the Docker host',
         );
-        expect(system.runnerPtraceUnrestricted).toBe(true);
+        // No banner on every page any more.
+        expect(system).not.toHaveProperty('runnerPtraceUnrestricted');
       }
       for (const yama of ['1\n', '2\n', '3\n']) {
         await closeRunner();
-        const { deep, system } = await withRunner(5, { yama });
+        const { deep } = await withRunner(5, { yama });
         expect(deep.statusCode).toBe(200);
         expect(deep.json().checks.runnerPtrace).toEqual({
           ok: true,
           detail: `kernel.yama.ptrace_scope is ${yama.trim()}`,
         });
-        expect(system.runnerPtraceUnrestricted).toBe(false);
       }
     });
 
     it('a runner that does not report Yama (older) gets no warning: it is not known', async () => {
-      const { deep, system } = await withRunner(5);
+      const { deep } = await withRunner(5);
       Object.defineProperty(t!.ptyd, 'ptraceScope', { get: () => undefined });
       const again = await t!.app.inject({ url: '/api/health/deep' });
       expect(deep.statusCode).toBe(200);
       expect(again.json().checks.runnerPtrace.ok).toBe(true);
       expect(again.json().checks.runnerPtrace.detail).toContain('does not report');
-      expect(system.runnerPtraceUnrestricted).toBe(false);
     });
 
     it("a current runner that does not say it is secured is degraded; an older one is the protocol check's", async () => {

@@ -60,8 +60,9 @@ export const PTRACE_SCOPE_HINT =
   'set kernel.yama.ptrace_scope=1 on the Docker host (sysctl -w kernel.yama.ptrace_scope=1, and in /etc/sysctl.d/ to keep it)';
 
 /**
- * Whether the runner host lets a process trace another of its user ({@link isPtraceUnrestricted}):
- * agents share ptyd's user, so they could then take over ptyd and every command core runs.
+ * Whether the runner host lets a process trace another of its user ({@link isPtraceUnrestricted}).
+ * Information only: ptyd and core's own commands share neither the agents' user nor their pid
+ * namespace, so with 0 agents can trace each other, and nothing of Emberline's.
  */
 function ptraceCheck(connected: boolean, scope: number | null | undefined): CheckResult {
   if (!connected) return { ok: true, detail: 'not connected' };
@@ -69,22 +70,22 @@ function ptraceCheck(connected: boolean, scope: number | null | undefined): Chec
     return { ok: true, detail: 'the runner does not report it (an older runner image)' };
   if (!isPtraceUnrestricted(scope)) return { ok: true, detail: `kernel.yama.ptrace_scope is ${scope}` };
   return {
-    ok: false,
-    detail: `${scope === null ? 'the host kernel has no Yama' : 'kernel.yama.ptrace_scope is 0'}: agents can trace the runner's own service; ${PTRACE_SCOPE_HINT}`,
+    ok: true,
+    detail: `${scope === null ? 'the host kernel has no Yama' : 'kernel.yama.ptrace_scope is 0'}: agents can trace each other (not ptyd or Emberline's own commands); to keep them apart, ${PTRACE_SCOPE_HINT}`,
   };
 }
 
 /** 0, or no Yama at all: any process may trace another of the same user. Undefined: not known. */
-export function isPtraceUnrestricted(scope: number | null | undefined): boolean {
+function isPtraceUnrestricted(scope: number | null | undefined): boolean {
   return scope === null || scope === 0;
 }
 
 /**
  * Operations endpoints:
  * - `GET /api/health/deep` (public): database, runner connection and protocol, whether the runner's
- *   service says it is secured or agents could trace it, the ops container's ptyd (`checks.ops`,
- *   and `ops`: connected, protocol, secured), writable workspaces and free disk; 503 when anything
- *   is degraded. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
+ *   service says it is secured, the ops container's ptyd (`checks.ops`, and `ops`: connected,
+ *   protocol, secured), writable workspaces and free disk; 503 when anything is degraded. The host's
+ *   Yama setting (`runnerPtrace`) is information and never degrades it. Docker keeps using the cheap `/api/health`, so a runner outage never restarts core.
  * - `GET /metrics`: Prometheus text format, only when `EMBERLINE_METRICS_TOKEN` is set and sent as
  *   a bearer token (404 otherwise, so the endpoint does not exist by default).
  */

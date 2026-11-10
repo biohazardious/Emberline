@@ -1,3 +1,4 @@
+import { UPGRADE_NOTES_URL } from '@emberline/protocol';
 import { useState } from 'react';
 import { isPlainHttpOnNetwork } from '../plainHttp';
 
@@ -45,30 +46,6 @@ export function SecurityBanner({ floating = false }: { floating?: boolean }) {
   );
 }
 
-const PTRACE_URL =
-  'https://github.com/biohazardious/Emberline/blob/main/SECURITY.md#the-hosts-ptrace-setting';
-
-/**
- * Shown while the runner's host lets any process trace another of its user (Yama `ptrace_scope` 0,
- * or no Yama): agents share the runner's user with its own service. Not dismissible: it stays until
- * the host is fixed.
- */
-export function RunnerTraceBanner({ unrestricted }: { unrestricted: boolean | undefined }) {
-  if (!unrestricted) return null;
-  return (
-    <div className="banner banner-warn security-banner" role="status">
-      <span>
-        The Docker host lets any program trace another program of the same user, so a coding agent could take
-        over the runner&apos;s own service and every command Emberline runs there. Set{' '}
-        <code>kernel.yama.ptrace_scope=1</code> on the Docker host.{' '}
-        <a href={PTRACE_URL} target="_blank" rel="noreferrer">
-          How
-        </a>
-      </span>
-    </div>
-  );
-}
-
 /**
  * Shown while the runner is current but does not say it is secured (`runnerNotSecured`): its service
  * does not run apart from the coding agents. Core then starts nothing in it.
@@ -87,8 +64,6 @@ export function RunnerNotSecuredBanner({ notSecured }: { notSecured: boolean | u
     </div>
   );
 }
-
-const UPGRADE_NOTES_URL = 'https://github.com/biohazardious/Emberline/blob/main/CHANGELOG.md';
 
 /**
  * Shown while the compose file has no `ops` service (`opsMissing`), or it does not answer: core runs

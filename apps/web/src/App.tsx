@@ -50,7 +50,6 @@ import {
   RunnerNotAnsweringBanner,
   RunnerNotSecuredBanner,
   RunnerSecurityUpdateBanner,
-  RunnerTraceBanner,
   SecurityBanner,
 } from './components/SecurityBanner';
 import { RunStatePill } from './components/RunStatePill';
@@ -978,7 +977,6 @@ function Shell() {
         <RunnerSecurityUpdateBanner outdated={system.data?.runnerOutdated} />
         <RunnerNotSecuredBanner notSecured={system.data?.runnerNotSecured} />
         <RunnerNotAnsweringBanner problem={system.data?.runnerProblem} />
-        <RunnerTraceBanner unrestricted={system.data?.runnerPtraceUnrestricted} />
 
         <div className="workbench-stage">
           <main className="content">

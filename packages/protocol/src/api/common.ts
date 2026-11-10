@@ -55,6 +55,13 @@ export const DockerEngineStatus = z.object({
 });
 export type DockerEngineStatus = z.infer<typeof DockerEngineStatus>;
 
+/**
+ * Where the upgrade notes of this release are (its GitHub release, which carries its CHANGELOG
+ * section): what a compose file of this release adds (the `ops` service). Core's `ops_missing`
+ * message and the web banner both link here.
+ */
+export const UPGRADE_NOTES_URL = 'https://github.com/biohazardious/Emberline/releases/tag/v0.7.0';
+
 export const SystemStatus = z.object({
   version: z.string(),
   apiVersion: z.number().int(),
@@ -82,11 +89,6 @@ export const SystemStatus = z.object({
    * longer than a restart takes, or cannot be used: core starts nothing anywhere until it answers.
    */
   opsMissing: z.boolean(),
-  /**
-   * The runner's host lets any process trace another of its user (Yama `ptrace_scope` 0, or no
-   * Yama): agents could take over the runner's own service. False while unknown.
-   */
-  runnerPtraceUnrestricted: z.boolean(),
   docker: DockerEngineStatus,
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;

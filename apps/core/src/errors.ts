@@ -1,4 +1,4 @@
-import { MATERIALS_ERROR_CODE } from '@emberline/protocol';
+import { MATERIALS_ERROR_CODE, UPGRADE_NOTES_URL } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -48,9 +48,6 @@ export const runnerNotSecured = () => unavailable('runner_not_secured', RUNNER_N
  */
 export const RUNNER_NOT_ANSWERING =
   'The runner has not answered for a while. See why with `docker compose logs runner`. A runner started as another user (`user:` in the compose file) stops at once, and its log says so: remove `user:` and start it again.';
-
-/** Where the upgrade notes are: what a compose file of this release adds (the `ops` service). */
-export const UPGRADE_NOTES_URL = 'https://github.com/biohazardious/Emberline/blob/main/CHANGELOG.md';
 
 /**
  * Core's own commands run in the `ops` container (a ptyd in ops mode), and the compose file has no such
