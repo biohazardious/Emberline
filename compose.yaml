@@ -85,10 +85,14 @@ services:
       - docker-client-certs:/run/emberline-docker-certs:ro
 
   # Core's own commands: git with the gateway's one-time URLs, merges, the Docker CLI. The runner's
-  # image, built by the runner service above; its ptyd runs everything as node, so files it writes in
-  # /workspaces are owned as the agents' are. Agents have no process here and cannot reach its socket:
-  # ops-socket is mounted only here and in core, and the agents' home, tools and logs not at all.
+  # image (the same build and tag as the runner service, so the second build is a cache hit); its
+  # ptyd runs everything as node, so files it writes in /workspaces are owned as the agents' are.
+  # Agents have no process here and cannot reach its socket: ops-socket is mounted only here and in
+  # core, and the agents' home, tools and logs not at all.
   ops:
+    build:
+      context: .
+      target: runner
     image: emberline/runner:local
     user: node
     command: ['/opt/emberline/wrappers/ops-entrypoint.sh']
