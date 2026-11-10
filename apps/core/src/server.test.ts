@@ -566,3 +566,40 @@ describe('auth', () => {
     expect(status).toMatch(/ 40[0134] /);
   });
 });
+
+describe("loadConfig: the ops container's socket and the git gateway's callers", () => {
+  const DEFAULT_OPS = '/run/emberline-ops/ptyd.sock';
+
+  it('defaults to the ops service socket', () => {
+    expect(loadConfig({}).opsSocket).toBe(DEFAULT_OPS);
+  });
+
+  it('an empty EMBERLINE_OPS_SOCKET without EMBERLINE_ALLOW_UNSECURED_RUNNER=1 keeps the default (fail closed)', () => {
+    expect(loadConfig({ EMBERLINE_OPS_SOCKET: '' }).opsSocket).toBe(DEFAULT_OPS);
+    expect(loadConfig({ EMBERLINE_OPS_SOCKET: '  ' }).opsSocket).toBe(DEFAULT_OPS);
+    expect(loadConfig({ EMBERLINE_OPS_SOCKET: '', EMBERLINE_ALLOW_UNSECURED_RUNNER: '0' }).opsSocket).toBe(
+      DEFAULT_OPS,
+    );
+  });
+
+  it('is none only when empty with EMBERLINE_ALLOW_UNSECURED_RUNNER=1 (the dev stack)', () => {
+    expect(
+      loadConfig({ EMBERLINE_OPS_SOCKET: '', EMBERLINE_ALLOW_UNSECURED_RUNNER: '1' }).opsSocket,
+    ).toBeNull();
+    // Unset with the dev flag is not "none": only an explicit empty value is.
+    expect(loadConfig({ EMBERLINE_ALLOW_UNSECURED_RUNNER: '1' }).opsSocket).toBe(DEFAULT_OPS);
+  });
+
+  it('takes an explicit path', () => {
+    expect(loadConfig({ EMBERLINE_OPS_SOCKET: '/srv/ops/ptyd.sock' }).opsSocket).toBe('/srv/ops/ptyd.sock');
+    expect(
+      loadConfig({ EMBERLINE_OPS_SOCKET: '/srv/ops/ptyd.sock', EMBERLINE_ALLOW_UNSECURED_RUNNER: '1' })
+        .opsSocket,
+    ).toBe('/srv/ops/ptyd.sock');
+  });
+
+  it('lets the ops service use the git gateway by default; EMBERLINE_RUNNER_HOSTS overrides it', () => {
+    expect(loadConfig({}).runnerHosts).toEqual(['ops']);
+    expect(loadConfig({ EMBERLINE_RUNNER_HOSTS: ' ptyd, runner ,' }).runnerHosts).toEqual(['ptyd', 'runner']);
+  });
+});
