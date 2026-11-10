@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import type {
@@ -9,13 +10,23 @@ import type {
 } from '@emberline/protocol';
 import { execCommand, RUNNER_BIN, runnerSystemCommand } from '../command-exec.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
-import { BROWSER_DAEMON_SCRIPT_PATH } from './browser-daemon-script.js';
+import {
+  BROWSER_DAEMON_SCRIPT,
+  type BrowserFiles,
+  IMAGE_BROWSER_FILES,
+  PLAYWRIGHT_HOOK_SCRIPT,
+} from './browser-daemon-script.js';
 
 export {
   AGENT_BROWSER_EVENTS_FILE,
   BROWSER_DAEMON_SCRIPT,
   BROWSER_DAEMON_SCRIPT_PATH,
   BROWSER_DAEMON_VERSION,
+  type BrowserFiles,
+  browserFilesFor,
+  DEV_BROWSER_FILES_DIR,
+  devBrowserFiles,
+  IMAGE_BROWSER_FILES,
   PLAYWRIGHT_HOOK_PATH,
   PLAYWRIGHT_HOOK_SCRIPT,
   RUNNER_BROWSER_DIR,
@@ -115,15 +126,51 @@ export function logBridgeErrorOnce(
   );
 }
 
+/** The dev stack's files written by this process (their content is this build's). */
+const devFilesWritten = new Set<string>();
+
+/**
+ * The dev stack only: writes the daemon's script and the agents' hook from this build's sources into
+ * the checkout, and makes the daemon's and the agents' directories, as the runner image has them.
+ */
+export async function writeDevBrowserFiles(files: BrowserFiles): Promise<void> {
+  if (!files.dev) return;
+  if (devFilesWritten.has(files.dev.dir) && existsSync(files.script) && existsSync(files.hook)) return;
+  await mkdir(files.dev.dir, { recursive: true });
+  for (const dir of files.dev.dirs) await mkdir(dir, { recursive: true });
+  for (const [file, content] of [
+    [files.script, BROWSER_DAEMON_SCRIPT],
+    [files.hook, PLAYWRIGHT_HOOK_SCRIPT],
+  ] as const) {
+    const current = await readFile(file, 'utf8').catch(() => null);
+    if (current !== content) await writeFile(file, content, { mode: 0o644 });
+  }
+  devFilesWritten.add(files.dev.dir);
+}
+
 /**
  * Makes sure the browser daemon listens on `browser.sock` in `socketDir` ({@link RUNNER_BROWSER_DIR}
  * in production), starting it when it does not: the runner image's script, run by the image's node
  * as the runner's `browser` user through ptyd `exec` (a launcher that starts it detached and exits).
  * Core writes nothing for it. A daemon that answers is used whatever its version: it is the one of
  * the runner's image, and only a new runner image (whose entrypoint clears the directory) changes it.
+ * The dev stack's `files` ({@link devBrowserFiles}) are the checkout's, written by core, and the
+ * daemon runs as the dev ptyd's user.
  */
-export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: string): Promise<string | null> {
+export async function ensureRunnerBrowserDaemon(
+  ptyd: PtydBridge,
+  socketDir: string,
+  files: BrowserFiles = IMAGE_BROWSER_FILES,
+): Promise<string | null> {
   const browserSock = path.join(socketDir, 'browser.sock');
+  if (
+    files.dev &&
+    !(await writeDevBrowserFiles(files).then(
+      () => true,
+      () => false,
+    ))
+  )
+    return null;
   const health = () =>
     socketRequest<{ ok?: boolean; bridgeError?: string | null }>(
       browserSock,
@@ -159,12 +206,12 @@ export async function ensureRunnerBrowserDaemon(ptyd: PtydBridge, socketDir: str
           file: RUNNER_BIN.node,
           args: [
             '-e',
-            `const { spawn } = require('node:child_process'); const p = spawn(process.execPath, [${JSON.stringify(BROWSER_DAEMON_SCRIPT_PATH)}], { detached: true, stdio: 'ignore', env: process.env }); p.unref(); process.exit(0);`,
+            `const { spawn } = require('node:child_process'); const p = spawn(process.execPath, [${JSON.stringify(files.script)}], { detached: true, stdio: 'ignore', env: process.env }); p.unref(); process.exit(0);`,
           ],
           cwd: '/',
           // HOME: Chromium's own files (its profile is set apart) go to the daemon's directory.
           env: { EMBERLINE_BROWSER_SOCKET: browserSock, HOME: socketDir },
-          runAs: 'browser',
+          ...(files.runAs ? { runAs: files.runAs } : {}),
           timeoutMs: 15_000,
         }),
       );
@@ -219,16 +266,16 @@ function browserQueryString(q: RunnerBrowserQuery): string {
 }
 
 /**
- * The daemon, started (or restarted after a version change) when needed; null while the runner is
- * away. With `start: false`, null unless it already listens.
+ * The daemon, started when needed; null while the runner is away. With `start: false`, null unless it
+ * already listens.
  */
 export async function runnerBrowserDaemon(
   ptyd: PtydBridge,
   socketDir: string,
-  opts: { start?: boolean } = {},
+  opts: { start?: boolean; files?: BrowserFiles } = {},
 ): Promise<RunnerBrowserDaemon | null> {
   if (opts.start === false && !existsSync(path.join(socketDir, 'browser.sock'))) return null;
-  const sock = await ensureRunnerBrowserDaemon(ptyd, socketDir);
+  const sock = await ensureRunnerBrowserDaemon(ptyd, socketDir, opts.files);
   if (!sock) return null;
   return {
     state: (q) => socketRequest<RunnerBrowserSnapshot>(sock, 'GET', `/state${browserQueryString(q)}`),

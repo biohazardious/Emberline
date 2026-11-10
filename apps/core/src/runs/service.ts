@@ -138,11 +138,7 @@ import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
-import {
-  ensureRunnerBrowserDaemon,
-  PLAYWRIGHT_HOOK_PATH,
-  RUNNER_BROWSER_DIR,
-} from '../factory/browser-daemon.js';
+import { browserFilesFor, ensureRunnerBrowserDaemon, RUNNER_BROWSER_DIR } from '../factory/browser-daemon.js';
 import {
   BROWSER_AGENT_WINDOW_MS,
   type BrowserAgentActivity,
@@ -1876,8 +1872,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== '0' &&
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== 'false');
 
+    const browserFiles = browserFilesFor(this.config);
     if (enablePlaywrightMcp && isRealClaude) {
-      await ensureRunnerBrowserDaemon(this.ptyd, RUNNER_BROWSER_DIR).catch(() => null);
+      await ensureRunnerBrowserDaemon(this.ptyd, RUNNER_BROWSER_DIR, browserFiles).catch(() => null);
     }
 
     // The run's own worktree, never main: a QA run checks its own work. hookUrl is how the runner
@@ -1909,8 +1906,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const modelSuffix =
       isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
     // The hook is the runner image's (root's): no agent can replace what its node processes preload.
+    // The dev stack's is the checkout's (written by ensureRunnerBrowserDaemon above).
     const playwrightEnv: Record<string, string> =
-      enablePlaywrightMcp && isRealClaude ? { NODE_OPTIONS: `--require ${PLAYWRIGHT_HOOK_PATH}` } : {};
+      enablePlaywrightMcp && isRealClaude ? { NODE_OPTIONS: `--require ${browserFiles.hook}` } : {};
     try {
       const session = await ptyd.spawn({
         file: spec.file,

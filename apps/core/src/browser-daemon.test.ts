@@ -11,7 +11,11 @@ import {
   AGENT_BROWSER_EVENTS_FILE,
   BROWSER_DAEMON_SCRIPT,
   BROWSER_DAEMON_VERSION,
+  browserFilesFor,
+  DEV_BROWSER_FILES_DIR,
+  devBrowserFiles,
   ensureRunnerBrowserDaemon,
+  IMAGE_BROWSER_FILES,
   isBrowsableUrl,
   logBridgeErrorOnce,
   PLAYWRIGHT_HOOK_PATH,
@@ -777,6 +781,65 @@ describe("the agents' browser events (read as untrusted input)", () => {
 });
 
 describe('starting the browser daemon', () => {
+  it("uses the image's files, except in the dev stack, whose are the checkout's", () => {
+    expect(browserFilesFor({ requireSecuredRunner: true })).toBe(IMAGE_BROWSER_FILES);
+    expect(IMAGE_BROWSER_FILES).toMatchObject({
+      script: '/opt/emberline/browser/browser-daemon.mjs',
+      hook: PLAYWRIGHT_HOOK_PATH,
+      runAs: 'browser',
+      dev: null,
+    });
+    // EMBERLINE_ALLOW_UNSECURED_RUNNER=1: compose.dev.yaml mounts the checkout at /workspace.
+    expect(DEV_BROWSER_FILES_DIR).toBe('/workspace/apps/core/dist/browser');
+    expect(browserFilesFor({ requireSecuredRunner: false })).toEqual({
+      script: '/workspace/apps/core/dist/browser/browser-daemon.mjs',
+      hook: '/workspace/apps/core/dist/browser/playwright-hook.cjs',
+      runAs: null,
+      dev: {
+        dir: DEV_BROWSER_FILES_DIR,
+        dirs: [RUNNER_BROWSER_DIR, path.dirname(AGENT_BROWSER_EVENTS_FILE)],
+      },
+    });
+  });
+
+  it("the dev stack's daemon runs as the dev ptyd's user from files core writes, the hook beside it", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'browser-dev-'));
+    const dir = path.join(root, 'run', 'browser');
+    const events = path.join(root, 'run', 'agent-events');
+    const files = devBrowserFiles(path.join(root, 'checkout', 'dist', 'browser'), [dir, events]);
+    const sock = path.join(dir, 'browser.sock');
+    const seen: ExecRequest[] = [];
+    let daemon: http.Server | undefined;
+    setCommandExecutor(async (request) => {
+      seen.push(request);
+      daemon = http.createServer((_req, res) => res.end(JSON.stringify({ ok: true, bridgeError: null })));
+      await new Promise<void>((resolve) => daemon?.listen(sock, resolve));
+      return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+    });
+    try {
+      const ptyd = { status: 'connected' } as unknown as PtydBridge;
+      // A stale file from an older build is replaced.
+      fs.mkdirSync(path.dirname(files.hook), { recursive: true });
+      writeFileSync(files.hook, 'stale');
+      await expect(ensureRunnerBrowserDaemon(ptyd, dir, files)).resolves.toBe(sock);
+      expect(fs.readFileSync(files.script, 'utf8')).toBe(BROWSER_DAEMON_SCRIPT);
+      expect(fs.readFileSync(files.hook, 'utf8')).toBe(PLAYWRIGHT_HOOK_SCRIPT);
+      expect(fs.statSync(events).isDirectory()).toBe(true);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.runAs).toBeUndefined();
+      expect(seen[0]?.args.join(' ')).toContain(JSON.stringify(files.script));
+      // Removed under it (a clean build): written again before the next run needs the hook.
+      fs.rmSync(files.hook);
+      await expect(ensureRunnerBrowserDaemon(ptyd, dir, files)).resolves.toBe(sock);
+      expect(fs.readFileSync(files.hook, 'utf8')).toBe(PLAYWRIGHT_HOOK_SCRIPT);
+      expect(seen).toHaveLength(1);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+      await new Promise((resolve) => (daemon ? daemon.close(resolve) : resolve(undefined)));
+      rmTemp(root);
+    }
+  });
+
   it("the daemon is started as browser with the image's script", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'browser-dir-'));
     const sock = path.join(dir, 'browser.sock');

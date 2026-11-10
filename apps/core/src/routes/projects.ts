@@ -92,6 +92,7 @@ import { gitCredentialForRemote } from '../forge/account-store.js';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
 import { accountCloneArgs } from '../git-gateway/remote-git.js';
 import {
+  browserFilesFor,
   isBrowsableUrl,
   RUNNER_BROWSER_DIR,
   runnerBrowserDaemon,
@@ -242,7 +243,7 @@ export function registerProjectRoutes(
       .run();
   };
   const browserTabs = new ProjectBrowserTabs(
-    (opts) => runnerBrowserDaemon(ptyd, RUNNER_BROWSER_DIR, opts),
+    (opts) => runnerBrowserDaemon(ptyd, RUNNER_BROWSER_DIR, { ...opts, files: browserFilesFor(config) }),
     (ids) =>
       new Set(
         db

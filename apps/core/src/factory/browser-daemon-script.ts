@@ -4,6 +4,7 @@
  * them to /opt/emberline/browser, root's: no agent can replace them, and core writes neither.
  * Kept apart from browser-daemon.ts so that the build can load it without the rest of core.
  */
+import path from 'node:path';
 import { PLAYTEST_HELD_MESSAGE } from '@emberline/protocol';
 
 export const BROWSER_DAEMON_VERSION = '1.6.0';
@@ -12,6 +13,11 @@ export const BROWSER_DAEMON_VERSION = '1.6.0';
 export const RUNNER_BROWSER_FILES_DIR = '/opt/emberline/browser';
 export const BROWSER_DAEMON_SCRIPT_PATH = `${RUNNER_BROWSER_FILES_DIR}/browser-daemon.mjs`;
 export const PLAYWRIGHT_HOOK_PATH = `${RUNNER_BROWSER_FILES_DIR}/playwright-hook.cjs`;
+/**
+ * The dev stack's (compose.dev.yaml): the checkout is /workspace in core and in the dev ptyd alike,
+ * and the image's files are not there. Core writes them from its own sources.
+ */
+export const DEV_BROWSER_FILES_DIR = '/workspace/apps/core/dist/browser';
 /**
  * The browser daemon's socket and state (`browser`'s directory, made afresh by the runner's
  * entrypoint; core sees the same path through the ptyd-socket volume).
@@ -22,6 +28,48 @@ export const RUNNER_BROWSER_DIR = '/run/emberline/browser';
  * it, so the daemon reads it as untrusted input).
  */
 export const AGENT_BROWSER_EVENTS_FILE = '/run/emberline/agent-events/agent-browser-events.jsonl';
+
+/** Where the daemon's script and the agents' hook are, and as whom ptyd starts the daemon. */
+export interface BrowserFiles {
+  script: string;
+  hook: string;
+  /** Null: as ptyd's own user (the dev stack's ptyd runs as node and has no other user). */
+  runAs: 'browser' | null;
+  /**
+   * Set in the dev stack: core writes the script and the hook here from its own sources, and makes
+   * the daemon's and the agents' directories, which no runner entrypoint made.
+   */
+  dev: { dir: string; dirs: string[] } | null;
+}
+
+/** The runner image's (root's files, the daemon as `browser`). */
+export const IMAGE_BROWSER_FILES: BrowserFiles = {
+  script: BROWSER_DAEMON_SCRIPT_PATH,
+  hook: PLAYWRIGHT_HOOK_PATH,
+  runAs: 'browser',
+  dev: null,
+};
+
+/** The dev stack's: files in the checkout, written by core, and the daemon as node. */
+export function devBrowserFiles(
+  dir = DEV_BROWSER_FILES_DIR,
+  dirs = [RUNNER_BROWSER_DIR, path.posix.dirname(AGENT_BROWSER_EVENTS_FILE)],
+): BrowserFiles {
+  return {
+    script: path.posix.join(dir, 'browser-daemon.mjs'),
+    hook: path.posix.join(dir, 'playwright-hook.cjs'),
+    runAs: null,
+    dev: { dir, dirs },
+  };
+}
+
+/**
+ * The image's files, except in the dev stack (EMBERLINE_ALLOW_UNSECURED_RUNNER=1), whose ptyd runs from
+ * source without the runner image.
+ */
+export function browserFilesFor(config: { requireSecuredRunner: boolean }): BrowserFiles {
+  return config.requireSecuredRunner ? IMAGE_BROWSER_FILES : devBrowserFiles();
+}
 
 /**
  * Preload hook (`NODE_OPTIONS="--require /opt/emberline/browser/playwright-hook.cjs"`) injected into
