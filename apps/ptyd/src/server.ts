@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, unlink } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import {
   ptydMethods,
 } from '@emberline/protocol';
 import { z } from 'zod';
-import { wrapForUser } from './drop.js';
+import { cwdProblem, droppableFile, lookupUid, wrapForUser } from './drop.js';
 import { encodeFrame, FrameDecoder } from './framing.js';
 import { ExecCwdError, runExec } from './exec.js';
 import { PtySession, pickBaseEnv, type SessionConfig } from './session.js';
@@ -27,7 +27,6 @@ const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 
 export interface PtydServerOptions extends SessionConfig {
   socketPath: string;
-  log?: (message: string) => void;
   /** Where the kernel's Yama ptrace setting is read (tests). */
   ptraceScopeFile?: string;
   /** `runner` (default): the agents' container. `ops`: core's own commands, out of the agents' reach. */
@@ -58,27 +57,15 @@ export interface PtydServerOptions extends SessionConfig {
 export function probeDrop(user: string): boolean {
   const uid = lookupUid(user);
   if (uid === undefined) return false;
-  const { file, args } = wrapForUser('/usr/bin/id', ['-u'], user);
+  const { file, args, cwd } = wrapForUser('/usr/bin/id', ['-u'], user, '/');
   const run = spawnSync(file, args, {
+    cwd,
     encoding: 'utf8',
     env: {},
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 10_000,
   });
   return run.status === 0 && run.stdout.trim() === String(uid);
-}
-
-/** The uid of `user` in a passwd file, or undefined when it has none. */
-export function lookupUid(user: string, file = '/etc/passwd'): number | undefined {
-  try {
-    for (const line of readFileSync(file, 'utf8').split('\n')) {
-      const [name, , uid] = line.split(':');
-      if (name === user && uid !== undefined && /^\d+$/.test(uid)) return Number(uid);
-    }
-  } catch {
-    // No passwd file: no such user.
-  }
-  return undefined;
 }
 
 /**
@@ -181,11 +168,13 @@ export class PtydServer {
    * Before a `spawn` or `exec`: refused in a runner that must be isolated and is not, or for a `runAs`
    * that is not one of the runner's service users.
    */
-  private assertMayStart(runAs: string | undefined): void {
+  private assertMayStart({ runAs, file }: { runAs?: string; file: string }): void {
     if (this.mode === 'runner' && this.options.requireIsolation) {
       const problem = this.isolationProblem();
       if (problem) throw new PtydError('not_isolated', `the runner starts nothing: ${problem}`);
     }
+    if ((runAs ?? this.dropTo) !== undefined && !droppableFile(file))
+      throw new PtydError('bad_request', `cannot start a file with "=" in its name as another user: ${file}`);
     if (runAs === undefined) return;
     if (this.mode === 'ops') throw new PtydError('bad_request', 'runAs is for the runner only');
     if (!this.serviceUsers.has(runAs))
@@ -288,12 +277,11 @@ export class PtydServer {
 
   private readonly handlers: { [M in Exclude<PtydMethod, 'attach'>]: Handler<M> } = {
     spawn: (_conn, params) => {
-      this.assertMayStart(params.runAs);
+      this.assertMayStart(params);
       const id = params.id ?? randomUUID();
       if (this.sessions.has(id)) throw new PtydError('conflict', `session ${id} already exists`);
-      if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
-        throw new PtydError('bad_request', `cwd does not exist: ${params.cwd}`);
-      }
+      const problem = cwdProblem(params.cwd);
+      if (problem) throw new PtydError('bad_request', problem);
       // `meta.noLog`: keep no on-disk log of this session (an import clone may show a token a server
       // echoes). The live terminal still streams; nothing is written to the log directory.
       const config = params.meta.noLog ? { ...this.options, logDir: undefined } : this.options;
@@ -310,7 +298,7 @@ export class PtydServer {
     }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
-      this.assertMayStart(params.runAs);
+      this.assertMayStart(params);
       const { execId } = params;
       if (execId && this.execs.has(execId))
         throw new PtydError('conflict', `exec ${execId} is already running`);

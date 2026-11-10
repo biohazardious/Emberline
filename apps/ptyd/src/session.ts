@@ -1,10 +1,10 @@
-import { createWriteStream, existsSync, renameSync, statSync, type WriteStream } from 'node:fs';
+import { chownSync, createWriteStream, existsSync, renameSync, statSync, type WriteStream } from 'node:fs';
 import path from 'node:path';
 import type { PtydParsedParams, ScreenSnapshot, SessionInfo } from '@emberline/protocol';
 import serializePkg from '@xterm/addon-serialize';
 import headlessPkg from '@xterm/headless';
 import nodePty, { type IPty } from 'node-pty';
-import { wrapForUser } from './drop.js';
+import { lookupUid, wrapForUser } from './drop.js';
 
 // Both xterm packages ship CommonJS bundles; destructure from the default export.
 const { Terminal } = headlessPkg;
@@ -43,6 +43,8 @@ export interface SessionConfig {
   maxLogBytes?: number;
   /** Scrollback lines kept by the headless terminal. */
   scrollback?: number;
+  /** Where ptyd's log lines go. */
+  log?: (message: string) => void;
 }
 
 export interface SessionListener {
@@ -95,12 +97,12 @@ export class PtySession {
       );
     }
 
-    const command = wrapForUser(params.file, params.args, user);
+    const command = wrapForUser(params.file, params.args, user, params.cwd);
     this.proc = nodePty.spawn(command.file, command.args, {
       name: 'xterm-256color',
       cols: params.cols,
       rows: params.rows,
-      cwd: params.cwd,
+      cwd: command.cwd,
       env: {
         ...(params.inheritEnv ? pickBaseEnv() : {}),
         ...params.env,
@@ -108,6 +110,8 @@ export class PtySession {
         COLORTERM: 'truecolor',
       },
     });
+
+    if (user !== undefined) this.giveTerminalTo(user, config);
 
     this.proc.onData((data) => {
       this.log?.write(data);
@@ -128,6 +132,24 @@ export class PtySession {
       if (this.disposed) notify();
       else this.term.write('', notify);
     });
+  }
+
+  /**
+   * The terminal's device is created as ptyd's; the session's user gets it, so the session can open
+   * its own terminal by name (`$(tty)`: screen, gpg's pinentry), as sessions could in 0.6, when they
+   * ran as ptyd's own user. Done right after the spawn, while setpriv is still changing the user: in
+   * practice before the command itself starts. Without CAP_CHOWN the session still runs on the
+   * terminal it was given, and the log says why it cannot open it by name.
+   */
+  private giveTerminalTo(user: string, config: SessionConfig): void {
+    const device = (this.proc as IPty & { ptsName?: string }).ptsName;
+    const uid = lookupUid(user);
+    try {
+      if (!device || uid === undefined) throw new Error(`no terminal device or no uid for ${user}`);
+      chownSync(device, uid, -1);
+    } catch (error) {
+      config.log?.(`session ${this.id}: cannot give its terminal to ${user}: ${(error as Error).message}`);
+    }
   }
 
   get running(): boolean {

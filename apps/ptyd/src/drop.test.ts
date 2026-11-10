@@ -1,10 +1,28 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { dropArgs, wrapForUser } from './drop.js';
-import { lookupUid, probeDrop } from './server.js';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cwdProblem, droppableFile, dropArgs, lookupUid, wrapForUser } from './drop.js';
+import { probeDrop } from './server.js';
 
 const isRoot = process.getuid?.() === 0;
+
+/**
+ * ptyd as the runner's entrypoint starts it: user ptyd, with exactly the runner's capabilities. The
+ * root tests run the drop from there, never from full root.
+ */
+const RUNNER_CAPS = '-all,+setuid,+setgid,+setpcap,+kill,+chown';
+const AS_RUNNER_PTYD = [
+  '/usr/bin/setpriv',
+  '--reuid=ptyd',
+  '--regid=ptyd',
+  '--init-groups',
+  `--inh-caps=${RUNNER_CAPS}`,
+  `--ambient-caps=${RUNNER_CAPS}`,
+  `--bounding-set=${RUNNER_CAPS}`,
+  '--',
+];
 
 /** A user's gids as /etc/group has them: its primary group and every group naming it as a member. */
 function groupsOf(user: string): number[] {
@@ -20,14 +38,16 @@ function groupsOf(user: string): number[] {
   return [...gids].sort((a, b) => a - b);
 }
 
-/** What a process started as `user` reports about itself. */
+/** What a process that ptyd (as the runner runs it) starts as `user` reports about itself. */
 function identityAs(user: string) {
-  const { file, args } = wrapForUser(
+  const { file, args, cwd } = wrapForUser(
     '/bin/sh',
     ['-c', 'id -u; id -G; grep -E "^Cap(Eff|Prm|Amb|Bnd|Inh):" /proc/self/status'],
     user,
+    '/',
   );
-  const run = spawnSync(file, args, { encoding: 'utf8' });
+  const [setpriv = '', ...prefix] = AS_RUNNER_PTYD;
+  const run = spawnSync(setpriv, [...prefix, file, ...args], { cwd, encoding: 'utf8' });
   expect(run.stderr).toBe('');
   expect(run.status).toBe(0);
   const [uid = '', groups = '', ...caps] = run.stdout.trim().split('\n');
@@ -49,67 +69,89 @@ const NO_CAPS = {
   CapAmb: '0000000000000000',
 };
 
+const DROP = [
+  '--reuid=node',
+  '--regid=node',
+  '--init-groups',
+  '--inh-caps=-all',
+  '--ambient-caps=-all',
+  '--bounding-set=-all',
+  '--',
+];
+
 describe('wrapForUser', () => {
-  it('starts the command through setpriv as the user, with no capabilities', () => {
-    expect(dropArgs('node')).toEqual([
-      '/usr/bin/setpriv',
-      '--reuid=node',
-      '--regid=node',
-      '--init-groups',
-      '--inh-caps=-all',
-      '--ambient-caps=-all',
-      '--bounding-set=-all',
-      '--',
-    ]);
-    expect(wrapForUser('/bin/sh', ['-c', 'id'], 'node')).toEqual({
+  it('starts the command through setpriv as the user, with no capabilities, entering cwd after the drop', () => {
+    expect(dropArgs('node')).toEqual(['/usr/bin/setpriv', ...DROP]);
+    expect(wrapForUser('/bin/sh', ['-c', 'id'], 'node', '/workspaces/demo')).toEqual({
       file: '/usr/bin/setpriv',
-      args: [
-        '--reuid=node',
-        '--regid=node',
-        '--init-groups',
-        '--inh-caps=-all',
-        '--ambient-caps=-all',
-        '--bounding-set=-all',
-        '--',
-        '/bin/sh',
-        '-c',
-        'id',
-      ],
+      args: [...DROP, '/usr/bin/env', '--chdir=/workspaces/demo', '--', '/bin/sh', '-c', 'id'],
+      cwd: '/',
     });
   });
 
   it('leaves the command as it is without a user', () => {
-    expect(wrapForUser('/bin/sh', ['-c', 'id'], undefined)).toEqual({ file: '/bin/sh', args: ['-c', 'id'] });
+    expect(wrapForUser('/bin/sh', ['-c', 'id'], undefined, '/tmp')).toEqual({
+      file: '/bin/sh',
+      args: ['-c', 'id'],
+      cwd: '/tmp',
+    });
+  });
+
+  it('only starts files through env that env cannot take for a variable', () => {
+    expect(droppableFile('/usr/bin/git')).toBe(true);
+    expect(droppableFile('A=1')).toBe(false);
+  });
+});
+
+describe('cwdProblem', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'ptyd-cwd-'));
+  });
+  afterEach(() => {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses only a directory that is missing or not one', () => {
+    expect(cwdProblem(dir)).toBeNull();
+    expect(cwdProblem(path.join(dir, 'missing'))).toBe(`cwd does not exist: ${path.join(dir, 'missing')}`);
+    writeFileSync(path.join(dir, 'file'), '');
+    expect(cwdProblem(path.join(dir, 'file'))).toMatch(/^cwd does not exist/);
+    expect(cwdProblem(path.join(dir, 'file', 'below'))).toMatch(/^cwd does not exist/); // ENOTDIR
+    // One ptyd may not enter (the agents' own) is left to the user the command runs as.
+    mkdirSync(path.join(dir, 'closed', 'inside'), { recursive: true });
+    chmodSync(path.join(dir, 'closed'), 0o000);
+    if (!isRoot) expect(cwdProblem(path.join(dir, 'closed', 'inside'))).toBeNull(); // EACCES
+    chmodSync(path.join(dir, 'closed'), 0o700);
   });
 });
 
 describe('the drop', () => {
-  // A process that is not root cannot change its user: the drop is only seen working as root
-  // (CI's check stage runs the tests as root).
-  it.skipIf(!isRoot)("drop to node: node's uid and groups (dialout for USB), no capabilities at all", () => {
-    const node = identityAs('node');
-    expect(node.uid).toBe(1000);
-    expect(node.groups).toEqual(groupsOf('node'));
-    expect(node.groups).toContain(20); // dialout: flashing boards over USB (compose.usb.yaml)
-    expect(node.caps).toEqual(NO_CAPS);
-  });
+  // A process that is not root cannot change its user: the drop is only seen working from root, here
+  // turned into the runner's ptyd first (CI's check stage runs the tests as root).
+  it.skipIf(!isRoot)(
+    "from the runner's ptyd to node: node's uid and groups (dialout for USB), no capabilities at all",
+    () => {
+      const node = identityAs('node');
+      expect(node.uid).toBe(1000);
+      expect(node.groups).toEqual(groupsOf('node'));
+      expect(node.groups).toContain(20); // dialout: flashing boards over USB (compose.usb.yaml)
+      expect(node.caps).toEqual(NO_CAPS);
+    },
+  );
 
-  it.skipIf(!isRoot)('drop to browser: uid 1002, no group beyond its own', () => {
+  it.skipIf(!isRoot)("from the runner's ptyd to browser: uid 1002, no group beyond its own", () => {
+    expect(lookupUid('browser')).toBe(1002);
     const browser = identityAs('browser');
     expect(browser.uid).toBe(1002);
     expect(browser.groups).toEqual([1002]);
     expect(browser.caps).toEqual(NO_CAPS);
   });
 
-  it.skipIf(!isRoot)('the probe sees the drop work as root', () => {
-    expect(lookupUid('node')).toBe(1000);
-    expect(probeDrop('node')).toBe(true);
-    expect(probeDrop('browser')).toBe(true);
-    expect(probeDrop('nobody-here')).toBe(false);
-  });
-
   // Runs wherever the tests do not run as root (the dev container): there the drop cannot work,
-  // and the probe must say so instead of trusting it.
+  // and the probe must say so instead of trusting it. (The probe passing in the runner's ptyd is
+  // shown in server.test.ts, where that ptyd says it is secured.)
   it.skipIf(isRoot)('the probe says a process that is not root cannot drop', () => {
     expect(probeDrop('browser')).toBe(false);
     expect(probeDrop('node')).toBe(false);
