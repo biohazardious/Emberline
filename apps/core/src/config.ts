@@ -38,8 +38,8 @@ export interface CoreConfig {
    */
   sessionBindIp?: boolean;
   /**
-   * Host names of Emberline's own containers (compose services `runner`, `docker`): a session cookie
-   * that arrives from their addresses is refused. `EMBERLINE_CONTAINER_HOSTS`, comma list; unset: none.
+   * Host names of Emberline's own containers (compose services `runner`, `ops`, `docker`): a session
+   * cookie that arrives from their addresses is refused. `EMBERLINE_CONTAINER_HOSTS`, comma list.
    */
   containerHosts?: string[];
   /**
@@ -160,7 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     trustProxy: env.EMBERLINE_TRUST_PROXY === 'true',
     sessionTtlMs: Number(env.EMBERLINE_SESSION_TTL_DAYS ?? 30) * 86_400_000,
     sessionBindIp: env.EMBERLINE_SESSION_BIND_IP?.trim().toLowerCase() !== 'false',
-    containerHosts: (env.EMBERLINE_CONTAINER_HOSTS ?? 'runner,docker')
+    containerHosts: (env.EMBERLINE_CONTAINER_HOSTS ?? 'runner,ops,docker')
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),

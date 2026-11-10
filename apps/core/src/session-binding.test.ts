@@ -689,8 +689,9 @@ describe('container addresses', () => {
     }
   });
 
-  it('defaults to the compose service names and can be set', () => {
-    expect(loadConfig({}).containerHosts).toEqual(['runner', 'docker']);
+  it('defaults to the compose service names (ops included) and can be set', () => {
+    // Every container of Emberline's own: the runner, ops (core's commands) and the engine.
+    expect(loadConfig({}).containerHosts).toEqual(['runner', 'ops', 'docker']);
     expect(loadConfig({ EMBERLINE_CONTAINER_HOSTS: 'agents, engine' }).containerHosts).toEqual([
       'agents',
       'engine',
