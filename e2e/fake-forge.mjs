@@ -3,6 +3,8 @@
  * REST under /api/v1 and git smart HTTP through `git http-backend` (CGI). Two debug routes without
  * auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of refs/heads/main
  * in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on it, as a push from elsewhere.
+ * POST /_e2e/hold makes fetches (git-upload-pack) wait, GET /_e2e/held counts the waiting ones and
+ * POST /_e2e/release lets them through: a clone that is running while the test looks around.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -81,6 +83,10 @@ function userOf(header) {
   return pass === token && [username, 'x-access-token', 'oauth2'].includes(user) ? username : null;
 }
 
+/** Fetches waiting for /_e2e/release while /_e2e/hold is on. */
+let holding = false;
+const held = [];
+
 const json = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -136,6 +142,16 @@ createServer((req, res) => {
       g(['update-ref', 'refs/heads/main', commit, parent]);
       return json(res, 200, { main: commit });
     }
+    if (req.method === 'POST' && url.pathname === '/_e2e/hold') {
+      holding = true;
+      return json(res, 200, { holding });
+    }
+    if (req.method === 'GET' && url.pathname === '/_e2e/held') return json(res, 200, { held: held.length });
+    if (req.method === 'POST' && url.pathname === '/_e2e/release') {
+      holding = false;
+      for (const go of held.splice(0)) go();
+      return json(res, 200, { holding });
+    }
     const git = /^\/(.+\.git)\/(?:info\/refs|git-upload-pack|git-receive-pack)$/.exec(url.pathname);
     if (git) {
       const user = userOf(req.headers.authorization);
@@ -147,7 +163,9 @@ createServer((req, res) => {
         res.writeHead(404).end();
         return;
       }
-      backend(req, res, url.pathname, url.search.slice(1), user);
+      const go = () => backend(req, res, url.pathname, url.search.slice(1), user);
+      if (holding && req.method === 'POST' && url.pathname.endsWith('/git-upload-pack')) held.push(go);
+      else go();
       return;
     }
     const user = userOf(req.headers.authorization);

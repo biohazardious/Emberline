@@ -24,19 +24,14 @@ PTYD=(/usr/local/bin/node /opt/emberline/ptyd/dist/main.js)
 PTYD_CAPS=-all,+setuid,+setgid,+setpcap,+kill,+chown
 TOOLS_DIRS=("${TOOLS_DIR}/bin" "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib" "${TOOLS_DIR}/pipx")
 
-if [ "$EUID" != 0 ]; then
-  # Started as another user (a compose file that sets `user:`): ptyd cannot run as a user of its own,
-  # so Emberline treats this runner as not secured and starts nothing in it (see SECURITY.md).
-  echo "runner: started as uid $EUID, not root: ptyd cannot run under its own user, and Emberline will start nothing in this runner. Remove \`user:\` from the runner service." >&2
-  /usr/bin/mkdir -p "${TOOLS_DIRS[@]}" 2>/dev/null || true
-  unset EMBERLINE_PTYD_DROP_TO EMBERLINE_PTYD_SERVICE_USERS EMBERLINE_PTYD_REQUIRE_ISOLATION
-  EMBERLINE_PTYD_MODE=runner EMBERLINE_PTYD_SOCKET="$SOCKET" exec "${PTYD[@]}"
-fi
-
 fail() {
   echo "runner: $1; stopping" >&2
   exit 1
 }
+
+# Started as another user (a compose file that sets `user:`): ptyd cannot run under a user of its own,
+# and the socket directory is not this user's to listen in. The runner stops; core waits for it.
+[ "$EUID" = 0 ] || fail "started as uid ${EUID}, not root: ptyd cannot run under its own user. Remove \`user:\` from the runner service"
 
 HOME=/home/node /usr/bin/setpriv --reuid=node --regid=node --init-groups --inh-caps=-all \
   /usr/bin/mkdir -p "${TOOLS_DIRS[@]}" 2>/dev/null || true
@@ -59,6 +54,13 @@ HOME=/home/node /usr/bin/setpriv --reuid=node --regid=node --init-groups --inh-c
 # What the agents' Playwright hook reports to the browser daemon.
 /usr/bin/mkdir -m 0755 -- "$RUN_DIR/agent-events"
 /usr/bin/chown -h node:node "$RUN_DIR/agent-events"
+
+# The mount point of the ops service's socket volume (same image): only core and ops mount it, so in
+# the runner it is an empty directory, removed. A volume mounted there stops the runner.
+if [ -e /run/emberline-ops ] || [ -L /run/emberline-ops ]; then
+  /usr/bin/rmdir -- /run/emberline-ops 2>/dev/null ||
+    fail "/run/emberline-ops is mounted in the runner: only core and ops may mount the ops-socket volume"
+fi
 
 # ptyd's session logs (the runner-logs volume), the runner user's before 0.7.0: ptyd's only. Links in
 # it are re-owned themselves, never what they point at.

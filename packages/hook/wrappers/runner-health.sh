@@ -4,10 +4,9 @@
 #
 # Runner: healthy once ptyd answers on its socket and says it is secured (it runs as its own user and
 # its drop to the agents' user works); core waits for this before it starts. The healthcheck runs as
-# root, so it may connect. A runner started as another user (`user:` in a compose file) cannot be
-# secured: it is healthy once ptyd answers, and Emberline then says it is not secured and starts
-# nothing in it.
-# Ops: healthy once its ptyd answers.
+# root, so it may connect. A runner started as another user (`user:` in a compose file) stops at once
+# (runner-entrypoint.sh) and is never healthy.
+# Ops (`runner-health.sh ops`, as the ops service's user): healthy once its ptyd answers.
 #
 # Only the image's own binaries, by path, and bash's builtins (see runner-entrypoint.sh); started from
 # `/`, never from a directory agents can write.
@@ -17,7 +16,7 @@ if [ "${1:-}" = ops ]; then
   NEED_SECURED=0
 else
   SOCKET=/run/emberline/ptyd/ptyd.sock
-  NEED_SECURED=$([ "$EUID" = 0 ] && echo 1 || echo 0)
+  NEED_SECURED=1
 fi
 [ -S "$SOCKET" ] && [ ! -L "$SOCKET" ] || exit 1
 exec /usr/local/bin/node --input-type=module -e '

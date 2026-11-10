@@ -14,12 +14,14 @@ services:
     image: emberline/runner:e2e
     # Preview ports stay unpublished: a running Emberline already holds them.
     ports: !reset []
+  ops:
+    image: emberline/runner:e2e
   docker:
     deploy:
       replicas: 0
     ports: !reset []
-  # A fake Gitea for the repository step (REST + git over HTTP), on the e2e network only. The runner's git
-  # reaches it through core's git gateway (core adds the token), so core and runner both need the e2e network.
+  # A fake Gitea for the repository step (REST + git over HTTP), on the e2e network only. Core's git (in
+  # the ops service) reaches it through core's git gateway (core adds the token).
   forge:
     image: emberline/runner:e2e
     entrypoint: ['node', '/e2e/fake-forge.mjs']

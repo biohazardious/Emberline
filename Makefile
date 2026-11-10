@@ -42,13 +42,17 @@ attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
 
-e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, removed afterwards)
+e2e: ## End-to-end smoke test on an isolated core + runner + ops stack, volumes as 0.6.x left them (port 7498, removed afterwards)
 	@set -e; ws=$$(mktemp -d); chmod 777 $$ws; \
 	export EMBERLINE_WORKSPACES_HOST_DIR=$$ws; \
 	if [ -z "$(E2E_PREBUILT)" ]; then \
 	  docker build -q --target core -t emberline/core:e2e . >/dev/null; \
 	  docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
 	fi; \
+	$(E2E) create >/dev/null && docker run --rm --user root -v "$$PWD/e2e:/e2e:ro" -v $$ws:/workspaces \
+	  -v emberline-e2e_ptyd-socket:/run/emberline -v emberline-e2e_runner-logs:/var/log/emberline \
+	  -v emberline-e2e_runner-home:/home/node -v emberline-e2e_runner-tools:/opt/ai-tools \
+	  emberline/runner:e2e /e2e/seed-0.6-volumes.sh || { $(E2E) down -v >/dev/null 2>&1; exit 1; }; \
 	$(E2E) up -d --wait; \
 	status=0; docker run --rm --network emberline-e2e_default -v "$$PWD/e2e:/e2e:ro" emberline/core:e2e \
 	  node /e2e/smoke.mjs http://core:7420 || status=$$?; \
@@ -57,16 +61,16 @@ e2e: ## End-to-end smoke test on an isolated core + runner stack (port 7498, rem
 
 # --- production stack ------------------------------------------------------
 
-up: ## Build and start core + runner + the Docker engine (off with EMBERLINE_DOCKER_ENGINE=0 in .env)
+up: ## Build and start core + runner + ops + the Docker engine (off with EMBERLINE_DOCKER_ENGINE=0 in .env)
 	$(PROD) up -d --build
 
-down: ## Stop core + runner + the Docker engine
+down: ## Stop core + runner + ops + the Docker engine
 	$(PROD) down
 
 logs: ## Follow logs
 	$(PROD) logs -f
 
-upgrade-core: ## Rebuild/restart core only (and create a missing Docker engine); agents keep running. Not enough when the release notes say so (0.6.1 does): use `make up`
+upgrade-core: ## Rebuild/restart core only (and create a missing Docker engine); agents keep running. Not enough when the release notes say so (0.6.1 and 0.7.0 do): use `make up`
 	@[ -n "$$($(PROD) ps -aq docker)" ] || $(PROD) up -d --no-deps docker
 	$(PROD) up -d --build --no-deps core
 
