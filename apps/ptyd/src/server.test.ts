@@ -79,6 +79,7 @@ afterEach(async () => {
 });
 
 const ownUid = process.getuid?.() ?? 0;
+const isRoot = ownUid === 0;
 
 /** A passwd file with these users, so a test decides which uid `dropTo` names whoever runs it. */
 function passwd(users: Record<string, number>): string {
@@ -148,7 +149,8 @@ describe('modes and isolation', () => {
     const passwdFile = passwd({ node: ownUid + 1, self: ownUid });
     const secured = async (options: Omit<PtydServerOptions, 'socketPath'> & { socketDir?: string }) => {
       let result: boolean | undefined;
-      await withPtyd({ mode: 'runner', passwdFile, ...options }, async (client) => {
+      // The drop is taken to work here (only root could make it: see the root tests below).
+      await withPtyd({ mode: 'runner', passwdFile, probeDrop: () => true, ...options }, async (client) => {
         result = (await client.hello()).secured;
       });
       return result;
@@ -212,10 +214,14 @@ describe('modes and isolation', () => {
       expect(await client.hello()).toMatchObject({ mode: 'runner', secured: false });
       expect((await client.list()).sessions).toEqual([]);
     });
-    // Isolated, it starts what it is asked to.
+    // Isolated, it starts what it is asked to (as `node`: a drop only root makes, so the command
+    // itself runs to a result here, and to exit 0 as root).
     const passwdFile = passwd({ node: ownUid + 1 });
-    await withPtyd({ mode: 'runner', requireIsolation: true, dropTo: 'node', passwdFile }, async (client) => {
-      expect(await client.exec({ file: 'true', cwd: dir })).toMatchObject({ exitCode: 0 });
+    const isolated = { mode: 'runner', requireIsolation: true, dropTo: 'node', passwdFile } as const;
+    await withPtyd({ ...isolated, probeDrop: () => true }, async (client) => {
+      const result = await client.exec({ file: 'true', cwd: dir });
+      expect(result).toMatchObject({ timedOut: false });
+      if (isRoot) expect(result.exitCode).toBe(0);
     });
     // Without requireIsolation (the dev stack) an unisolated runner still starts things.
     await withPtyd({ mode: 'runner' }, async (client) => {
@@ -259,6 +265,124 @@ describe('modes and isolation', () => {
     expect(await new Promise((resolve) => bogus.once('exit', resolve))).toBe(1);
     expect(existsSync(path.join(dir, 'bogus.sock'))).toBe(false);
   }, 60_000);
+});
+
+/** What a process reports about itself: uid, then gids, then its capability sets. */
+const IDENTITY =
+  'echo "who:$(id -u):$(id -G):$(grep -E "^Cap(Eff|Prm|Amb|Bnd)" /proc/self/status | tr -s "\t\n" "  ")"';
+
+function parseIdentity(text: string) {
+  const match = /who:(\d+):([\d ]+):(.*)/.exec(text);
+  if (!match) throw new Error(`no identity in ${JSON.stringify(text)}`);
+  const [, uid = '', groups = '', caps = ''] = match;
+  return {
+    uid: Number(uid),
+    groups: groups
+      .trim()
+      .split(' ')
+      .map(Number)
+      .sort((a, b) => a - b),
+    caps: caps.trim(),
+  };
+}
+
+/** node's gids as /etc/group has them (its own group and every group naming it). */
+function nodeGroups(): number[] {
+  const gids = new Set<number>([1000]);
+  for (const line of readFileSync('/etc/group', 'utf8').split('\n')) {
+    const [, , gid, members = ''] = line.split(':');
+    if (gid !== undefined && members.split(',').includes('node')) gids.add(Number(gid));
+  }
+  return [...gids].sort((a, b) => a - b);
+}
+
+/** In a session: waits for a line of input first, so nothing is printed before the client attached. */
+const SESSION_IDENTITY = `read line; ${IDENTITY}; echo who-end`;
+
+/** Starts a session that prints its identity, and reads it from the terminal. */
+async function sessionIdentity(client: PtydClient, params: { runAs?: 'browser' }) {
+  const info = await client.spawn({
+    file: '/bin/sh',
+    args: ['-c', SESSION_IDENTITY],
+    cwd: dir,
+    cols: 400,
+    rows: 24,
+    ...params,
+  });
+  const output = collect(client, () => info.id);
+  await client.attach(info.id);
+  await client.write(info.id, '\r');
+  await output.waitFor('who-end');
+  return { info, identity: parseIdentity(output.text) };
+}
+
+const NO_CAPS =
+  'CapPrm: 0000000000000000 CapEff: 0000000000000000 CapBnd: 0000000000000000 CapAmb: 0000000000000000';
+
+describe("the drop to the agents' user", () => {
+  // Only root can start a process as another user; CI's check stage runs the tests as root.
+  it.skipIf(!isRoot)(
+    "a runner ptyd starts sessions and commands as node, with node's groups and no capabilities",
+    async () => {
+      await withPtyd({ mode: 'runner', dropTo: 'node', requireIsolation: true }, async (client, other) => {
+        expect(other.isolationProblem()).toBeNull();
+        expect(await client.hello()).toMatchObject({ secured: true });
+
+        const ran = await client.exec({ file: '/bin/sh', args: ['-c', IDENTITY], cwd: dir });
+        const command = parseIdentity(ran.stdout);
+        expect(command).toEqual({ uid: 1000, groups: nodeGroups(), caps: NO_CAPS });
+        expect(command.groups).toContain(20); // dialout: flashing boards over USB
+
+        const session = await sessionIdentity(client, {});
+        expect(session.identity).toEqual({ uid: 1000, groups: nodeGroups(), caps: NO_CAPS });
+        // What core asked for is what it reads back, not the setpriv in front of it.
+        expect(session.info).toMatchObject({ file: '/bin/sh', args: ['-c', SESSION_IDENTITY] });
+      });
+    },
+  );
+
+  it.skipIf(!isRoot)('runAs browser runs as browser, with no group beyond its own', async () => {
+    await withPtyd({ mode: 'runner', dropTo: 'node', serviceUsers: ['browser'] }, async (client) => {
+      const ran = await client.exec({ file: '/bin/sh', args: ['-c', IDENTITY], cwd: dir, runAs: 'browser' });
+      expect(parseIdentity(ran.stdout)).toEqual({ uid: 1002, groups: [1002], caps: NO_CAPS });
+      const session = await sessionIdentity(client, { runAs: 'browser' });
+      expect(session.identity).toEqual({ uid: 1002, groups: [1002], caps: NO_CAPS });
+    });
+  });
+
+  it.skipIf(!isRoot)('times out and cancels a dropped command with its whole process group', async () => {
+    await withPtyd({ mode: 'runner', dropTo: 'node' }, async (client) => {
+      const started = Date.now();
+      const timedOut = await client.exec({
+        file: '/bin/sh',
+        args: ['-c', 'sleep 30 & sleep 30; echo never'],
+        cwd: dir,
+        timeoutMs: 300,
+      });
+      expect(timedOut).toMatchObject({ timedOut: true });
+      expect(Date.now() - started).toBeLessThan(10_000);
+
+      const running = client.exec({ file: '/bin/sleep', args: ['30'], cwd: dir, execId: 'drop-cancel' });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(await client.execCancel('drop-cancel')).toEqual({ cancelled: true });
+      expect(await running).toMatchObject({ cancelled: true, timedOut: false });
+
+      const session = await client.spawn({ file: '/bin/sleep', args: ['30'], cwd: dir });
+      await client.attach(session.id);
+      const exited = new Promise<string>((resolve) => client.on('exit', (id) => resolve(id)));
+      await client.kill(session.id, 'SIGKILL');
+      expect(await exited).toBe(session.id);
+    });
+  });
+});
+
+describe('an ops ptyd', () => {
+  it('ignores a user to drop to: it runs everything as itself', async () => {
+    await withPtyd({ mode: 'ops', dropTo: 'browser' }, async (client) => {
+      const ran = await client.exec({ file: '/bin/sh', args: ['-c', 'id -u'], cwd: dir });
+      expect(ran).toMatchObject({ exitCode: 0, stdout: `${ownUid}\n` });
+    });
+  });
 });
 
 describe("the host's Yama ptrace setting", () => {

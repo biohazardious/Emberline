@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, unlink } from 'node:fs/promises';
@@ -16,6 +17,7 @@ import {
   ptydMethods,
 } from '@emberline/protocol';
 import { z } from 'zod';
+import { wrapForUser } from './drop.js';
 import { encodeFrame, FrameDecoder } from './framing.js';
 import { ExecCwdError, runExec } from './exec.js';
 import { PtySession, pickBaseEnv, type SessionConfig } from './session.js';
@@ -30,7 +32,10 @@ export interface PtydServerOptions extends SessionConfig {
   ptraceScopeFile?: string;
   /** `runner` (default): the agents' container. `ops`: core's own commands, out of the agents' reach. */
   mode?: PtydMode;
-  /** Runner mode: the user every session and command runs as (the agents'); unset in the dev stack. */
+  /**
+   * Runner mode: the user every session and command runs as (the agents'); unset in the dev stack.
+   * Ignored in ops mode, which runs everything as itself.
+   */
   dropTo?: string;
   /** Runner mode: the service users a `spawn` or `exec` may name as `runAs` (default none). */
   serviceUsers?: string[];
@@ -46,11 +51,21 @@ export interface PtydServerOptions extends SessionConfig {
 }
 
 /**
- * Whether ptyd can start a process as `user`, asked once before ptyd calls itself secured. Sessions
- * and commands are not started as another user yet, so there is nothing to try.
+ * Whether ptyd can start a process as `user`, asked once before ptyd calls itself secured: it starts
+ * `id -u` exactly as it starts sessions and commands, and the drop works when that prints the user's
+ * uid. Anything else (setpriv missing, a capability it needs but ptyd lacks, no such user) is a no.
  */
-export function probeDrop(_user: string): boolean {
-  return true;
+export function probeDrop(user: string): boolean {
+  const uid = lookupUid(user);
+  if (uid === undefined) return false;
+  const { file, args } = wrapForUser('/usr/bin/id', ['-u'], user);
+  const run = spawnSync(file, args, {
+    encoding: 'utf8',
+    env: {},
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10_000,
+  });
+  return run.status === 0 && run.stdout.trim() === String(uid);
 }
 
 /** The uid of `user` in a passwd file, or undefined when it has none. */
@@ -114,6 +129,8 @@ export class PtydServer {
   private readonly ptraceScope: number | null;
   private readonly mode: PtydMode;
   private readonly serviceUsers: ReadonlySet<string>;
+  /** Whom sessions and commands run as unless they name a service user: runner mode only. */
+  private readonly dropTo: string | undefined;
   /** The probe's answer, asked once: whether a user can be dropped to does not change. */
   private dropWorks?: boolean;
 
@@ -121,6 +138,7 @@ export class PtydServer {
     this.ptraceScope = readPtraceScope(options.ptraceScopeFile);
     this.mode = options.mode ?? 'runner';
     this.serviceUsers = new Set(options.serviceUsers ?? []);
+    this.dropTo = this.mode === 'runner' ? options.dropTo : undefined;
   }
 
   get socketPath(): string {
@@ -140,7 +158,7 @@ export class PtydServer {
    */
   isolationProblem(): string | null {
     if (this.mode === 'ops') return null;
-    const { dropTo } = this.options;
+    const { dropTo } = this;
     if (!dropTo) return 'it has no user to start sessions as (EMBERLINE_PTYD_DROP_TO)';
     const target = lookupUid(dropTo, this.options.passwdFile);
     if (target === undefined) return `the user ${dropTo} does not exist`;
@@ -190,6 +208,10 @@ export class PtydServer {
     await chmod(socketPath, 0o600);
     this.server = server;
     this.options.log?.(`ptyd listening on ${socketPath} (${this.mode} mode)`);
+    if (this.mode === 'ops' && this.options.dropTo)
+      this.options.log?.(
+        `ignoring the user to drop to (${this.options.dropTo}): ops runs everything as itself`,
+      );
     const problem = this.isolationProblem();
     if (problem)
       this.options.log?.(
@@ -275,7 +297,7 @@ export class PtydServer {
       // `meta.noLog`: keep no on-disk log of this session (an import clone may show a token a server
       // echoes). The live terminal still streams; nothing is written to the log directory.
       const config = params.meta.noLog ? { ...this.options, logDir: undefined } : this.options;
-      const session = new PtySession(id, params, config);
+      const session = new PtySession(id, params, config, params.runAs ?? this.dropTo);
       this.sessions.set(id, session);
       this.options.log?.(`spawned ${id} (pid ${session.info().pid}): ${params.file}`);
       return session.info();
@@ -293,11 +315,16 @@ export class PtydServer {
       if (execId && this.execs.has(execId))
         throw new PtydError('conflict', `exec ${execId} is already running`);
       try {
-        const result = await runExec(params, pickBaseEnv(), (cancel) => {
-          if (!execId) return;
-          if (cancel) this.execs.set(execId, cancel);
-          else this.execs.delete(execId);
-        });
+        const result = await runExec(
+          params,
+          pickBaseEnv(),
+          (cancel) => {
+            if (!execId) return;
+            if (cancel) this.execs.set(execId, cancel);
+            else this.execs.delete(execId);
+          },
+          params.runAs ?? this.dropTo,
+        );
         this.options.log?.(
           `exec ${params.file} ${params.args.slice(0, 3).join(' ')} -> ${result.timedOut ? 'timeout' : (result.exitCode ?? result.signal)}`,
         );

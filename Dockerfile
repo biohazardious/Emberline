@@ -34,6 +34,14 @@ RUN groupmod -n node ubuntu \
   && usermod -l node -d /home/node -m ubuntu \
   && mkdir -p /home/node /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/npm/lib /opt/ai-tools/pipx \
   && chown -R node:node /home/node /opt/ai-tools
+# The runner's service users: ptyd (sessions and commands are started as node from it) and browser
+# (the agents' headless browser), with no login and no home. emberline-core is the group whose members
+# may use the runner's ptyd socket: only core's user, added in the core stage, never an agent.
+RUN groupadd -g 1001 ptyd \
+  && useradd -u 1001 -g ptyd -M -d /nonexistent -s /usr/sbin/nologin ptyd \
+  && groupadd -g 1002 browser \
+  && useradd -u 1002 -g browser -M -d /nonexistent -s /usr/sbin/nologin browser \
+  && groupadd -g 1500 emberline-core
 # apt: retry flaky mirrors (Launchpad answered 503s) and never wait forever on a dead connection.
 RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
     > /etc/apt/apt.conf.d/80-emberline-retries

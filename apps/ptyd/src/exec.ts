@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import type { PtydParsedParams, PtydResult } from '@emberline/protocol';
+import { wrapForUser } from './drop.js';
 
 /**
  * Runs one command to completion without a terminal. Used by core for git and build steps so
@@ -11,12 +12,15 @@ export function runExec(
   baseEnv: Record<string, string>,
   /** Called with a canceller once the process runs (for `execCancel`), and with null when it ended. */
   onCancellable?: (cancel: (() => void) | null) => void,
+  /** Who the command runs as ({@link wrapForUser}); ptyd's own user when undefined. */
+  user?: string,
 ): Promise<PtydResult<'exec'>> {
   if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
     return Promise.reject(new ExecCwdError(`cwd does not exist: ${params.cwd}`));
   }
   return new Promise((resolve) => {
-    const child = spawn(params.file, params.args, {
+    const command = wrapForUser(params.file, params.args, user);
+    const child = spawn(command.file, command.args, {
       cwd: params.cwd,
       env: params.inheritEnv ? { ...baseEnv, ...params.env } : { ...params.env },
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -4,6 +4,7 @@ import type { PtydParsedParams, ScreenSnapshot, SessionInfo } from '@emberline/p
 import serializePkg from '@xterm/addon-serialize';
 import headlessPkg from '@xterm/headless';
 import nodePty, { type IPty } from 'node-pty';
+import { wrapForUser } from './drop.js';
 
 // Both xterm packages ship CommonJS bundles; destructure from the default export.
 const { Terminal } = headlessPkg;
@@ -72,7 +73,8 @@ export class PtySession {
   private disposed = false;
   private readonly flushWaiters = new Set<{ reject: (error: Error) => void }>();
 
-  constructor(id: string, params: PtydParsedParams<'spawn'>, config: SessionConfig = {}) {
+  /** `user`: who the process runs as ({@link wrapForUser}); ptyd's own user when undefined. */
+  constructor(id: string, params: PtydParsedParams<'spawn'>, config: SessionConfig = {}, user?: string) {
     this.id = id;
     this.spawnParams = params;
 
@@ -93,7 +95,8 @@ export class PtySession {
       );
     }
 
-    this.proc = nodePty.spawn(params.file, params.args, {
+    const command = wrapForUser(params.file, params.args, user);
+    this.proc = nodePty.spawn(command.file, command.args, {
       name: 'xterm-256color',
       cols: params.cols,
       rows: params.rows,
