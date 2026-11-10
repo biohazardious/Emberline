@@ -4,9 +4,18 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-10
+
+A bugfix release: importing a repository over ssh no longer hangs on ssh's host key question.
+
 ### Fixed
 
 - Importing a repository from an ssh address (`git@github.com:…`) whose host the runner had never connected to stopped at ssh's "Are you sure you want to continue connecting (yes/no)?" in the clone terminal, which no one could answer, and the wizard waited for ever. Emberline's ssh now never asks: the runner image comes with GitHub's, GitLab's and Bitbucket's published host keys, so these hosts just work, and the clone from any other unknown host fails at once with what to do (add its key to the runner's `~/.ssh/known_hosts`, checked against the fingerprint the host publishes). A host key that changed fails the same way. A passphrase-protected key no longer waits for its passphrase either; the clone fails instead.
+
+### Upgrade notes
+
+- Update both images: the host keys of GitHub, GitLab and Bitbucket come with the runner image, and core's ssh no longer asks about an unknown key. From source, run `git pull && make up`; with the published images, `docker compose pull && docker compose up -d`. Both restart the runner, which stops running agents, so update when they are idle. After `make upgrade-core` alone, an ssh import or push from these hosts fails with the host key message until the runner is updated too, unless the runner user's `~/.ssh/known_hosts` already has their key.
+- Nothing to migrate, and the compose file is unchanged.
 
 ## [0.6.1] - 2026-10-24
 
@@ -557,7 +566,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/biohazardious/emberline/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/biohazardious/emberline/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/biohazardious/emberline/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/biohazardious/emberline/compare/v0.5.1...v0.5.2
