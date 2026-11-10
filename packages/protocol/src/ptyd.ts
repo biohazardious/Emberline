@@ -48,15 +48,29 @@ export type ScreenSnapshot = z.infer<typeof ScreenSnapshot>;
  * Bumped whenever ptyd gains or changes a method. Core reads it on connect (`hello`) and refuses
  * features the runner does not have yet, instead of failing with an unknown-method error.
  * 1: sessions only · 2: `exec` + `hello` · 3: `exec` with `execId` + `execCancel` · 4: `inheritEnv`
- * on `spawn` and `exec`, and `hello` reports `ptraceScope`.
+ * on `spawn` and `exec`, and `hello` reports `ptraceScope` · 5: `hello` reports `mode` and `secured`
+ * instead of `lock`, `runAs` on `spawn` and `exec`.
  */
-export const PTYD_PROTOCOL_VERSION = 4;
+export const PTYD_PROTOCOL_VERSION = 5;
 /**
  * The oldest runner protocol core works with. A runner below it is refused, fail closed: core starts
- * no agent and runs no command in it, only reads `hello` and what already runs. Runners before 4 start
- * ptyd through a PATH an agent can write, and give core's own commands the runner's environment.
+ * no agent and runs no command in it, only reads `hello` and what already runs. Runners before 5 run
+ * ptyd as the agents' own user, so an agent could take it over or stand in for its socket.
  */
-export const PTYD_MIN_PROTOCOL_VERSION = 4;
+export const PTYD_MIN_PROTOCOL_VERSION = 5;
+
+/**
+ * `runner`: the agents' container; ptyd starts sessions and commands as the agents' user. `ops`: the
+ * container for core's own commands, which agents cannot reach at all.
+ */
+export const PtydMode = z.enum(['runner', 'ops']);
+export type PtydMode = z.infer<typeof PtydMode>;
+
+/**
+ * A service user of the runner a `spawn` or `exec` may run as instead of the agents' user (only the
+ * browser daemon's). Runner mode only, and only the users the runner names.
+ */
+const RunAs = z.enum(['browser']);
 
 /** Per stream; keeps a base64 stdout plus stderr inside one 16 MiB frame. */
 export const MAX_EXEC_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -78,6 +92,8 @@ export const ptydMethods = {
       cols: Cols.default(120),
       rows: Rows.default(32),
       meta: StringMap.default({}),
+      /** Absent: the agents' user. */
+      runAs: RunAs.optional(),
     }),
     result: SessionInfo,
   },
@@ -92,13 +108,15 @@ export const ptydMethods = {
        * Yama. Absent from a runner before protocol 4.
        */
       ptraceScope: z.number().int().nullable().optional(),
+      /** Absent from a ptyd before protocol 5. */
+      mode: PtydMode.optional(),
       /**
-       * Whether the runner's entrypoint has locked the socket's directory: `pending` while it starts,
-       * `locked` once done, `impossible` when the runner runs as another user than root and cannot
-       * lock it. Absent from a ptyd started without the entrypoint (the dev stack). Only a hint for
-       * what core shows: core checks the directory itself.
+       * Whether agents cannot reach ptyd: always true in `ops` mode. A runner is secured when it runs
+       * as a user of its own, starts every session and command as the agents' user, and its socket's
+       * directory is its own and writable by it alone. False in the dev stack, whose ptyd runs as the
+       * agents' user. Absent from a ptyd before protocol 5.
        */
-      lock: z.enum(['pending', 'locked', 'impossible']).optional(),
+      secured: z.boolean().optional(),
     }),
   },
   list: { params: Empty, result: z.object({ sessions: z.array(SessionInfo) }) },
@@ -141,6 +159,8 @@ export const ptydMethods = {
       encoding: z.enum(['utf8', 'base64']).default('utf8'),
       /** Caller-chosen id that `execCancel` can stop this command by (unique while it runs). */
       execId: z.string().min(1).max(128).optional(),
+      /** Absent: the agents' user. */
+      runAs: RunAs.optional(),
     }),
     result: z.object({
       exitCode: z.number().int().nullable(),
@@ -177,8 +197,11 @@ export const PtydRequest = z.object({
 });
 export type PtydRequest = z.infer<typeof PtydRequest>;
 
-/** `not_secured`: ptyd started under the runner's entrypoint, which has not locked its socket's directory yet. */
-export const PtydErrorCode = z.enum(['bad_request', 'not_found', 'conflict', 'internal', 'not_secured']);
+/**
+ * `not_isolated`: a runner ptyd that must be isolated from the agents and is not (`secured` false)
+ * starts nothing.
+ */
+export const PtydErrorCode = z.enum(['bad_request', 'not_found', 'conflict', 'internal', 'not_isolated']);
 export type PtydErrorCode = z.infer<typeof PtydErrorCode>;
 
 export const PtydResponse = z.discriminatedUnion('ok', [

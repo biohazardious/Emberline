@@ -91,7 +91,8 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
   private _ptraceScope: number | null | undefined = undefined;
   private _socketGuarded: boolean | null = null;
   private readonly requireSecured: boolean;
-  private _lockHint: 'pending' | 'locked' | 'impossible' | undefined;
+  /** What the runner's `hello` says of itself (`secured`); undefined before it has said. */
+  private _reportsSecured: boolean | undefined;
   /** When the current connection was handed out (Date.now()). */
   private connectedAt = 0;
   /** Since when core has not been connected (Date.now()); null while connected or before start(). */
@@ -149,12 +150,12 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
 
   /**
    * For what core shows: a connected runner whose socket is not locked is `starting` for
-   * {@link SECURE_GRACE_MS} after core connected, unless the runner itself says it cannot lock it
-   * (`hello` lock `impossible`); then, or after that, it is `not_secured`. Nothing starts in either.
+   * {@link SECURE_GRACE_MS} after core connected, unless the runner itself says it is not secured
+   * (`hello` `secured` false); then, or after that, it is `not_secured`. Nothing starts in either.
    */
   get lockState(): RunnerLockState {
     if (!this.unsecured) return 'secured';
-    if (this._lockHint === 'impossible') return 'not_secured';
+    if (this._reportsSecured === false) return 'not_secured';
     return Date.now() - this.connectedAt < SECURE_GRACE_MS ? 'starting' : 'not_secured';
   }
 
@@ -273,7 +274,7 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
         const hello = await client.hello().catch(() => null);
         this._protocolVersion = hello?.protocolVersion ?? 1;
         this._ptraceScope = hello?.ptraceScope;
-        this._lockHint = hello?.lock;
+        this._reportsSecured = hello?.secured;
         this.connectedAt = Date.now();
         this.client = client;
         this.setStatus('connected');

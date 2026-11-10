@@ -7,6 +7,7 @@ import {
   type PtydErrorCode,
   type PtydEvent,
   type PtydMethod,
+  type PtydMode,
   type PtydParsedParams,
   type PtydResponse,
   type PtydResult,
@@ -27,26 +28,49 @@ export interface PtydServerOptions extends SessionConfig {
   log?: (message: string) => void;
   /** Where the kernel's Yama ptrace setting is read (tests). */
   ptraceScopeFile?: string;
+  /** `runner` (default): the agents' container. `ops`: core's own commands, out of the agents' reach. */
+  mode?: PtydMode;
+  /** Runner mode: the user every session and command runs as (the agents'); unset in the dev stack. */
+  dropTo?: string;
+  /** Runner mode: the service users a `spawn` or `exec` may name as `runAs` (default none). */
+  serviceUsers?: string[];
   /**
-   * The runner's entrypoint locks the socket's directory once ptyd listens (EMBERLINE_PTYD_REQUIRE_LOCK):
-   * until it is root's and writable by root alone, with ptyd's own socket at the path, `spawn` and
-   * `exec` are refused. Agents share ptyd's user; one started before the lock could replace the socket.
+   * Runner mode: refuse `spawn` and `exec` while ptyd is not {@link PtydServer.secured} (set by the
+   * runner's entrypoint). An agent that could reach ptyd's user could run anything as core's commands.
    */
-  requireLock?: boolean;
-  /** The runner runs as another user than root and cannot lock the directory (hello says so). */
-  cannotLock?: boolean;
-}
-
-/** A path's device and inode, as `stat -c '%d %i'` prints them. */
-export interface SocketIdentity {
-  dev: number;
-  ino: number;
+  requireIsolation?: boolean;
+  /** Where users are looked up (tests). */
+  passwdFile?: string;
+  /** Whether a process can be started as `user` ({@link probeDrop}; tests replace it). */
+  probeDrop?: (user: string) => boolean;
 }
 
 /**
- * The host's Yama `ptrace_scope`, or null without Yama. Agents run as ptyd's own user: with 0, any of
- * them may attach to ptyd (or write its memory) and run whatever it likes as every command core
- * sends; 1 and up allow tracing only a process's own descendants, and ptyd is no agent's.
+ * Whether ptyd can start a process as `user`, asked once before ptyd calls itself secured. Sessions
+ * and commands are not started as another user yet, so there is nothing to try.
+ */
+export function probeDrop(_user: string): boolean {
+  return true;
+}
+
+/** The uid of `user` in a passwd file, or undefined when it has none. */
+export function lookupUid(user: string, file = '/etc/passwd'): number | undefined {
+  try {
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const [name, , uid] = line.split(':');
+      if (name === user && uid !== undefined && /^\d+$/.test(uid)) return Number(uid);
+    }
+  } catch {
+    // No passwd file: no such user.
+  }
+  return undefined;
+}
+
+/**
+ * The host's Yama `ptrace_scope`, or null without Yama. Where agents run as ptyd's own user (a runner
+ * that is not secured), with 0 any of them may attach to ptyd (or write its memory) and run whatever
+ * it likes as every command core sends; 1 and up allow tracing only a process's own descendants, and
+ * ptyd is no agent's.
  */
 export function readPtraceScope(file = '/proc/sys/kernel/yama/ptrace_scope'): number | null {
   try {
@@ -88,52 +112,66 @@ export class PtydServer {
   private server?: net.Server;
   /** Read once at start: a kernel setting of the host, the same for the container's life. */
   private readonly ptraceScope: number | null;
-  /** The socket this ptyd bound, read right after the bind (see {@link requireLock}). */
-  private bound?: SocketIdentity;
-  private locked = false;
+  private readonly mode: PtydMode;
+  private readonly serviceUsers: ReadonlySet<string>;
+  /** The probe's answer, asked once: whether a user can be dropped to does not change. */
+  private dropWorks?: boolean;
 
   constructor(private readonly options: PtydServerOptions) {
     this.ptraceScope = readPtraceScope(options.ptraceScopeFile);
+    this.mode = options.mode ?? 'runner';
+    this.serviceUsers = new Set(options.serviceUsers ?? []);
   }
 
   get socketPath(): string {
     return this.options.socketPath;
   }
 
-  /** The device and inode of the socket ptyd bound (for the entrypoint's readiness check). */
-  get socketIdentity(): SocketIdentity | undefined {
-    return this.bound;
+  /** Agents cannot reach this ptyd ({@link isolationProblem} has nothing to say). */
+  get secured(): boolean {
+    return this.isolationProblem() === null;
   }
 
   /**
-   * Whether the socket's directory is locked: a real directory of root's that only root can write,
-   * with the socket ptyd bound still at the path. Once locked, only root could undo it, so it is kept.
+   * Why agents could reach this ptyd, or null when they cannot. An `ops` ptyd runs where agents have
+   * no process. A runner ptyd must run as a user of its own and start everything as the agents' user
+   * (`dropTo`), with its socket in a directory it owns and nobody else may write, so no agent can put
+   * a listener in the socket's place. Read on every ask: the directory is checked as it is now.
    */
-  isLocked(): boolean {
-    if (this.locked) return true;
-    if (!this.bound) return false;
+  isolationProblem(): string | null {
+    if (this.mode === 'ops') return null;
+    const { dropTo } = this.options;
+    if (!dropTo) return 'it has no user to start sessions as (EMBERLINE_PTYD_DROP_TO)';
+    const target = lookupUid(dropTo, this.options.passwdFile);
+    if (target === undefined) return `the user ${dropTo} does not exist`;
+    const own = process.getuid?.();
+    if (own === undefined || own === target) return `it runs as ${dropTo} itself`;
+    const dir = path.dirname(this.options.socketPath);
     try {
-      const dir = lstatSync(path.dirname(this.options.socketPath));
-      const sock = lstatSync(this.options.socketPath);
-      this.locked =
-        dir.isDirectory() &&
-        dir.uid === 0 &&
-        (dir.mode & 0o022) === 0 &&
-        sock.isSocket() &&
-        sock.dev === this.bound.dev &&
-        sock.ino === this.bound.ino;
+      const st = lstatSync(dir);
+      if (!st.isDirectory() || st.uid !== own || (st.mode & 0o022) !== 0)
+        return `its socket's directory ${dir} is not its own, or others may write it`;
     } catch {
-      return false;
+      return `its socket's directory ${dir} does not exist`;
     }
-    return this.locked;
+    this.dropWorks ??= (this.options.probeDrop ?? probeDrop)(dropTo);
+    if (!this.dropWorks) return `it cannot start processes as ${dropTo}`;
+    return null;
   }
 
-  private assertLocked(): void {
-    if (this.options.requireLock && !this.isLocked())
-      throw new PtydError(
-        'not_secured',
-        "the runner has not locked its service's socket yet: nothing starts until it has",
-      );
+  /**
+   * Before a `spawn` or `exec`: refused in a runner that must be isolated and is not, or for a `runAs`
+   * that is not one of the runner's service users.
+   */
+  private assertMayStart(runAs: string | undefined): void {
+    if (this.mode === 'runner' && this.options.requireIsolation) {
+      const problem = this.isolationProblem();
+      if (problem) throw new PtydError('not_isolated', `the runner starts nothing: ${problem}`);
+    }
+    if (runAs === undefined) return;
+    if (this.mode === 'ops') throw new PtydError('bad_request', 'runAs is for the runner only');
+    if (!this.serviceUsers.has(runAs))
+      throw new PtydError('bad_request', `runAs ${runAs} is not a service user of this runner`);
   }
 
   async listen(): Promise<void> {
@@ -150,10 +188,13 @@ export class PtydServer {
       });
     });
     await chmod(socketPath, 0o600);
-    const sock = lstatSync(socketPath);
-    this.bound = { dev: sock.dev, ino: sock.ino };
     this.server = server;
-    this.options.log?.(`ptyd listening on ${socketPath}`);
+    this.options.log?.(`ptyd listening on ${socketPath} (${this.mode} mode)`);
+    const problem = this.isolationProblem();
+    if (problem)
+      this.options.log?.(
+        `not isolated from the agents: ${problem}${this.options.requireIsolation ? '; refusing to start sessions and commands' : ''}`,
+      );
   }
 
   /** Stops accepting clients. Sessions are killed unless `keepSessions` is set (tests only). */
@@ -225,7 +266,7 @@ export class PtydServer {
 
   private readonly handlers: { [M in Exclude<PtydMethod, 'attach'>]: Handler<M> } = {
     spawn: (_conn, params) => {
-      this.assertLocked();
+      this.assertMayStart(params.runAs);
       const id = params.id ?? randomUUID();
       if (this.sessions.has(id)) throw new PtydError('conflict', `session ${id} already exists`);
       if (!existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
@@ -242,15 +283,12 @@ export class PtydServer {
     hello: () => ({
       protocolVersion: PTYD_PROTOCOL_VERSION,
       ptraceScope: this.ptraceScope,
-      ...(this.options.cannotLock
-        ? { lock: 'impossible' as const }
-        : this.options.requireLock
-          ? { lock: this.isLocked() ? ('locked' as const) : ('pending' as const) }
-          : {}),
+      mode: this.mode,
+      secured: this.secured,
     }),
     list: () => ({ sessions: [...this.sessions.values()].map((s) => s.info()) }),
     exec: async (_conn, params) => {
-      this.assertLocked();
+      this.assertMayStart(params.runAs);
       const { execId } = params;
       if (execId && this.execs.has(execId))
         throw new PtydError('conflict', `exec ${execId} is already running`);

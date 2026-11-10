@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { PTYD_PROTOCOL_VERSION } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PtydClient, PtydClientError } from './client.js';
-import { PtydServer, readPtraceScope } from './server.js';
+import { PtydServer, type PtydServerOptions, readPtraceScope } from './server.js';
 
 let dir: string;
 let socketPath: string;
@@ -78,89 +78,187 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-/**
- * A directory anyone may write, so never locked whoever runs the tests (CI runs them as root, where
- * a fresh temporary directory is root's and writable by root alone, which is what locked means).
- */
-function unlockedDir(name: string): string {
-  const unlocked = path.join(dir, name);
-  mkdirSync(unlocked);
-  chmodSync(unlocked, 0o777);
-  return unlocked;
+const ownUid = process.getuid?.() ?? 0;
+
+/** A passwd file with these users, so a test decides which uid `dropTo` names whoever runs it. */
+function passwd(users: Record<string, number>): string {
+  const file = path.join(dir, `passwd-${Object.keys(users).join('-')}`);
+  const lines = Object.entries(users).map(([name, uid]) => `${name}:x:${uid}:${uid}::/home/${name}:/bin/sh`);
+  writeFileSync(file, `${lines.join('\n')}\n`);
+  return file;
 }
 
-describe("under the runner's entrypoint (EMBERLINE_PTYD_REQUIRE_LOCK)", () => {
-  it('refuses spawn and exec while its directory is not locked, and keeps answering everything else', async () => {
-    const socket = path.join(unlockedDir('unlocked'), 'locked.sock');
-    const guarded = new PtydServer({ socketPath: socket, requireLock: true });
-    await guarded.listen();
+/** Starts another ptyd on its own socket, hands a client to `use`, and closes both. */
+async function withPtyd(
+  options: Omit<PtydServerOptions, 'socketPath'> & { socketDir?: string },
+  use: (client: PtydClient, other: PtydServer) => Promise<void>,
+): Promise<void> {
+  const { socketDir = dir, ...rest } = options;
+  const other = new PtydServer({ socketPath: path.join(socketDir, `other-${randomUUID()}.sock`), ...rest });
+  await other.listen();
+  const client = await PtydClient.connect(other.socketPath);
+  try {
+    await use(client, other);
+  } finally {
+    client.close();
+    await other.close();
+  }
+}
+
+/** ptyd's own entrypoint, run with this process's node and the given environment. */
+function startMain(env: Record<string, string>) {
+  return spawn(
+    process.execPath,
+    ['--import', 'tsx', '--conditions=@emberline/source', path.join(import.meta.dirname, 'main.ts')],
+    { env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] },
+  );
+}
+
+async function waitForSocket(socket: string, timeoutMs = 20_000): Promise<PtydClient> {
+  const started = Date.now();
+  for (;;) {
     try {
-      expect(guarded.isLocked()).toBe(false);
-      const client = await PtydClient.connect(socket);
-      await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
-        code: 'not_secured',
+      return await PtydClient.connect(socket);
+    } catch (error) {
+      if (Date.now() - started > timeoutMs) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
+describe('modes and isolation', () => {
+  it('hello reports mode and secured', async () => {
+    await withPtyd({ mode: 'ops' }, async (client) => {
+      expect(await client.hello()).toMatchObject({
+        protocolVersion: PTYD_PROTOCOL_VERSION,
+        mode: 'ops',
+        secured: true,
       });
-      await expect(client.exec({ file: 'true', cwd: dir })).rejects.toMatchObject({ code: 'not_secured' });
-      expect(await client.hello()).toMatchObject({ protocolVersion: PTYD_PROTOCOL_VERSION, lock: 'pending' });
+    });
+    // The dev stack: a runner ptyd with no user to start sessions as.
+    await withPtyd({ mode: 'runner' }, async (client) => {
+      expect(await client.hello()).toMatchObject({ mode: 'runner', secured: false });
+    });
+    // Runner is the default mode.
+    expect(await (await connect()).hello()).toMatchObject({ mode: 'runner', secured: false });
+    expect(PTYD_PROTOCOL_VERSION).toBe(5);
+  });
+
+  it('a runner ptyd is secured only when it drops to another user, from a directory only it can write', async () => {
+    const passwdFile = passwd({ node: ownUid + 1, self: ownUid });
+    const secured = async (options: Omit<PtydServerOptions, 'socketPath'> & { socketDir?: string }) => {
+      let result: boolean | undefined;
+      await withPtyd({ mode: 'runner', passwdFile, ...options }, async (client) => {
+        result = (await client.hello()).secured;
+      });
+      return result;
+    };
+    expect(await secured({ dropTo: 'node' })).toBe(true);
+    // Sessions would run as ptyd's own user: agents could take it over.
+    expect(await secured({ dropTo: 'self' })).toBe(false);
+    expect(await secured({ dropTo: 'nobody-here' })).toBe(false);
+    // Another user could put its own listener in the socket's place.
+    const shared = path.join(dir, 'shared');
+    mkdirSync(shared);
+    chmodSync(shared, 0o770);
+    expect(await secured({ dropTo: 'node', socketDir: shared })).toBe(false);
+    chmodSync(shared, 0o705);
+    expect(await secured({ dropTo: 'node', socketDir: shared })).toBe(true);
+    // The drop itself must work.
+    const probed: string[] = [];
+    const probeDrop = (user: string) => {
+      probed.push(user);
+      return false;
+    };
+    expect(await secured({ dropTo: 'node', probeDrop })).toBe(false);
+    expect(probed).toContain('node');
+  });
+
+  it('runAs is refused in ops mode and for users not in SERVICE_USERS', async () => {
+    const asBrowser = { cwd: dir, runAs: 'browser' as const };
+    await withPtyd({ mode: 'ops', serviceUsers: ['browser'] }, async (client) => {
+      await expect(client.spawn({ file: '/bin/sh', ...asBrowser })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+      await expect(client.exec({ file: 'true', ...asBrowser })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+    });
+    await withPtyd({ mode: 'runner', serviceUsers: [] }, async (client) => {
+      await expect(client.spawn({ file: '/bin/sh', ...asBrowser })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+      await expect(client.exec({ file: 'true', ...asBrowser })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+    });
+    await withPtyd({ mode: 'runner', serviceUsers: ['browser'] }, async (client) => {
+      // Only service users exist as `runAs` at all.
+      await expect(
+        client.exec({ file: 'true', cwd: dir, runAs: 'root' as unknown as 'browser' }),
+      ).rejects.toMatchObject({ code: 'bad_request' });
+      // A listed service user is accepted (it runs to a result, whatever the drop makes of it).
+      await expect(client.exec({ file: 'true', ...asBrowser })).resolves.toMatchObject({ timedOut: false });
+    });
+  });
+
+  it('a runner ptyd that is not isolated refuses spawn and exec when requireIsolation is set', async () => {
+    await withPtyd({ mode: 'runner', requireIsolation: true }, async (client) => {
+      await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
+        code: 'not_isolated',
+      });
+      await expect(client.exec({ file: 'true', cwd: dir })).rejects.toMatchObject({ code: 'not_isolated' });
+      // Everything else still answers: core reads what runs and says why nothing starts.
+      expect(await client.hello()).toMatchObject({ mode: 'runner', secured: false });
       expect((await client.list()).sessions).toEqual([]);
-      client.close();
-      // It knows which socket it bound: the one the entrypoint checks before it locks.
-      const st = lstatSync(socket);
-      expect(guarded.socketIdentity).toEqual({ dev: st.dev, ino: st.ino });
-    } finally {
-      await guarded.close();
-    }
+    });
+    // Isolated, it starts what it is asked to.
+    const passwdFile = passwd({ node: ownUid + 1 });
+    await withPtyd({ mode: 'runner', requireIsolation: true, dropTo: 'node', passwdFile }, async (client) => {
+      expect(await client.exec({ file: 'true', cwd: dir })).toMatchObject({ exitCode: 0 });
+    });
+    // Without requireIsolation (the dev stack) an unisolated runner still starts things.
+    await withPtyd({ mode: 'runner' }, async (client) => {
+      expect(await client.exec({ file: 'true', cwd: dir })).toMatchObject({ exitCode: 0 });
+    });
   });
 
-  it('a runner started as another user says it cannot lock the socket', async () => {
-    const socket = path.join(dir, 'user.sock');
-    const unlockable = new PtydServer({ socketPath: socket, cannotLock: true });
-    await unlockable.listen();
+  it('reads its mode, service users and isolation requirement from the environment', async () => {
+    const socket = path.join(dir, 'main.sock');
+    const child = startMain({
+      EMBERLINE_PTYD_SOCKET: socket,
+      EMBERLINE_PTYD_MODE: 'runner',
+      EMBERLINE_PTYD_SERVICE_USERS: 'browser',
+      EMBERLINE_PTYD_REQUIRE_ISOLATION: '1',
+    });
     try {
-      const client = await PtydClient.connect(socket);
-      expect((await client.hello()).lock).toBe('impossible');
-      client.close();
-    } finally {
-      await unlockable.close();
-    }
-  });
-
-  it("tells the entrypoint it listens, with its own socket's device and inode, on the ready pipe", async () => {
-    const socket = path.join(unlockedDir('ready'), 'ready.sock');
-    // ptyd's own entrypoint in this process's node (fd 3 is inherited only by a direct child).
-    const child = spawn(
-      process.execPath,
-      ['--import', 'tsx', '--conditions=@emberline/source', path.join(import.meta.dirname, 'main.ts')],
-      {
-        env: {
-          ...process.env,
-          EMBERLINE_PTYD_SOCKET: socket,
-          EMBERLINE_PTYD_READY_FD: '3',
-          EMBERLINE_PTYD_REQUIRE_LOCK: '1',
-        },
-        stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
-      },
-    );
-    try {
-      const ready = await new Promise<string>((resolve, reject) => {
-        let text = '';
-        const pipe = child.stdio[3] as NodeJS.ReadableStream;
-        pipe.on('data', (chunk: Buffer) => (text += chunk.toString()));
-        pipe.on('end', () => resolve(text));
-        child.on('exit', (code) => reject(new Error(`ptyd exited with ${code}`)));
-      });
-      const st = lstatSync(socket);
-      expect(ready).toBe(`ready ${st.dev} ${st.ino}\n`);
-      const client = await PtydClient.connect(socket);
+      const client = await waitForSocket(socket);
+      expect(await client.hello()).toMatchObject({ mode: 'runner', secured: false });
       await expect(client.spawn({ file: '/bin/sh', cwd: dir })).rejects.toMatchObject({
-        code: 'not_secured',
+        code: 'not_isolated',
       });
       client.close();
     } finally {
       child.kill('SIGTERM');
       await new Promise((resolve) => child.once('exit', resolve));
     }
-  }, 30_000);
+    const ops = startMain({ EMBERLINE_PTYD_SOCKET: path.join(dir, 'ops.sock'), EMBERLINE_PTYD_MODE: 'ops' });
+    try {
+      const client = await waitForSocket(path.join(dir, 'ops.sock'));
+      expect(await client.hello()).toMatchObject({ mode: 'ops', secured: true });
+      client.close();
+    } finally {
+      ops.kill('SIGTERM');
+      await new Promise((resolve) => ops.once('exit', resolve));
+    }
+    // An unknown mode is refused rather than guessed.
+    const bogus = startMain({
+      EMBERLINE_PTYD_SOCKET: path.join(dir, 'bogus.sock'),
+      EMBERLINE_PTYD_MODE: 'agent',
+    });
+    expect(await new Promise((resolve) => bogus.once('exit', resolve))).toBe(1);
+    expect(existsSync(path.join(dir, 'bogus.sock'))).toBe(false);
+  }, 60_000);
 });
 
 describe("the host's Yama ptrace setting", () => {
@@ -178,7 +276,12 @@ describe("the host's Yama ptrace setting", () => {
       });
       await other.listen();
       const client = await PtydClient.connect(path.join(dir, `yama-${scope}.sock`));
-      expect(await client.hello()).toEqual({ protocolVersion: PTYD_PROTOCOL_VERSION, ptraceScope: scope });
+      expect(await client.hello()).toEqual({
+        protocolVersion: PTYD_PROTOCOL_VERSION,
+        ptraceScope: scope,
+        mode: 'runner',
+        secured: false,
+      });
       client.close();
       await other.close();
     }
@@ -410,6 +513,8 @@ describe('ptyd', () => {
     expect(await client.hello()).toEqual({
       protocolVersion: PTYD_PROTOCOL_VERSION,
       ptraceScope: readPtraceScope(),
+      mode: 'runner',
+      secured: false,
     });
     // exec never creates a session.
     expect((await client.list()).sessions).toHaveLength(0);

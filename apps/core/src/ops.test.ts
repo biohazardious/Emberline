@@ -79,15 +79,15 @@ describe('ops endpoints', () => {
     }
 
     it('a current runner is ok, with nothing to update', async () => {
-      expect(PTYD_PROTOCOL_VERSION).toBe(4);
-      expect(PTYD_MIN_PROTOCOL_VERSION).toBe(4);
-      const { deep, system } = await withRunner(4);
+      expect(PTYD_PROTOCOL_VERSION).toBe(5);
+      expect(PTYD_MIN_PROTOCOL_VERSION).toBe(5);
+      const { deep, system } = await withRunner(5);
       expect(deep.statusCode).toBe(200);
       expect(deep.json().checks.runnerProtocol).toMatchObject({ ok: true });
       expect(system).toMatchObject({ runnerOutdated: false, runnerUpdateAvailable: false });
     });
 
-    for (const version of [2, 3])
+    for (const version of [2, 3, 4])
       it(`a protocol-${version} runner needs a security update: degraded, and named so`, async () => {
         const { deep, system } = await withRunner(version);
         expect(deep.statusCode).toBe(503);
@@ -111,7 +111,7 @@ describe('ops endpoints', () => {
         [null, 'the host kernel has no Yama'],
       ] as const) {
         await closeRunner();
-        const { deep, system } = await withRunner(4, { yama });
+        const { deep, system } = await withRunner(5, { yama });
         expect(deep.statusCode).toBe(503);
         expect(deep.json().checks.runnerPtrace).toMatchObject({ ok: false });
         expect(deep.json().checks.runnerPtrace.detail).toContain(why);
@@ -122,7 +122,7 @@ describe('ops endpoints', () => {
       }
       for (const yama of ['1\n', '2\n', '3\n']) {
         await closeRunner();
-        const { deep, system } = await withRunner(4, { yama });
+        const { deep, system } = await withRunner(5, { yama });
         expect(deep.statusCode).toBe(200);
         expect(deep.json().checks.runnerPtrace).toEqual({
           ok: true,
@@ -133,7 +133,7 @@ describe('ops endpoints', () => {
     });
 
     it('a runner that does not report Yama (older) gets no warning: it is not known', async () => {
-      const { deep, system } = await withRunner(4);
+      const { deep, system } = await withRunner(5);
       Object.defineProperty(t!.ptyd, 'ptraceScope', { get: () => undefined });
       const again = await t!.app.inject({ url: '/api/health/deep' });
       expect(deep.statusCode).toBe(200);
@@ -143,7 +143,7 @@ describe('ops endpoints', () => {
     });
 
     it("a current runner whose socket's directory agents can change is degraded; an older one is told rebuilding locks it", async () => {
-      const current = await withRunner(4, { guarded: false });
+      const current = await withRunner(5, { guarded: false });
       // The dev stack allows it (EMBERLINE_ALLOW_UNSECURED_RUNNER), and says so.
       expect(current.deep.statusCode).toBe(200);
       expect(current.deep.json().checks.runnerSocket.detail).toContain('EMBERLINE_ALLOW_UNSECURED_RUNNER');

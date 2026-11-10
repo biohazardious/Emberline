@@ -141,8 +141,8 @@ describe('scheduler', () => {
     expect(launch).not.toHaveBeenCalled();
     expect((await getRun(b.id)).state).toBe('queued');
 
-    // The runner answers hello with protocol 4: the queued run starts.
-    version = 4;
+    // The runner answers hello with protocol 5: the queued run starts.
+    version = 5;
     await t.scheduler.tick();
     expect(launch).toHaveBeenCalledWith(b.id);
     await expect.poll(async () => (await getRun(b.id)).state, { timeout: 5_000 }).toBe('starting');

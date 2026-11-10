@@ -52,8 +52,8 @@ afterEach(async () => {
 const outdated = { statusCode: 503, code: 'runner_outdated', message: RUNNER_SECURITY_UPDATE };
 
 describe('a runner older than core', () => {
-  it('needs protocol 4: runners before it start ptyd through a PATH agents can write', () => {
-    expect(PTYD_MIN_PROTOCOL_VERSION).toBe(4);
+  it("needs protocol 5: runners before it run ptyd as the agents' own user", () => {
+    expect(PTYD_MIN_PROTOCOL_VERSION).toBe(5);
   });
 
   it('protocol 3: no command, terminal or agent starts, nothing is typed; reading and stopping what runs still work', async () => {
@@ -109,8 +109,8 @@ describe('a runner older than core', () => {
     expect((await t.ptyd.get().list()).sessions).toHaveLength(0);
   });
 
-  it('protocol 4: commands, terminals and typing work', async () => {
-    version = 4;
+  it('protocol 5: commands, terminals and typing work', async () => {
+    version = 5;
     expect(t.ptyd.outdated).toBe(false);
     expect(() => t.ptyd.assertCanStart()).not.toThrow();
     const result = await ptydCommandExecutor(t.ptyd)({ file: '/bin/echo', args: ['ok'], cwd: '/' });
@@ -201,8 +201,8 @@ describe('a current runner whose socket is not locked', () => {
     // Like a runner started with a compose `user:`: its socket's directory is not locked.
     u = await createTestApp({ requireSecuredRunner: true });
     unlock(u.config.ptydSocket);
-    // It says so itself (`hello` lock `impossible`), so it is not secured at once, not "starting".
-    ptydServer = new PtydServer({ socketPath: u.config.ptydSocket, cannotLock: true });
+    // It says so itself (`hello` `secured` false), so it is not secured at once, not "starting".
+    ptydServer = new PtydServer({ socketPath: u.config.ptydSocket });
     await ptydServer.listen();
     u.ptyd.start();
     await u.ptyd.waitUntilConnected();
@@ -263,7 +263,7 @@ describe('a runner that has just started and not locked its socket yet', () => {
   let u: TestApp;
   let ptydServer: PtydServer;
   let ucookie: string;
-  async function startWith(options: { cannotLock?: boolean; requireLock?: boolean }) {
+  async function startWith(options: { mode?: 'runner' | 'ops' }) {
     u = await createTestApp({ requireSecuredRunner: true });
     unlock(u.config.ptydSocket);
     ptydServer = new PtydServer({ socketPath: u.config.ptydSocket, ...options });
@@ -282,7 +282,8 @@ describe('a runner that has just started and not locked its socket yet', () => {
 
   it('is "starting" (nothing starts) for the grace period, then "not secured"', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    await startWith({ requireLock: true });
+    // A ptyd that says it is secured while core's own check of the directory does not hold yet.
+    await startWith({ mode: 'ops' });
     expect(u.ptyd.lockState).toBe('starting');
     expect(await system()).toMatchObject({ runnerStarting: true, runnerNotSecured: false });
     await expect(
@@ -302,14 +303,14 @@ describe('a runner that has just started and not locked its socket yet', () => {
     });
   });
 
-  it('is "not secured" at once when the runner says it cannot lock it (it runs as another user)', async () => {
-    await startWith({ cannotLock: true });
+  it('is "not secured" at once when the runner says it is not secured', async () => {
+    await startWith({ mode: 'runner' });
     expect(u.ptyd.lockState).toBe('not_secured');
     expect(await system()).toMatchObject({ runnerStarting: false, runnerNotSecured: true });
   });
 
   it('is "secured" once the folder is locked, with nothing shown', async () => {
-    await startWith({ requireLock: true });
+    await startWith({ mode: 'ops' });
     Object.defineProperty(u.ptyd, 'socketGuarded', { get: () => true });
     expect(u.ptyd.lockState).toBe('secured');
     expect(await system()).toMatchObject({
