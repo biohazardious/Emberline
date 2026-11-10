@@ -1,6 +1,7 @@
 import type { Route, TicketCompletion } from '@emberline/protocol';
 import { sql } from 'drizzle-orm';
 import {
+  check,
   customType,
   index,
   integer,
@@ -81,7 +82,55 @@ export const projects = sqliteTable('projects', {
   description: text('description').notNull().default(''),
   techStack: text('tech_stack', { mode: 'json' }).$type<Record<string, string> | null>(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Which SSH key an ssh remote uses: Emberline's shared key or this project's own (ssh-keys/store.ts). */
+  sshKeyChoice: text('ssh_key_choice', { enum: ['shared', 'own'] })
+    .notNull()
+    .default('shared'),
 });
+
+/**
+ * SSH keys core authenticates with to ssh remotes: at most one shared key (`scope` = 'shared') and
+ * one per project (`scope` = the project id, `projectId` set, deleted with the project). The private
+ * key is sealed like the other secrets (enc:v1:, secrets/box.ts) and only opened in memory.
+ */
+export const sshKeys = sqliteTable(
+  'ssh_keys',
+  {
+    id: text('id').primaryKey(),
+    scope: text('scope').notNull().unique(),
+    projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    algorithm: text('algorithm', { enum: ['ed25519'] }).notNull(),
+    /** The OpenSSH public line: `ssh-ed25519 AAAA… emberline` (or `emberline-<project slug>`). */
+    publicKey: text('public_key').notNull(),
+    /** `SHA256:…` as `ssh-keygen -l` prints it. */
+    fingerprint: text('fingerprint').notNull(),
+    privateKeyEnc: text('private_key_enc').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    check(
+      'ssh_keys_scope_check',
+      sql`(${t.scope} = 'shared' and ${t.projectId} is null) or ${t.scope} = ${t.projectId}`,
+    ),
+  ],
+);
+
+/**
+ * Host keys a person trusted for an ssh remote (the pinned GitHub, GitLab and Bitbucket keys are
+ * not stored: @emberline/protocol's PINNED_SSH_HOST_KEYS). `host` is lower case; `key` the base64 blob.
+ */
+export const sshHostKeys = sqliteTable(
+  'ssh_host_keys',
+  {
+    host: text('host').notNull(),
+    port: integer('port').notNull().default(22),
+    keyType: text('key_type').notNull(),
+    key: text('key').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    trustedAt: integer('trusted_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host, t.port, t.keyType] })],
+);
 
 /** Per-project settings as one JSON document (issue sync, and the wizard's `gates`). */
 export const projectSettings = sqliteTable('project_settings', {

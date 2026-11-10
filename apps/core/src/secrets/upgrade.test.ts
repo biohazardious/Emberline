@@ -26,6 +26,7 @@ import {
 } from './box.js';
 import { encryptStoredSecrets, forgetLogLine, startSecrets } from './startup.js';
 import { rmTemp } from '../test-rm.js';
+import { generateKey, getPublicKey } from '../ssh-keys/store.js';
 
 const testKey = installedSecretsKey();
 const dirs: string[] = [];
@@ -416,6 +417,60 @@ describe('EMBERLINE_FORGET_SECRETS=1 (a database restored without its key)', () 
   });
 });
 
+describe('SSH keys are stored secrets', () => {
+  /** A shared key and a project key, sealed with `key`. */
+  const withKeys = (dir: string, key: Buffer) => {
+    const o = openDb(path.join(dir, 'emberline.db'));
+    startSecrets(o.db, { env: { EMBERLINE_SECRETS_KEY: key.toString('base64') }, dataDir: dir });
+    o.db.$client
+      .prepare(
+        "insert into projects (id, name, slug, path, created_at) values ('p1', 'My app', 'my-app', '/w/my-app', 0)",
+      )
+      .run();
+    generateKey(o.db, 'shared');
+    generateKey(o.db, { projectId: 'p1', slug: 'my-app' });
+    return o;
+  };
+
+  it('another key stops start naming the place; a lost key file is not made again over them', () => {
+    const dir = tempDir();
+    const o = withKeys(dir, randomBytes(32));
+    let error: unknown;
+    try {
+      startSecrets(o.db, {
+        env: { EMBERLINE_SECRETS_KEY: randomBytes(32).toString('base64') },
+        dataDir: dir,
+      });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(SecretsKeyError);
+    expect((error as SecretsKeyError).detail).toContain('ssh_keys');
+    expect((error as SecretsKeyError).detail).not.toMatch(/PRIVATE|enc:v1:/);
+    // No key in the environment and no file: the database holds sealed keys, so none is made.
+    expect(() => startSecrets(o.db, { env: {}, dataDir: dir })).toThrow(SecretsKeyError);
+    expect(existsSync(path.join(dir, 'secrets.key'))).toBe(false);
+    o.close();
+  });
+
+  it('EMBERLINE_FORGET_SECRETS=1 removes the keys it cannot open and names them', () => {
+    const dir = tempDir();
+    const o = withKeys(dir, randomBytes(32));
+    const kept = randomBytes(32);
+    const result = startSecrets(o.db, {
+      env: { EMBERLINE_SECRETS_KEY: kept.toString('base64'), EMBERLINE_FORGET_SECRETS: '1' },
+      dataDir: dir,
+    });
+    expect([...result.forget.cleared].sort()).toEqual(['SSH key of project my-app', 'shared SSH key']);
+    expect(getPublicKey(o.db, 'shared')).toBeNull();
+    expect(getPublicKey(o.db, { projectId: 'p1' })).toBeNull();
+    expect(forgetLogLine(result.forget)!.message).toContain(
+      'Create these SSH keys again and add the new public keys to the forge: ',
+    );
+    o.close();
+  });
+});
+
 describe('forgetLogLine', () => {
   it('names what to enter again, says the demo secret is made again, and asks to remove the variable', () => {
     const line = forgetLogLine({
@@ -427,6 +482,20 @@ describe('forgetLogLine', () => {
       level: 'warn',
       message:
         'secrets: EMBERLINE_FORGET_SECRETS cleared the stored secrets the current key cannot read. Enter these again in Settings: notification token, forge account https://github.com token. The demo signing secret is made again automatically. The database before this is in /data/emberline.db.pre-forget-secrets-1.bak. Remove EMBERLINE_FORGET_SECRETS now.',
+    });
+  });
+
+  it('asks for new SSH keys apart from what to enter again', () => {
+    expect(
+      forgetLogLine({
+        requested: true,
+        cleared: ['notification token', 'shared SSH key', 'SSH key of project my-app'],
+        snapshot: null,
+      }),
+    ).toEqual({
+      level: 'warn',
+      message:
+        'secrets: EMBERLINE_FORGET_SECRETS cleared the stored secrets the current key cannot read. Enter these again in Settings: notification token. Create these SSH keys again and add the new public keys to the forge: shared SSH key, SSH key of project my-app. Remove EMBERLINE_FORGET_SECRETS now.',
     });
   });
 

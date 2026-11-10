@@ -99,6 +99,13 @@ COPY packages/hook/package.json packages/hook/
 RUN --mount=type=cache,id=emberline-pnpm,target=/pnpm-store pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
+# The runner's /etc/ssh/ssh_known_hosts, from the pinned host keys core checks too (one list:
+# packages/protocol/src/ssh-known-hosts.ts, which names the sources and the date they were checked).
+RUN mkdir -p /out && node --input-type=module -e "\
+  import { writeFileSync } from 'node:fs'; \
+  import { PINNED_SSH_HOST_KEYS } from '/src/packages/protocol/dist/ssh-known-hosts.js'; \
+  const head = '# Pinned SSH host keys of GitHub, GitLab and Bitbucket, written at build from packages/protocol/src/ssh-known-hosts.ts.'; \
+  writeFileSync('/out/ssh_known_hosts', [head, ...PINNED_SSH_HOST_KEYS].join('\n') + '\n');"
 RUN --mount=type=cache,id=emberline-pnpm,target=/pnpm-store \
   pnpm --filter @emberline/core deploy --prod --legacy /out/core \
   && pnpm --filter @emberline/ptyd deploy --prod --legacy /out/ptyd \
@@ -311,9 +318,10 @@ COPY --from=build /out/hook /opt/emberline/hook
 COPY --from=build --chown=root:root --chmod=0644 \
   /src/apps/core/dist/browser/browser-daemon.mjs /src/apps/core/dist/browser/playwright-hook.cjs \
   /opt/emberline/browser/
-# GitHub's, GitLab's and Bitbucket's published SSH host keys: core's ssh never asks about an
-# unknown key (apps/core/src/git-exec.ts), so these hosts work without trusting one on first use.
-COPY --chmod=0644 apps/ptyd/ssh_known_hosts /etc/ssh/ssh_known_hosts
+# GitHub's, GitLab's and Bitbucket's published SSH host keys (written in the build stage): core's
+# ssh never asks about an unknown key (apps/core/src/git-exec.ts), so these hosts work without
+# trusting one on first use.
+COPY --from=build --chmod=0644 /out/ssh_known_hosts /etc/ssh/ssh_known_hosts
 RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && chmod 0755 /opt/emberline/browser \
   && ln -sf /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \

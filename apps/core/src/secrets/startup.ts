@@ -33,6 +33,17 @@ function forgeTokenRows(sqlite: Sqlite): { id: string; token: string; server_url
   }[];
 }
 
+/** SSH private keys (ssh-keys/store.ts), each sealed when it is made; `slug` names a project key. */
+function sshKeyRows(
+  sqlite: Sqlite,
+): { id: string; scope: string; private_key_enc: string; slug: string | null }[] {
+  return sqlite
+    .prepare(
+      'select k.id, k.scope, k.private_key_enc, p.slug from ssh_keys k left join projects p on p.id = k.project_id',
+    )
+    .all() as { id: string; scope: string; private_key_enc: string; slug: string | null }[];
+}
+
 /** Maps a settings row's secret strings; null when its stored JSON cannot be read (left alone). */
 function mapSettingRow(row: { key: string; value: string }, f: Fn): unknown {
   let value: unknown;
@@ -55,7 +66,11 @@ export function hasSealedSecrets(sqlite: Sqlite): boolean {
     return s;
   };
   for (const row of secretSettingRows(sqlite)) mapSettingRow(row, note);
-  return found || forgeTokenRows(sqlite).some((r) => isSealed(r.token));
+  return (
+    found ||
+    forgeTokenRows(sqlite).some((r) => isSealed(r.token)) ||
+    sshKeyRows(sqlite).some((r) => isSealed(r.private_key_enc))
+  );
 }
 
 /** Throws SecretsKeyError naming the first place the key cannot open (never the value). */
@@ -72,6 +87,7 @@ export function assertSecretsReadable(sqlite: Sqlite, key: Buffer): void {
     };
   for (const row of secretSettingRows(sqlite)) mapSettingRow(row, open(`settings ${row.key}`));
   for (const row of forgeTokenRows(sqlite)) open('forge_accounts')(row.token);
+  for (const row of sshKeyRows(sqlite)) open('ssh_keys')(row.private_key_enc);
 }
 
 /** Set to `1` for one start: stored secrets the current key cannot open are cleared instead of refusing to start. */
@@ -90,6 +106,12 @@ const SETTING_LABELS: Record<string, string> = {
 };
 const settingPlace = (key: string) => SETTING_LABELS[key] ?? `settings ${key}`;
 const accountPlace = (serverUrl: string) => `forge account ${serverUrl} token`;
+const SHARED_SSH_KEY_PLACE = 'shared SSH key';
+const PROJECT_SSH_KEY_PLACE = 'SSH key of project ';
+const sshKeyPlace = (row: { scope: string; slug: string | null }) =>
+  row.scope === 'shared' ? SHARED_SSH_KEY_PLACE : `${PROJECT_SSH_KEY_PLACE}${row.slug ?? row.scope}`;
+const isSshKeyPlace = (label: string) =>
+  label === SHARED_SSH_KEY_PLACE || label.startsWith(PROJECT_SSH_KEY_PLACE);
 
 /** A mapper that leaves readable values alone and notes (or, with `clear`, empties) the others' place. */
 function unreadableMapper(key: Buffer, places: Set<string>, place: string, clear: boolean): Fn {
@@ -114,13 +136,17 @@ export function unreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
   for (const row of forgeTokenRows(sqlite)) {
     unreadableMapper(key, places, accountPlace(row.server_url), false)(row.token);
   }
+  for (const row of sshKeyRows(sqlite)) {
+    unreadableMapper(key, places, sshKeyPlace(row), false)(row.private_key_enc);
+  }
   return [...places];
 }
 
 /**
  * Clears every stored secret `key` cannot open, in one transaction: such a setting field becomes
  * empty (unset: the feature reads as not configured, the demo secret is made again), such a forge
- * account keeps no token. Readable values, also in the same setting, stay. Returns the places.
+ * account keeps no token, such an SSH key is deleted (a key without its private half is no key).
+ * Readable values, also in the same setting, stay. Returns the places.
  */
 export function forgetUnreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
   const cleared = new Set<string>();
@@ -137,6 +163,12 @@ export function forgetUnreadableSecrets(sqlite: Sqlite, key: Buffer): string[] {
       unreadableMapper(key, cleared, place, true)(row.token);
       // Sealed like every token, so the encryption pass below leaves it alone; it opens to "".
       if (cleared.has(place)) setToken.run(sealWith(key, ''), row.id);
+    }
+    const deleteSshKey = sqlite.prepare('delete from ssh_keys where id = ?');
+    for (const row of sshKeyRows(sqlite)) {
+      const place = sshKeyPlace(row);
+      unreadableMapper(key, cleared, place, true)(row.private_key_enc);
+      if (cleared.has(place)) deleteSshKey.run(row.id);
     }
   })();
   return [...cleared];
@@ -286,10 +318,14 @@ export function forgetLogLine(forget: {
         }
       : null;
   }
-  const enterAgain = forget.cleared.filter((label) => label !== DEMO_SECRET_LABEL);
+  const enterAgain = forget.cleared.filter((label) => label !== DEMO_SECRET_LABEL && !isSshKeyPlace(label));
+  const sshKeys = forget.cleared.filter(isSshKeyPlace);
   const parts = [
     `secrets: ${FORGET_SECRETS_ENV} cleared the stored secrets the current key cannot read.`,
     enterAgain.length > 0 ? `Enter these again in Settings: ${enterAgain.join(', ')}.` : '',
+    sshKeys.length > 0
+      ? `Create these SSH keys again and add the new public keys to the forge: ${sshKeys.join(', ')}.`
+      : '',
     forget.cleared.includes(DEMO_SECRET_LABEL) ? 'The demo signing secret is made again automatically.' : '',
     forget.snapshot ? `The database before this is in ${forget.snapshot}.` : '',
     `Remove ${FORGET_SECRETS_ENV} now.`,

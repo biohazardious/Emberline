@@ -367,6 +367,7 @@ export function registerProjectRoutes(
       description: plan.vision,
       techStack: plan.techStack,
       createdAt: new Date(),
+      sshKeyChoice: 'shared',
     };
     try {
       await mkdir(path.join(projectPath, '.emberline'), { recursive: true });
@@ -515,6 +516,7 @@ export function registerProjectRoutes(
       description: (body.vision ?? body.description).trim(),
       techStack: null,
       createdAt: new Date(),
+      sshKeyChoice: 'shared',
     };
     db.transaction((tx) => {
       tx.insert(projects).values(row).run();
@@ -694,6 +696,7 @@ export function registerProjectRoutes(
         description: body.description,
         techStack: body.techStack ?? null,
         createdAt: new Date(),
+        sshKeyChoice: 'shared',
       };
       const importSource = body.repoUrl ? 'url' : 'new';
       db.transaction((tx) => {
