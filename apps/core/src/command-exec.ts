@@ -37,6 +37,11 @@ export interface ExecRequest {
   encoding?: 'utf8' | 'base64';
   /** Lets {@link cancelCommand} stop this command while it runs (unique while it runs). */
   execId?: string;
+  /**
+   * A runner service user to run as instead of the agents' (ptyd protocol 5, runner only): the
+   * browser daemon is `browser`'s. ptyd refuses it in ops mode and for a user it was not given.
+   */
+  runAs?: 'browser';
 }
 
 /**
@@ -105,7 +110,7 @@ export function systemCommand(request: UntargetedRequest): ExecRequest {
  * - runs/suggest.ts: the answer suggestion (agent CLI)
  * - worktree-config/lifecycle.ts: worktree.yml commands (workspace code)
  * - updates/service.ts: clearing the npx cache in the runner home (not mounted in ops)
- * - factory/browser-daemon.ts: the browser daemon (ptyd `spawn` of the image's node, runner bridge)
+ * - factory/browser-daemon.ts: the browser daemon (the image's node and script, `runAs: 'browser'`)
  * - routes/projects.ts: the provider login terminal (agent CLIs); routes/terminals.ts: shell and agent
  *   terminals; toolchain/service.ts: tool installs (all ptyd `spawn` on the runner bridge)
  */
@@ -212,6 +217,7 @@ export function ptydCommandExecutor({ runner, ops }: CommandBridges): CommandExe
       encoding: request.encoding ?? 'utf8',
       ...(request.inheritEnv === false ? { inheritEnv: false } : {}),
       ...(request.execId ? { execId: request.execId } : {}),
+      ...(request.runAs ? { runAs: request.runAs } : {}),
     });
     // ptyd enforces the timeout; this only guards against a reply that never comes. It is a timeout
     // like the client's own (isRunnerTimeout), whichever of the two fires first.
@@ -243,7 +249,10 @@ export const localCommandCanceller: CommandCanceller = async (execId) => {
   return true;
 };
 
-/** Runs commands in this process's container. Only for tests and local development tools. */
+/**
+ * Runs commands in this process's container. Only for tests and local development tools. `runAs` is
+ * ignored: the command runs as this process's user (no service users here).
+ */
 export const localCommandExecutor: CommandExecutor = (request) =>
   new Promise((resolve) => {
     const max = request.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES;

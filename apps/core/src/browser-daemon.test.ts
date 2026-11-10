@@ -1,15 +1,26 @@
 import { PLAYTEST_HELD_MESSAGE } from '@emberline/protocol';
+import fs, { mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import net, { type AddressInfo, type Server } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { type ExecRequest, localCommandExecutor, RUNNER_BIN, setCommandExecutor } from './command-exec.js';
 import {
+  AGENT_BROWSER_EVENTS_FILE,
   BROWSER_DAEMON_SCRIPT,
   BROWSER_DAEMON_VERSION,
+  ensureRunnerBrowserDaemon,
   isBrowsableUrl,
   logBridgeErrorOnce,
+  PLAYWRIGHT_HOOK_PATH,
+  PLAYWRIGHT_HOOK_SCRIPT,
   resetBridgeErrorLog,
-  runnerBrowserDir,
+  RUNNER_BROWSER_DIR,
 } from './factory/browser-daemon.js';
+import type { PtydBridge } from './ptyd-bridge.js';
+import { rmTemp } from './test-rm.js';
 
 /** The daemon is a standalone script run in the runner; its URL guard is evaluated from the source. */
 function loadNormalizeNavigateUrl(): (raw: string) => string {
@@ -131,7 +142,7 @@ describe('browser daemon tabs per project', () => {
     );
   });
   it('the daemon version moved with the script', () => {
-    expect(BROWSER_DAEMON_VERSION).toBe('1.5.3');
+    expect(BROWSER_DAEMON_VERSION).toBe('1.6.0');
   });
 });
 
@@ -692,12 +703,119 @@ describe('browser daemon actions keep to the project that asks (B-8, B-29)', () 
   });
 });
 
-describe("the browser daemon's directory", () => {
-  it("is browser/ beside ptyd's socket (whose own directory the runner locks), for every file of the daemon's", () => {
-    expect(runnerBrowserDir('/run/emberline/ptyd.sock')).toBe('/run/emberline/browser');
+describe("the browser daemon's files", () => {
+  it('its socket and state are in its own directory; the agents report to theirs', () => {
+    expect(RUNNER_BROWSER_DIR).toBe('/run/emberline/browser');
     expect(BROWSER_DAEMON_SCRIPT).toContain("'/run/emberline/browser/browser.sock'");
-    // The tabs and the agents' browser events sit next to the socket; nothing is written beside ptyd's.
-    expect(BROWSER_DAEMON_SCRIPT).toContain("SOCKET_PATH.replace(/[^/]+$/, 'agent-browser-events.jsonl')");
-    expect(BROWSER_DAEMON_SCRIPT.match(/\/run\/emberline\/[\w.-]+/g)).toEqual(['/run/emberline/browser']);
+    expect(AGENT_BROWSER_EVENTS_FILE).toBe('/run/emberline/agent-events/agent-browser-events.jsonl');
+    expect(BROWSER_DAEMON_SCRIPT).toContain(JSON.stringify(AGENT_BROWSER_EVENTS_FILE));
+    expect(PLAYWRIGHT_HOOK_SCRIPT).toContain(JSON.stringify(AGENT_BROWSER_EVENTS_FILE));
+    // Chromium's profile is the daemon's (beside its socket), not a /tmp path an agent could take first.
+    expect(BROWSER_DAEMON_SCRIPT).not.toMatch(/\/tmp\//);
+    expect(BROWSER_DAEMON_SCRIPT).toContain("SOCKET_PATH.replace(/[^/]+$/, 'chrome-profile')");
+  });
+
+  it("the hook and the script are the runner image's", () => {
+    expect(PLAYWRIGHT_HOOK_PATH).toBe('/opt/emberline/browser/playwright-hook.cjs');
+  });
+
+  it('the socket is for core and the agents; the usage scan and the shutdown endpoint are gone', () => {
+    expect(BROWSER_DAEMON_SCRIPT).toMatch(/fs\.chmodSync\(SOCKET_PATH, 0o666\)/);
+    expect(BROWSER_DAEMON_SCRIPT).not.toContain('/claude-usage');
+    expect(BROWSER_DAEMON_SCRIPT).not.toContain('/shutdown');
+    expect(BROWSER_DAEMON_SCRIPT).not.toContain('/home/node');
+  });
+});
+
+/** The daemon's `readHookEvents` run against a file of the test's (the agents write the real one). */
+function loadReadHookEvents(file: string): () => { toolName: string; summary: string; timestamp: string }[] {
+  const m = /function readHookEvents\(\) \{[\s\S]*?\n\}/.exec(BROWSER_DAEMON_SCRIPT);
+  if (!m) throw new Error('readHookEvents not found in the daemon script');
+  return new Function('fs', 'Buffer', 'AGENT_EVENTS_FILE', `${m[0]}\nreturn readHookEvents;`)(
+    fs,
+    Buffer,
+    file,
+  );
+}
+
+describe("the agents' browser events (read as untrusted input)", () => {
+  it('reads the newest lines only, with plain strings, and never follows a link', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agent-events-'));
+    try {
+      const file = path.join(dir, 'agent-browser-events.jsonl');
+      const filler = `${JSON.stringify({ toolName: 'old', summary: 'x'.repeat(1000) })}\n`.repeat(2000);
+      const odd = [
+        JSON.stringify({ ts: 12, toolName: { a: 1 }, summary: 'y'.repeat(5000) }),
+        'not json',
+        'null',
+        JSON.stringify({ ts: '2026-11-10T10:00:00.000Z', toolName: 'playwright_launch', summary: 'ok' }),
+      ].join('\n');
+      writeFileSync(file, filler + odd + '\n');
+      const events = loadReadHookEvents(file)();
+      expect(events.some((e) => e.toolName === 'old')).toBe(true);
+      const [a, b] = events.slice(-2);
+      expect(typeof a?.toolName).toBe('string');
+      expect(typeof a?.timestamp).toBe('string');
+      expect(a?.summary.length).toBeLessThanOrEqual(300);
+      expect(b).toMatchObject({
+        toolName: 'playwright_launch',
+        summary: 'ok',
+        timestamp: '2026-11-10T10:00:00.000Z',
+      });
+      expect(events.length).toBeLessThanOrEqual(15);
+
+      const secret = path.join(dir, 'secret.jsonl');
+      writeFileSync(secret, `${JSON.stringify({ toolName: 'leaked', summary: 'leaked' })}\n`);
+      const link = path.join(dir, 'link.jsonl');
+      symlinkSync(secret, link);
+      expect(loadReadHookEvents(link)()).toEqual([]);
+      expect(loadReadHookEvents(path.join(dir, 'missing.jsonl'))()).toEqual([]);
+    } finally {
+      rmTemp(dir);
+    }
+  });
+});
+
+describe('starting the browser daemon', () => {
+  it("the daemon is started as browser with the image's script", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'browser-dir-'));
+    const sock = path.join(dir, 'browser.sock');
+    const seen: ExecRequest[] = [];
+    let daemon: http.Server | undefined;
+    let version = BROWSER_DAEMON_VERSION;
+    setCommandExecutor(async (request) => {
+      seen.push(request);
+      // The launcher started the daemon: it answers on its socket.
+      daemon = http.createServer((_req, res) => {
+        res.end(JSON.stringify({ ok: true, version, bridgeError: null }));
+      });
+      await new Promise<void>((resolve) => daemon?.listen(sock, resolve));
+      return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+    });
+    try {
+      const ptyd = { status: 'connected' } as unknown as PtydBridge;
+      await expect(ensureRunnerBrowserDaemon(ptyd, dir)).resolves.toBe(sock);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({
+        target: 'runner',
+        runAs: 'browser',
+        file: RUNNER_BIN.node,
+        cwd: '/',
+        inheritEnv: false,
+      });
+      const launcher = seen[0]?.args.join(' ') ?? '';
+      expect(launcher).toContain(JSON.stringify('/opt/emberline/browser/browser-daemon.mjs'));
+      expect(seen[0]?.env).toMatchObject({ EMBERLINE_BROWSER_SOCKET: sock });
+      // Core writes nothing there: the script and the hook come from the runner image.
+      expect(readdirSync(dir)).toEqual(['browser.sock']);
+      // A daemon that answers is used as it is, whatever its version: it is the runner image's.
+      version = '0.0.1';
+      await expect(ensureRunnerBrowserDaemon(ptyd, dir)).resolves.toBe(sock);
+      expect(seen).toHaveLength(1);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+      await new Promise((resolve) => (daemon ? daemon.close(resolve) : resolve(undefined)));
+      rmTemp(dir);
+    }
   });
 });

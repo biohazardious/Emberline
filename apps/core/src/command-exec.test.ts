@@ -18,6 +18,7 @@ import {
   ptydCommandCanceller,
   ptydCommandExecutor,
   RUNNER_BIN,
+  runnerSystemCommand,
   SYSTEM_PATH,
   setCommandCanceller,
   setCommandExecutor,
@@ -101,6 +102,16 @@ describe('command execution through the runner', () => {
     } as unknown as PtydBridge;
     setCommandCanceller(ptydCommandCanceller({ runner: outdated, ops: null }));
     expect(await cancelCommand('setup-x')).toBe(false);
+  });
+
+  it('forwards runAs to ptyd exec (the browser daemon), and omits it otherwise', async () => {
+    const asBrowser = runnerSystemCommand({ file: '/usr/bin/true', args: [], cwd: dir, runAs: 'browser' });
+    expect(asBrowser).toMatchObject({ target: 'runner', runAs: 'browser', inheritEnv: false });
+    // This ptyd has no service users: its refusal names the runAs it was sent.
+    await expect(execCommand(asBrowser)).rejects.toThrow(/runAs browser is not a service user/);
+    await expect(
+      execCommand(runnerSystemCommand({ file: '/usr/bin/true', args: [], cwd: dir })),
+    ).resolves.toMatchObject({ exitCode: 0 });
   });
 
   it('reports the runner protocol and refuses exec on an outdated runner', async () => {

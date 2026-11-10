@@ -92,12 +92,12 @@ import { gitCredentialForRemote } from '../forge/account-store.js';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
 import { accountCloneArgs } from '../git-gateway/remote-git.js';
 import {
-  getRunnerClaudeUsage,
   isBrowsableUrl,
+  RUNNER_BROWSER_DIR,
   runnerBrowserDaemon,
-  runnerBrowserDir,
   withRunActivity,
 } from '../factory/browser-daemon.js';
+import { claudeUsageTelemetry, RUNNER_HOME } from '../usage/claude-usage.js';
 import { type BrowserTabOptions, ProjectBrowserTabs } from '../factory/project-browser-tabs.js';
 import {
   addRoadmapItem,
@@ -242,7 +242,7 @@ export function registerProjectRoutes(
       .run();
   };
   const browserTabs = new ProjectBrowserTabs(
-    (opts) => runnerBrowserDaemon(ptyd, runnerBrowserDir(config.ptydSocket), opts),
+    (opts) => runnerBrowserDaemon(ptyd, RUNNER_BROWSER_DIR, opts),
     (ids) =>
       new Set(
         db
@@ -1175,11 +1175,8 @@ export function registerProjectRoutes(
   app.get<{ Querystring: { refresh?: string } }>(
     '/api/factory/claude-usage',
     async (request): Promise<ClaudeUsageTelemetry> => {
-      return getRunnerClaudeUsage({
-        ptyd,
-        socketDir: runnerBrowserDir(config.ptydSocket),
-        forceRefresh: request.query.refresh === '1',
-      });
+      // Core reads the runner home itself (the runner-home volume, mounted read-only).
+      return claudeUsageTelemetry(RUNNER_HOME, { forceRefresh: request.query.refresh === '1' });
     },
   );
 

@@ -305,10 +305,17 @@ ENV SHELL=/bin/bash \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
+# The browser daemon's script and the Playwright hook preloaded into the agents' node processes
+# (written by core's build): root's, so no agent can replace them. The daemon runs as browser.
+# (COPY --chmod gives the directory it makes 0644 too: the RUN below makes it 0755.)
+COPY --from=build --chown=root:root --chmod=0644 \
+  /src/apps/core/dist/browser/browser-daemon.mjs /src/apps/core/dist/browser/playwright-hook.cjs \
+  /opt/emberline/browser/
 # GitHub's, GitLab's and Bitbucket's published SSH host keys: core's ssh never asks about an
 # unknown key (apps/core/src/git-exec.ts), so these hosts work without trusting one on first use.
 COPY --chmod=0644 apps/ptyd/ssh_known_hosts /etc/ssh/ssh_known_hosts
 RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
+  && chmod 0755 /opt/emberline/browser \
   && ln -sf /opt/emberline/hook/dist/main.js /usr/local/bin/emberline-hook \
   && ln -sf /opt/emberline/hook/dist/mcp.js /usr/local/bin/emberline-mcp \
   && mkdir -p /opt/emberline/wrappers \

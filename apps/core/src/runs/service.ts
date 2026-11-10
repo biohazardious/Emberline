@@ -138,7 +138,11 @@ import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
-import { ensureRunnerBrowserDaemon, runnerBrowserDir } from '../factory/browser-daemon.js';
+import {
+  ensureRunnerBrowserDaemon,
+  PLAYWRIGHT_HOOK_PATH,
+  RUNNER_BROWSER_DIR,
+} from '../factory/browser-daemon.js';
 import {
   BROWSER_AGENT_WINDOW_MS,
   type BrowserAgentActivity,
@@ -1873,7 +1877,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         process.env.EMBERLINE_PLAYWRIGHT_MCP !== 'false');
 
     if (enablePlaywrightMcp && isRealClaude) {
-      await ensureRunnerBrowserDaemon(this.ptyd, runnerBrowserDir(this.config.ptydSocket)).catch(() => null);
+      await ensureRunnerBrowserDaemon(this.ptyd, RUNNER_BROWSER_DIR).catch(() => null);
     }
 
     // The run's own worktree, never main: a QA run checks its own work. hookUrl is how the runner
@@ -1904,9 +1908,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       persona !== 'coder' && PERSONA_CATALOG[persona] ? `[${PERSONA_CATALOG[persona].shortLabel}] ` : '';
     const modelSuffix =
       isRealClaude && resolvedModel && resolvedModel !== 'auto' ? ` (${resolvedModel})` : '';
-    const hookFile = path.join(runnerBrowserDir(this.config.ptydSocket), 'playwright-hook.cjs');
+    // The hook is the runner image's (root's): no agent can replace what its node processes preload.
     const playwrightEnv: Record<string, string> =
-      enablePlaywrightMcp && isRealClaude ? { NODE_OPTIONS: `--require ${hookFile}` } : {};
+      enablePlaywrightMcp && isRealClaude ? { NODE_OPTIONS: `--require ${PLAYWRIGHT_HOOK_PATH}` } : {};
     try {
       const session = await ptyd.spawn({
         file: spec.file,
