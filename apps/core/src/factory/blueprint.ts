@@ -19,6 +19,7 @@ import {
   type Ticket,
   type WorktreeHints,
 } from '@emberline/protocol';
+import { isCommandsUnavailable } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
 import { unstageScratchFiles } from './merge.js';
 import type { TicketService } from '../tickets/service.js';
@@ -717,8 +718,11 @@ export async function initLocalGitRepository(projectPath: string, defaultBranch 
       ],
       { cwd: projectPath },
     );
-  } catch {
-    // Non-fatal if git is unavailable in a minimal test environment
+  } catch (error) {
+    // The runner or ops cannot run commands: the create fails with why (and leaves nothing behind).
+    if (isCommandsUnavailable(error)) throw error;
+    // A failing git itself (none in a minimal test environment) stays non-fatal, as before: the
+    // wizard's create checks for the commit itself.
   }
 }
 

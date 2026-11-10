@@ -22,6 +22,13 @@ export const badRequest = (message: string) => new HttpError(400, 'bad_request',
 export const notFound = (message: string) => new HttpError(404, 'not_found', message);
 export const conflict = (message: string, code = 'conflict') => new HttpError(409, code, message);
 export const unavailable = (code: string, message: string) => new HttpError(503, code, message);
+/**
+ * The bridges' refusal: the runner or ops cannot run commands now (`ops_missing`, `ptyd_unavailable`,
+ * `runner_outdated`, `runner_not_secured`). Never a command's own failure: callers that tolerate a
+ * failed command pass this on.
+ */
+export const isCommandsUnavailable = (error: unknown): error is HttpError =>
+  error instanceof HttpError && error.statusCode === 503;
 /** What a request says when the runner cannot run its command. */
 export const RUNNER_NOT_REACHABLE = 'the runner (ptyd) is not reachable';
 

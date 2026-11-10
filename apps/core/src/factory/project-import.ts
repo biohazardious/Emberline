@@ -18,7 +18,7 @@ import {
   type ProjectChoices,
   type WorkspaceFolder,
 } from '@emberline/protocol';
-import { badRequest, conflict, HttpError, notFound, unavailable } from '../errors.js';
+import { badRequest, conflict, HttpError, isCommandsUnavailable, notFound, unavailable } from '../errors.js';
 import { execGitFile, UnsafeGitConfigError } from '../git-exec.js';
 import { redactGitText } from '../git-gateway/gateway.js';
 import {
@@ -136,6 +136,7 @@ export async function inspectImportFolder(dir: string): Promise<{ branch: string
   try {
     await execGitFile(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], { cwd: dir });
   } catch (error) {
+    if (isCommandsUnavailable(error)) throw error;
     if (error instanceof UnsafeGitConfigError) throw conflict(error.message);
     throw conflict(`the repository has no commit yet; ${hint}`);
   }

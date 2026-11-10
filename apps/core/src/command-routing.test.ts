@@ -5,7 +5,7 @@
  * production core starts nothing anywhere; a ptyd that answers in the other mode counts as missing.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AgentModelId } from '@emberline/protocol';
@@ -551,6 +551,143 @@ describe('an old compose file with the new images (no ops service)', () => {
     });
     expect(after.statusCode, after.body).toBe(201);
   }, 20_000);
+});
+
+describe('creating a project while ops or the runner cannot run commands (Ruling 14)', () => {
+  let t: TestApp;
+  let runnerServer: PtydServer | undefined;
+  let opsDir: string;
+  beforeEach(async () => {
+    opsDir = mkdtempSync(path.join(tmpdir(), 'ops-'));
+    t = await createTestApp({ opsSocket: path.join(opsDir, 'ops.sock') });
+    // Core's commands go through the bridges, as in production.
+    setCommandExecutor(ptydCommandExecutor({ runner: t.ptyd, ops: t.ops }));
+  });
+  afterEach(async () => {
+    setCommandExecutor(localCommandExecutor);
+    await t.close();
+    await runnerServer?.close();
+    runnerServer = undefined;
+    rmTemp(opsDir);
+  });
+
+  const create = (cookie: string, payload: Record<string, unknown>) =>
+    t.app.inject({ method: 'POST', url: '/api/projects', payload, headers: authHeaders(cookie) });
+  const projectNames = async (cookie: string) =>
+    (
+      (await t.app.inject({ url: '/api/projects', headers: authHeaders(cookie) })).json() as {
+        name: string;
+      }[]
+    ).map((p) => p.name);
+  const folder = (slug: string) => path.join(t.config.workspacesDir, slug);
+
+  it('fails with ops_missing and leaves no project and no folder (runner up, no ops service)', async () => {
+    runnerServer = new PtydServer({ socketPath: t.config.ptydSocket, mode: 'runner' });
+    await runnerServer.listen();
+    t.ops!.start();
+    t.ptyd.start();
+    await t.ptyd.waitUntilConnected();
+    const cookie = await setupAndLogin(t.app);
+    const missing = { error: 'ops_missing', message: OPS_MISSING };
+
+    const plain = await create(cookie, {
+      name: 'Plain Create',
+      mode: 'wizard',
+      appType: 'web_saas',
+      description: 'x',
+      initGit: true,
+      seedStarterTickets: false,
+    });
+    expect(plain.statusCode, plain.body).toBe(503);
+    expect(plain.json()).toMatchObject(missing);
+    expect(existsSync(folder('plain-create'))).toBe(false);
+
+    // A folder the person made, empty: it stays, as empty as it was.
+    mkdirSync(folder('their-folder'));
+    const into = await create(cookie, { name: 'Their Folder', description: 'x', initGit: true });
+    expect(into.statusCode, into.body).toBe(503);
+    expect(into.json()).toMatchObject(missing);
+    expect(readdirSync(folder('their-folder'))).toEqual([]);
+
+    const wizard = await create(cookie, {
+      name: 'Wizard Create',
+      source: 'new',
+      appType: 'static_site',
+      presetId: 'static-plain',
+      vision: 'A landing page.',
+      startFactory: false,
+    });
+    expect(wizard.statusCode, wizard.body).toBe(503);
+    expect(wizard.json()).toMatchObject(missing);
+    expect(existsSync(folder('wizard-create'))).toBe(false);
+
+    // An existing repository: refused with why, and it stays as it is.
+    const mine = folder('mine');
+    mkdirSync(mine);
+    execFileSync('git', ['init', '-q', '-b', 'main', mine]);
+    execFileSync('git', [
+      '-C',
+      mine,
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'one',
+    ]);
+    const imported = await create(cookie, { name: 'Mine', source: 'import_folder', folder: 'mine' });
+    expect(imported.statusCode, imported.body).toBe(503);
+    expect(imported.json()).toMatchObject(missing);
+    expect(existsSync(path.join(mine, '.git'))).toBe(true);
+
+    const cloned = await create(cookie, {
+      name: 'Cloned',
+      source: 'import_url',
+      repoUrl: 'https://example.invalid/x.git',
+    });
+    expect(cloned.statusCode, cloned.body).toBe(503);
+    expect(cloned.json()).toMatchObject(missing);
+    expect(existsSync(folder('cloned'))).toBe(false);
+
+    expect(await projectNames(cookie)).toEqual([]);
+  }, 20_000);
+
+  it('the same without a runner: the refusal names the ops service first, and nothing is left', async () => {
+    t.ops!.start();
+    t.ptyd.start();
+    const cookie = await setupAndLogin(t.app);
+    const plain = await create(cookie, { name: 'No Runner', description: 'x', initGit: true });
+    expect(plain.statusCode, plain.body).toBe(503);
+    expect(plain.json()).toMatchObject({ error: 'ops_missing' });
+    expect(existsSync(folder('no-runner'))).toBe(false);
+    expect(await projectNames(cookie)).toEqual([]);
+  });
+
+  it('the dev stack (no ops service) without its runner: ptyd_unavailable, and nothing is left', async () => {
+    const dev = await createTestApp();
+    setCommandExecutor(ptydCommandExecutor({ runner: dev.ptyd, ops: null }));
+    try {
+      dev.ptyd.start();
+      const cookie = await setupAndLogin(dev.app);
+      const res = await dev.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name: 'Dev Down', description: 'x', initGit: true },
+        headers: authHeaders(cookie),
+      });
+      expect(res.statusCode, res.body).toBe(503);
+      expect(res.json()).toMatchObject({ error: 'ptyd_unavailable' });
+      expect(existsSync(path.join(dev.config.workspacesDir, 'dev-down'))).toBe(false);
+      expect((await dev.app.inject({ url: '/api/projects', headers: authHeaders(cookie) })).json()).toEqual(
+        [],
+      );
+    } finally {
+      await dev.close();
+    }
+  });
 });
 
 describe('deep health reports ops', () => {

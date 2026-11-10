@@ -640,30 +640,45 @@ export function registerProjectRoutes(
             PROJECT_CONFLICT.directoryExists,
           );
         }
-        await mkdir(projectPath, { recursive: true });
-        const shouldWriteBlueprint =
-          body.mode === 'wizard' ||
-          Boolean(body.description.trim()) ||
-          Boolean(body.techStack) ||
-          Boolean(body.architectureNotes?.trim()) ||
-          Boolean(body.referenceDocs?.trim());
-        if (shouldWriteBlueprint) {
-          const blueprintContent = generateProjectBlueprint({
-            name: body.name,
-            appType: body.appType,
-            description: body.description,
-            techStack: body.techStack ?? null,
-            architectureNotes: body.architectureNotes,
-            referenceDocs: body.referenceDocs,
-          });
-          await writeFile(path.join(projectPath, 'PROJECT.md'), blueprintContent, 'utf8');
-          await writeFile(path.join(projectPath, 'CLAUDE.md'), generateClaudeInstructions(body.name), 'utf8');
-        }
-        // Runs need git for worktree isolation, review and merge, so new projects get a repository
-        // unless the caller opts out.
-        const shouldInitGit = body.initGit ?? true;
-        if (shouldInitGit) {
-          await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
+        // An empty folder of the person's own is kept on failure, as empty as it was.
+        const existed = existsSync(projectPath);
+        try {
+          await mkdir(projectPath, { recursive: true });
+          const shouldWriteBlueprint =
+            body.mode === 'wizard' ||
+            Boolean(body.description.trim()) ||
+            Boolean(body.techStack) ||
+            Boolean(body.architectureNotes?.trim()) ||
+            Boolean(body.referenceDocs?.trim());
+          if (shouldWriteBlueprint) {
+            const blueprintContent = generateProjectBlueprint({
+              name: body.name,
+              appType: body.appType,
+              description: body.description,
+              techStack: body.techStack ?? null,
+              architectureNotes: body.architectureNotes,
+              referenceDocs: body.referenceDocs,
+            });
+            await writeFile(path.join(projectPath, 'PROJECT.md'), blueprintContent, 'utf8');
+            await writeFile(
+              path.join(projectPath, 'CLAUDE.md'),
+              generateClaudeInstructions(body.name),
+              'utf8',
+            );
+          }
+          // Runs need git for worktree isolation, review and merge, so new projects get a repository
+          // unless the caller opts out. The runner or ops not able to run it fails the create.
+          const shouldInitGit = body.initGit ?? true;
+          if (shouldInitGit) {
+            await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
+          }
+        } catch (err) {
+          const leftovers = existed
+            ? (await readdir(projectPath).catch(() => [])).map((e) => path.join(projectPath, e))
+            : [projectPath];
+          for (const entry of leftovers)
+            await rm(entry, { recursive: true, force: true }).catch(() => undefined);
+          throw err;
         }
       }
 
