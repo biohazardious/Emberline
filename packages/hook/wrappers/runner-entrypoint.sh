@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# The runner's entrypoint. It starts as root only to lock ptyd's socket in place, and runs ptyd as
-# the runner user (node), with the same environment as before; every agent is one of ptyd's
-# children, so agents run as node too.
+# The runner's entrypoint. It starts as root only to make the directories of the runner's services,
+# each owned by its service's user, then runs ptyd as its own user (ptyd) with just the capabilities
+# it needs to start sessions and commands as the agents' user (node) and the browser daemon as
+# browser. No agent ever runs as ptyd, and the directory of ptyd's socket is never theirs: only
+# ptyd and the group emberline-core (core's user, in the core image) may reach the socket.
 #
 # Only the image's own binaries, by path, and bash's builtins: the runner's PATH starts with
 # /opt/ai-tools/bin (the runner-tools volume, which agents can write), and ptyd must never be a
@@ -11,73 +13,67 @@
 set -e
 
 TOOLS_DIR="${EMBERLINE_TOOLS_DIR:-/opt/ai-tools}"
-SOCKET="${EMBERLINE_PTYD_SOCKET:-/run/emberline/ptyd.sock}"
-RUN_DIR="${SOCKET%/*}"
+# Fixed paths, whatever the environment says: core finds ptyd's socket here (the ptyd-socket volume).
+RUN_DIR=/run/emberline
+SOCKET_DIR="$RUN_DIR/ptyd"
+SOCKET="$SOCKET_DIR/ptyd.sock"
+LOG_DIR=/var/log/emberline
 PTYD=(/usr/local/bin/node /opt/emberline/ptyd/dist/main.js)
+# Exactly ptyd's capabilities (apps/ptyd/src/drop.ts): setuid and setgid to change user, setpcap to
+# empty the bounding set of what it starts, kill to signal it, chown to give a session its terminal.
+PTYD_CAPS=-all,+setuid,+setgid,+setpcap,+kill,+chown
+TOOLS_DIRS=("${TOOLS_DIR}/bin" "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib" "${TOOLS_DIR}/pipx")
 
 if [ "$EUID" != 0 ]; then
-  # Started as another user (a compose file that sets `user:`): the socket cannot be locked, so
-  # Emberline treats this runner as not secured and starts nothing in it (see SECURITY.md).
-  echo "runner: started as uid $EUID, not root: the runner's service socket cannot be locked, and Emberline will start nothing in this runner. Remove \`user:\` from the runner service." >&2
-  /usr/bin/mkdir -p "${TOOLS_DIR}/bin" "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib" "${TOOLS_DIR}/pipx" 2>/dev/null || true
-  EMBERLINE_PTYD_CANNOT_LOCK=1 exec "${PTYD[@]}"
+  # Started as another user (a compose file that sets `user:`): ptyd cannot run as a user of its own,
+  # so Emberline treats this runner as not secured and starts nothing in it (see SECURITY.md).
+  echo "runner: started as uid $EUID, not root: ptyd cannot run under its own user, and Emberline will start nothing in this runner. Remove \`user:\` from the runner service." >&2
+  /usr/bin/mkdir -p "${TOOLS_DIRS[@]}" 2>/dev/null || true
+  unset EMBERLINE_PTYD_DROP_TO EMBERLINE_PTYD_SERVICE_USERS EMBERLINE_PTYD_REQUIRE_ISOLATION
+  EMBERLINE_PTYD_MODE=runner EMBERLINE_PTYD_SOCKET="$SOCKET" exec "${PTYD[@]}"
 fi
-
-AS_NODE=(/usr/bin/setpriv --reuid=node --regid=node --init-groups --inh-caps=-all)
 
 fail() {
   echo "runner: $1; stopping" >&2
-  [ -n "${ptyd:-}" ] && kill -TERM "$ptyd" 2>/dev/null && wait "$ptyd"
   exit 1
 }
 
-HOME=/home/node "${AS_NODE[@]}" /usr/bin/mkdir -p "${TOOLS_DIR}/bin" "${TOOLS_DIR}/npm/bin" "${TOOLS_DIR}/npm/lib" "${TOOLS_DIR}/pipx" 2>/dev/null || true
+HOME=/home/node /usr/bin/setpriv --reuid=node --regid=node --init-groups --inh-caps=-all \
+  /usr/bin/mkdir -p "${TOOLS_DIRS[@]}" 2>/dev/null || true
 
-# ptyd's socket directory (the ptyd-socket volume, shared with core) is root's, except while ptyd
-# binds: agents share ptyd's user, so in a directory of theirs they could remove the socket and listen
-# in its place, and core would take them for ptyd. Nothing starts in that window: ptyd refuses spawn
-# and exec until the directory is locked again (EMBERLINE_PTYD_REQUIRE_LOCK), and core waits for it.
+# The ptyd-socket volume (shared with core) is root's; each service gets a directory of its own in it,
+# made afresh on every start: a link or file left in its place is removed, never followed.
 [ -d "$RUN_DIR" ] && [ ! -L "$RUN_DIR" ] || fail "${RUN_DIR} is not a directory"
 /usr/bin/chown -h root:root "$RUN_DIR"
 /usr/bin/chmod 0755 "$RUN_DIR"
-# Removing a link removes the link, never what it points at. The browser daemon's script, socket and
-# state, and the Playwright hook, live in browser/, which is the runner user's; it is made afresh on
-# every start (the daemon rewrites all of it), so a link or file left in its place is never followed.
-# Emberline before 0.6.1 kept these files beside the socket.
-/usr/bin/rm -f -- "$SOCKET" "$RUN_DIR"/{browser-daemon.mjs,playwright-hook.cjs,browser.sock,browser-tabs.json,browser-tabs.json.tmp,agent-browser-events.jsonl}
-/usr/bin/rm -rf -- "$RUN_DIR/browser"
+# Emberline 0.6.x kept ptyd's socket and the browser daemon's files beside each other in it.
+/usr/bin/rm -rf -- "$RUN_DIR"/{ptyd.sock,browser-daemon.mjs,playwright-hook.cjs,browser.sock,browser-tabs.json,browser-tabs.json.tmp,agent-browser-events.jsonl}
+/usr/bin/rm -rf -- "$SOCKET_DIR" "$RUN_DIR/browser" "$RUN_DIR/agent-events"
+# ptyd's: setgid, so its socket gets the group emberline-core (ptyd makes it 0660).
+/usr/bin/mkdir -m 0750 -- "$SOCKET_DIR"
+/usr/bin/chown -h ptyd:emberline-core "$SOCKET_DIR"
+/usr/bin/chmod 2750 "$SOCKET_DIR"
+# The browser daemon's socket and state.
 /usr/bin/mkdir -m 0755 -- "$RUN_DIR/browser"
-/usr/bin/chown -h node:node "$RUN_DIR/browser"
-/usr/bin/chown -h node:node "$RUN_DIR"
+/usr/bin/chown -h browser:browser "$RUN_DIR/browser"
+# What the agents' Playwright hook reports to the browser daemon.
+/usr/bin/mkdir -m 0755 -- "$RUN_DIR/agent-events"
+/usr/bin/chown -h node:node "$RUN_DIR/agent-events"
 
-# ptyd says when it listens, and which socket is its own, on a pipe only root can open.
-start_dir="$(/usr/bin/mktemp -d /run/emberline-start.XXXXXXXX)"
-/usr/bin/mkfifo -m 0600 "$start_dir/ready"
-# A simple command, not a function: `$!` is then ptyd itself (setpriv execs it), not a subshell. The
-# pipe is opened by this shell's child while it is still root, then inherited as fd 3.
-EMBERLINE_PTYD_REQUIRE_LOCK=1 EMBERLINE_PTYD_READY_FD=3 HOME=/home/node "${AS_NODE[@]}" "${PTYD[@]}" 3>"$start_dir/ready" &
-ptyd=$!
-# `docker stop` reaches this shell (docker-init passes signals to its child); ptyd shuts down itself.
-trap 'kill -TERM "$ptyd" 2>/dev/null' TERM INT HUP
+# ptyd's session logs (the runner-logs volume), the runner user's before 0.7.0: ptyd's only. Links in
+# it are re-owned themselves, never what they point at.
+[ -d "$LOG_DIR" ] && [ ! -L "$LOG_DIR" ] || fail "${LOG_DIR} is not a directory"
+/usr/bin/chown -hR ptyd:ptyd -- "$LOG_DIR"
+/usr/bin/chmod 0700 -- "$LOG_DIR"
 
-set +e
-exec 4<"$start_dir/ready"
-/usr/bin/rm -rf -- "$start_dir"
-read -r -t 60 -u 4 word dev ino
-exec 4<&-
-[ "$word" = ready ] || fail "ptyd did not start listening"
-
-# Lock only ptyd's own socket: a socket (not a link), with the device and inode ptyd bound.
-is_ptyds_socket() { [ "$(/usr/bin/stat -c '%d %i %F' -- "$SOCKET" 2>/dev/null)" = "$dev $ino socket" ]; }
-is_ptyds_socket || fail "${SOCKET} is not the socket ptyd bound"
-/usr/bin/chown -h root:root "$RUN_DIR" && /usr/bin/chmod 0755 "$RUN_DIR" || fail "could not lock ${RUN_DIR}"
-# Checked again with the directory root's: nothing can change the socket any more.
-is_ptyds_socket || fail "${SOCKET} changed while ${RUN_DIR} was locked"
-echo "runner: ${RUN_DIR} locked; ptyd may start sessions" >&2
-
-# A signal ends `wait` early (the trap passes it on): wait again until ptyd has exited.
-while :; do
-  wait "$ptyd"
-  status=$?
-  kill -0 "$ptyd" 2>/dev/null || exit "$status"
-done
+# `docker stop` reaches ptyd itself: setpriv execs it in this process's place.
+HOME=/home/node \
+  EMBERLINE_PTYD_MODE=runner \
+  EMBERLINE_PTYD_SOCKET="$SOCKET" \
+  EMBERLINE_PTYD_LOG_DIR="$LOG_DIR" \
+  EMBERLINE_PTYD_DROP_TO=node \
+  EMBERLINE_PTYD_SERVICE_USERS=browser \
+  EMBERLINE_PTYD_REQUIRE_ISOLATION=1 \
+  exec /usr/bin/setpriv --reuid=ptyd --regid=ptyd --init-groups \
+  --inh-caps="$PTYD_CAPS" --ambient-caps="$PTYD_CAPS" --bounding-set="$PTYD_CAPS" \
+  -- "${PTYD[@]}"

@@ -194,7 +194,9 @@ export class PtydServer {
         resolve();
       });
     });
-    await chmod(socketPath, 0o600);
+    // A runner's socket is for core, through the group of its directory (`emberline-core`, setgid in
+    // the runner image); agents are not in it. An ops ptyd and core are the same user.
+    await chmod(socketPath, this.mode === 'runner' ? 0o660 : 0o600);
     this.server = server;
     this.options.log?.(`ptyd listening on ${socketPath} (${this.mode} mode)`);
     if (this.mode === 'ops' && this.options.dropTo)

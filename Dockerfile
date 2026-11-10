@@ -143,12 +143,16 @@ ENV NODE_ENV=production \
     EMBERLINE_PORT=7420 \
     EMBERLINE_WEB_DIR=/app/public \
     EMBERLINE_DATA_DIR=/data \
-    EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock
+    EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd/ptyd.sock
 WORKDIR /app
 COPY --from=build --chown=node:node /out/core ./
 COPY --from=build --chown=node:node /src/apps/web/dist ./public
-RUN mkdir -p /run/emberline /data /workspaces /opt/ai-tools \
-  && chown -R node:node /run/emberline /data /workspaces /opt/ai-tools
+# Core's user reaches the runner's ptyd socket through emberline-core (its directory's group); in the
+# runner no user is in that group. The ops service's socket is node's, as core is.
+RUN usermod -aG emberline-core node \
+  && mkdir -p /run/emberline /data /workspaces /opt/ai-tools \
+  && chown -R node:node /run/emberline /data /workspaces /opt/ai-tools \
+  && install -d -o node -g node -m 0700 /run/emberline-ops
 USER node
 EXPOSE 7420
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
@@ -297,7 +301,7 @@ ENV JAVA_HOME=/opt/ai-tools/sdk/jdk \
     PATH="/opt/emberline/wrappers:/opt/ai-tools/bin:/opt/ai-tools/npm/bin:/opt/ai-tools/sdk/jdk/bin:/opt/ai-tools/sdk/android/cmdline-tools/latest/bin:/opt/ai-tools/sdk/android/platform-tools:/opt/ai-tools/sdk/flutter/bin:/opt/ai-tools/sdk/esp-qemu/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV SHELL=/bin/bash \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
-    EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd.sock \
+    EMBERLINE_PTYD_SOCKET=/run/emberline/ptyd/ptyd.sock \
     EMBERLINE_PTYD_LOG_DIR=/var/log/emberline
 COPY --from=build /out/ptyd /opt/emberline/ptyd
 COPY --from=build /out/hook /opt/emberline/hook
@@ -311,8 +315,14 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
   && cp /opt/emberline/hook/wrappers/* /opt/emberline/wrappers/ \
   && chmod +x /opt/emberline/wrappers/* \
   && ln -sf /opt/emberline/wrappers/agy /opt/emberline/wrappers/antigravity \
-  && mkdir -p /run/emberline/browser /var/log/emberline /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
-  && chown -R node:node /run/emberline /var/log/emberline /workspaces /opt/ai-tools \
+  && mkdir -p /workspaces /opt/ai-tools/bin /opt/ai-tools/npm/bin /opt/ai-tools/pipx /opt/ai-tools/sdk \
+  && chown -R node:node /workspaces /opt/ai-tools \
+  && install -d -o root -g root -m 0755 /run/emberline \
+  && install -d -o ptyd -g emberline-core -m 2750 /run/emberline/ptyd \
+  && install -d -o browser -g browser -m 0755 /run/emberline/browser \
+  && install -d -o node -g node -m 0755 /run/emberline/agent-events \
+  && install -d -o node -g node -m 0700 /run/emberline-ops \
+  && install -d -o ptyd -g ptyd -m 0700 /var/log/emberline \
   && mkdir -p /opt/emberline/docker/config /opt/emberline/docker/buildx/instances /opt/emberline/docker/buildx/defaults \
     /opt/emberline/docker/buildx/activity /opt/emberline/docker/buildx/refs \
   && touch /opt/emberline/docker/buildx/.lock \
@@ -321,10 +331,14 @@ RUN chmod +x /opt/emberline/hook/dist/main.js /opt/emberline/hook/dist/mcp.js \
 # /opt/emberline/docker: the Docker CLI's config and buildx directories for Emberline's own commands
 # (DOCKER_CLI_ENV in apps/core/src/command-exec.ts), root's so no agent can add a plugin, a config or
 # a builder; buildx may write only its lock, activity times and build records.
-# The container starts as root: the entrypoint locks ptyd's socket directory once ptyd listens, and
-# runs ptyd (so every agent) as node. `docker compose exec runner …` is therefore root; use
-# `exec -u node` for the runner's user.
+# /run/emberline (the ptyd-socket volume) is laid out as the entrypoint makes it afresh on every
+# start: ptyd's socket directory (setgid, group emberline-core: core may connect, agents may not), the
+# browser daemon's, and the one where the agents' Playwright hook reports to it. /run/emberline-ops is
+# the ops service's socket (the ops-socket volume; ops-entrypoint.sh, `user: node`).
+# The container starts as root: the entrypoint makes those directories, then runs ptyd as ptyd, which
+# starts every agent as node. `docker compose exec runner …` is therefore root; use `exec -u node`
+# for the runner's user.
 WORKDIR /workspaces
-# Healthy once ptyd listens and the entrypoint has locked its socket's directory (core waits for it).
+# Healthy once ptyd answers and says it is secured (core waits for it). The ops service: `runner-health.sh ops`.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s CMD ["/opt/emberline/wrappers/runner-health.sh"]
 CMD ["/opt/emberline/wrappers/runner-entrypoint.sh"]

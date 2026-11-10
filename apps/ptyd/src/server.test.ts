@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -144,6 +145,18 @@ describe('modes and isolation', () => {
     // Runner is the default mode.
     expect(await (await connect()).hello()).toMatchObject({ mode: 'runner', secured: false });
     expect(PTYD_PROTOCOL_VERSION).toBe(5);
+  });
+
+  it("a runner's socket is for its directory's group too (core); an ops ptyd's only for its user", async () => {
+    const socketMode = async (mode: 'runner' | 'ops') => {
+      let result: number | undefined;
+      await withPtyd({ mode }, async (_client, other) => {
+        result = statSync(other.socketPath).mode & 0o777;
+      });
+      return result;
+    };
+    expect(await socketMode('runner')).toBe(0o660);
+    expect(await socketMode('ops')).toBe(0o600);
   });
 
   it('a runner ptyd is secured only when it drops to another user, from a directory only it can write', async () => {
@@ -350,8 +363,10 @@ describe.skipIf(!isRoot)("the runner's ptyd (user ptyd, the runner's capabilitie
     root = mkdtempSync(path.join(tmpdir(), 'ptyd-runner-'));
     chmodSync(root, 0o755);
     const socketDir = path.join(root, 'ptyd');
-    mkdirSync(socketDir, { mode: 0o700 });
-    chownSync(socketDir, 1001, 1001);
+    // As in the runner image: ptyd's, group emberline-core, setgid so the socket gets the group.
+    mkdirSync(socketDir);
+    chownSync(socketDir, 1001, 1500);
+    chmodSync(socketDir, 0o2750);
     work = path.join(root, 'work');
     mkdirSync(work, { mode: 0o700 });
     chownSync(work, 1000, 1000);
@@ -407,6 +422,13 @@ describe.skipIf(!isRoot)("the runner's ptyd (user ptyd, the runner's capabilitie
     expect(status).toMatch(new RegExp(`^CapBnd:\\s+${RUNNER_CAPS_MASK}$`, 'm'));
     // `secured` is only true once the probe saw a process started as node print node's uid.
     expect(await client.hello(), ptydLog).toMatchObject({ mode: 'runner', secured: true });
+    // Core reaches the socket through emberline-core; agents (node, not in it) cannot.
+    const socket = statSync(path.join(root, 'ptyd', 'ptyd.sock'));
+    expect({ uid: socket.uid, gid: socket.gid, mode: socket.mode & 0o777 }).toEqual({
+      uid: 1001,
+      gid: 1500,
+      mode: 0o660,
+    });
   });
 
   it("starts commands and sessions as node, with node's groups and no capabilities", async () => {
