@@ -1,5 +1,6 @@
 import type { WorkspaceFolder } from '@emberline/protocol';
 import type { Dispatch } from 'react';
+import { RepoSshKey } from './RepoSshKey';
 import { NameField } from './StepType';
 import {
   branchProblem,
@@ -155,9 +156,11 @@ export function StepRepo({
           onChange={(e) => dispatch({ type: 'field', field: 'repoUrl', value: e.target.value })}
         />
         <p id="wizard-repo-url-hint" className={url ? 'form-error' : 'muted small'}>
-          {url ?? 'The runner clones it with its own git credentials.'}
+          {url ??
+            'An https address uses the forge account for its server (Settings → Forge accounts), if there is one; an ssh address uses an Emberline SSH key.'}
         </p>
       </div>
+      <RepoSshKey state={state} dispatch={dispatch} />
       <NameField state={state} dispatch={dispatch} />
       <div className="field">
         <label htmlFor="wizard-repo-branch">Default branch</label>

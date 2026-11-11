@@ -2,15 +2,18 @@ import type {
   AdoptProjectResponse,
   CreateProjectResponse,
   FactorySettings,
+  ImportSshKey,
   Project,
   ProjectDetectResponse,
+  SshKeyResponse,
   WorkspaceFolder,
   WorkspaceFoldersResponse,
 } from '@emberline/protocol';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, X } from 'lucide-react';
 import { type MouseEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
-import { api, errorMessage } from '../../api';
+import { api, ApiRequestError, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
 import { useApi } from '../../hooks/useApi';
 import { ImportProgress } from './ImportProgress';
@@ -33,6 +36,9 @@ import {
   isStepValid,
   nextStep,
   previousStep,
+  repoIsSsh,
+  repoNextLabel,
+  sshKeyStepProblem,
   type StepId,
   stepLabel,
   stepProblem,
@@ -83,6 +89,15 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const [done, setDone] = useState<{ name: string; warning: string } | null>(null);
+  /** The own key the create made (`awaiting_key`): the import step starts by showing it. */
+  const [importSshKey, setImportSshKey] = useState<ImportSshKey | null | undefined>(undefined);
+  // The shared key, for an ssh address only (the Repository step shows it; same cache as there).
+  const queryClient = useQueryClient();
+  const sharedKey = useQuery({
+    queryKey: ['api', '/api/ssh-key'],
+    queryFn: () => api<SshKeyResponse>('/api/ssh-key'),
+    enabled: repoIsSsh(state),
+  });
   const dialogRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -185,12 +200,23 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   }, []);
 
   const registerImport = async () => {
-    setBusy(state.source === 'import_url' ? 'Starting the clone…' : 'Registering the folder…');
+    const body = buildCreateBody(state);
+    setBusy(
+      state.source !== 'import_url'
+        ? 'Registering the folder…'
+        : 'sshKeyChoice' in body
+          ? "Creating the project's key…"
+          : 'Starting the clone…',
+    );
     try {
-      const res = await api<CreateProjectResponse>('/api/projects', 'POST', buildCreateBody(state));
+      const res = await api<CreateProjectResponse>('/api/projects', 'POST', body);
       onProjectsChanged();
+      setImportSshKey(res.importStatus === 'awaiting_key' ? (res.sshKey ?? null) : undefined);
       dispatch({ type: 'importCreated', projectId: res.project.id });
     } catch (err) {
+      // The shared key went away meanwhile: the step shows its two ways to get one again.
+      if (err instanceof ApiRequestError && err.code === 'ssh_key_missing')
+        void queryClient.invalidateQueries({ queryKey: ['api', '/api/ssh-key'] });
       if (isNameConflict(err)) {
         dispatch({ type: 'nameError', message: errorMessage(err) });
         document.getElementById('wizard-name')?.focus();
@@ -252,6 +278,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   );
   const onRecreated = useCallback(
     (projectId: string) => {
+      setImportSshKey(undefined);
       onProjectsChanged();
       dispatch({ type: 'importCreated', projectId });
     },
@@ -259,6 +286,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   );
   const onCancelled = useCallback(
     (failure?: { message: string; onName: boolean }) => {
+      setImportSshKey(undefined);
       onProjectsChanged();
       focusNext.current = failure?.onName ? 'wizard-name' : null;
       dispatch({ type: 'importCancelled' });
@@ -268,7 +296,9 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     [dispatch, onProjectsChanged],
   );
 
-  const problem = stepProblem(state, state.step);
+  // A shared key that could not be read does not block: the step shows the error, and core refuses a missing key.
+  const problem =
+    stepProblem(state, state.step) ?? (sharedKey.isError ? null : sshKeyStepProblem(state, sharedKey.data));
   const cloneBlocked = state.step === 'repo' && state.source === 'import_url' && runnerDown;
   const summaryBlocked = state.step === 'summary' && !preview.ready;
   const nextDisabled =
@@ -287,9 +317,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
         : '');
   const nextLabel =
     state.step === 'repo'
-      ? state.source === 'import_url'
-        ? 'Clone'
-        : 'Use this folder'
+      ? repoNextLabel(state)
       : state.step === 'summary'
         ? imported
           ? 'Finish import'
@@ -401,6 +429,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                   source={state.source as 'import_url' | 'import_folder'}
                   projectId={state.importProjectId}
                   createBody={buildCreateBody(state)}
+                  initialSshKey={importSshKey}
                   onDetected={onDetected}
                   onRecreated={onRecreated}
                   onCancelled={onCancelled}

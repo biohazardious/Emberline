@@ -1,13 +1,14 @@
 import type {
   ForgeAccountsResponse,
   ForgeOwner,
+  HostKeyDetails,
   ForgeOwnersResponse,
   Project,
   RepositoryStatus,
 } from '@emberline/protocol';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
-import { api, errorMessage } from '../api';
+import { api, ApiRequestError, errorMessage } from '../api';
 import { FORGE_ACCOUNTS_HREF, PROVIDER_LABEL, accountHost } from '../forgeAccounts';
 import { useApi } from '../hooks/useApi';
 import {
@@ -23,6 +24,33 @@ import {
   repoErrorForm,
   replaceOriginQuestion,
 } from '../repository';
+import { hostKeyOf, SSH_KEY_HREF } from '../sshKeys';
+import { HostKeyChangedNote, HostKeyTrust } from './HostKeyTrust';
+import { ProjectSshKey } from './ProjectSshKey';
+
+type RepoForm = 'connect' | 'create' | 'actions';
+interface RepoError {
+  form: RepoForm;
+  text: string;
+  /** The API's code: an ssh problem gets its own help below the message. */
+  code?: string;
+  hostKey?: HostKeyDetails | null;
+}
+
+/** Help for an ssh problem a remote operation hit: trust an unknown host key (then run it again), a changed one, no key. */
+function SshProblemHelp({ error, onTrusted }: { error: RepoError; onTrusted: () => void }) {
+  if (error.code === 'host_key_unknown' && error.hostKey)
+    return <HostKeyTrust hostKey={error.hostKey} trustLabel="Trust and try again" onTrusted={onTrusted} />;
+  if (error.code === 'host_key_changed') return <HostKeyChangedNote hostKey={error.hostKey} />;
+  if (error.code === 'ssh_key_missing')
+    return (
+      <p className="muted small">
+        Choose or create this project&apos;s key under SSH key above, or create the shared key in{' '}
+        <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>.
+      </p>
+    );
+  return null;
+}
 
 /** Project settings → Repository: origin, the account used, main against origin, and the person's push. */
 export function RepositoryPanel({ project }: { project: Project }) {
@@ -30,7 +58,11 @@ export function RepositoryPanel({ project }: { project: Project }) {
   const status = useApi<RepositoryStatus>(base, 120_000);
   const accounts = useApi<ForgeAccountsResponse>('/api/forge/accounts', 120_000);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<{ form: 'connect' | 'create' | 'actions'; text: string } | null>(null);
+  const [error, setError] = useState<RepoError | null>(null);
+  /** The last operation, to run again once its server's host key is trusted. */
+  const lastAction = useRef<{ key: string; send: (replace: boolean) => Promise<RepositoryStatus> } | null>(
+    null,
+  );
   const [url, setUrl] = useState('');
   const [accountId, setAccountId] = useState('');
   // The owners belong to the account they were read for; a changed account never shows another's.
@@ -74,6 +106,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
 
   /** Runs a mutation; on origin_exists asks once and resends with replace. */
   const act = async (key: string, send: (replace: boolean) => Promise<RepositoryStatus>) => {
+    lastAction.current = { key, send };
     setBusy(key);
     setError(null);
     try {
@@ -86,7 +119,13 @@ export function RepositoryPanel({ project }: { project: Project }) {
         await send(true);
       }
     } catch (err) {
-      setError({ form: repoErrorForm(key), text: errorMessage(err) });
+      const failure = err instanceof ApiRequestError ? err : null;
+      setError({
+        form: repoErrorForm(key),
+        text: errorMessage(err),
+        code: failure?.code,
+        hostKey: hostKeyOf(failure?.data),
+      });
     } finally {
       // The status shows what happened (also after a failed push), so always re-read it.
       await status.refresh();
@@ -113,6 +152,13 @@ export function RepositoryPanel({ project }: { project: Project }) {
       }),
     );
   };
+
+  const again = () => {
+    const last = lastAction.current;
+    if (last) void act(last.key, last.send);
+  };
+  const help = (form: RepoForm) =>
+    error?.form === form ? <SshProblemHelp error={error} onTrusted={again} /> : null;
 
   const account = s ? accountText(s) : null;
   const blocked = s ? pushMainBlocked(s) : 'Loading…';
@@ -161,6 +207,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
           )}
         </dl>
       )}
+      {s && <ProjectSshKey project={project} originUrl={s.originUrl} />}
       {credentials && (
         <p className="banner banner-warn" role="alert">
           {credentials}
@@ -176,6 +223,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
           {error.text}
         </p>
       )}
+      {help('actions')}
       {s?.isGitRepo && (
         <>
           <div className="repo-actions">
@@ -237,6 +285,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
                   {error.text}
                 </p>
               )}
+              {help('connect')}
             </form>
           </details>
           <details className="repo-form" onToggle={(e) => setCreateOpen(e.currentTarget.open)}>
@@ -336,6 +385,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
                     {error.text}
                   </p>
                 )}
+                {help('create')}
               </form>
             )}
           </details>

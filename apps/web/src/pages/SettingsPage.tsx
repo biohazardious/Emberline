@@ -38,6 +38,7 @@ import {
   Folder,
   Globe,
   KeyRound,
+  KeySquare,
   Laptop,
   LoaderCircle,
   Lock,
@@ -74,6 +75,7 @@ import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { RouteChainEditor } from '../components/RouteChainEditor';
 import { SdkToolchainPanel } from '../components/SdkToolchainPanel';
+import { SshKeyPanel } from '../components/SshKeyPanel';
 import { UpdatesPanel } from '../components/UpdatesPanel';
 import { ProviderMark } from '../components/ProviderMark';
 
@@ -126,6 +128,7 @@ const SETTINGS_TABS = [
   'mcp_plugins',
   'quota',
   'notifications',
+  'ssh_key',
   'updates',
   'account',
 ] as const;
@@ -579,6 +582,13 @@ export function SettingsPage({
             onClick={() => setActiveTab('notifications')}
           >
             <Bell className="icon" aria-hidden /> Forge &amp; Webhooks
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${activeTab === 'ssh_key' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('ssh_key')}
+          >
+            <KeySquare className="icon" aria-hidden /> SSH key
           </button>
           <button
             type="button"
@@ -1742,6 +1752,7 @@ export function SettingsPage({
           <NotificationsPanel />
         </>
       )}
+      {activeTab === 'ssh_key' && <SshKeyPanel />}
       {activeTab === 'updates' && <UpdatesPanel />}
       {activeTab === 'account' && <AccountPanel />}
     </div>

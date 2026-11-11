@@ -18,6 +18,8 @@ import {
   type ProjectTypeId,
   presetsForType,
   PROJECT_CONFLICT,
+  type SshKeyChoice,
+  type SshKeyResponse,
   STACK_DIMENSION_IDS,
   StackChoice,
   type StackDimensionId,
@@ -27,6 +29,7 @@ import {
   type WorkspaceFolder,
 } from '@emberline/protocol';
 import type { GateChoice } from '../../projectSettings';
+import { isSshAddress } from '../../sshKeys';
 import {
   encodeMaterials,
   filesToAddAgain,
@@ -71,6 +74,11 @@ export interface WizardState {
   gates: ProjectGateOverrides;
   startFactory: boolean;
   repoUrl: string;
+  /**
+   * An ssh address's key: Emberline's shared key, or one made for this project (a deploy key; the
+   * clone then waits until it is on the forge). Not kept in the draft.
+   */
+  sshKeyChoice: SshKeyChoice;
   folder: string;
   /** The project an import registered (clone or folder); the steps before it are locked. */
   importProjectId: string | null;
@@ -103,6 +111,7 @@ export type WizardAction =
   | { type: 'materialRemoved'; id: string }
   | { type: 'materialsError'; message: string | null; field?: 'files' | 'links' }
   | { type: 'materialsNotKeptDismissed' }
+  | { type: 'sshKeyChoice'; choice: SshKeyChoice }
   | { type: 'importCreated'; projectId: string }
   | { type: 'importCancelled' }
   | { type: 'detected'; detect: ProjectDetectResponse }
@@ -134,6 +143,7 @@ export function initialWizardState(): WizardState {
     gates: {},
     startFactory: true,
     repoUrl: '',
+    sshKeyChoice: 'shared',
     folder: '',
     importProjectId: null,
     detect: null,
@@ -559,6 +569,8 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
       return goTo(s, a.step);
     case 'nameError':
       return { ...s, nameError: a.message };
+    case 'sshKeyChoice':
+      return s.importProjectId !== null ? s : { ...s, sshKeyChoice: a.choice };
     case 'importCreated': {
       if (!isImport(s.source)) return s;
       const steps = stepsFor(s.source);
@@ -632,16 +644,38 @@ export function cloneFailedText(exitCode: number | null, reason?: string): strin
   return `The clone failed${exitCode !== null && exitCode !== 0 ? ` (exit ${exitCode})` : ''}.`;
 }
 
+/** Whether the Repository step's address is reached over ssh (so a key is chosen for it). */
+export const repoIsSsh = (s: WizardState) =>
+  s.source === 'import_url' && urlProblem(s.repoUrl) === null && isSshAddress(s.repoUrl);
+
+/**
+ * Why the Repository step cannot clone yet for want of a key: an ssh address with the shared key
+ * chosen while Emberline has none (`shared` undefined: not read yet). Null otherwise.
+ */
+export function sshKeyStepProblem(s: WizardState, shared: SshKeyResponse | undefined): string | null {
+  if (s.step !== 'repo' || !repoIsSsh(s) || s.sshKeyChoice !== 'shared') return null;
+  if (shared === undefined) return 'Checking the SSH key…';
+  return shared.key ? null : 'Create a shared key, or use a key for this project only.';
+}
+
+/** The Repository step's Next button: a clone, the project's own key first, or the folder. */
+export function repoNextLabel(s: WizardState): string {
+  if (s.source !== 'import_url') return 'Use this folder';
+  return repoIsSsh(s) && s.sshKeyChoice === 'own' ? 'Create the key' : 'Clone';
+}
+
 /** `POST /api/projects` (and its preview) for the current source. */
 export function buildCreateBody(s: WizardState): CreateProjectBody {
   const name = s.name.trim();
   if (s.source === 'import_url') {
     const branch = s.defaultBranch.trim();
+    const repoUrl = s.repoUrl.trim();
     return {
       name,
       source: 'import_url',
-      repoUrl: s.repoUrl.trim(),
+      repoUrl,
       ...(branch ? { defaultBranch: branch } : {}),
+      ...(s.sshKeyChoice === 'own' && isSshAddress(repoUrl) ? { sshKeyChoice: 'own' as const } : {}),
     };
   }
   if (s.source === 'import_folder') return { name, source: 'import_folder', folder: s.folder };

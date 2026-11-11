@@ -71,10 +71,14 @@ describe('accountText', () => {
       addAccount: true,
     });
     expect(accountText({ ...base, originUrl: null, originHost: null, account: null })).toBeNull();
+    // An ssh origin goes through an Emberline SSH key; a forge account (https only) plays no part.
     expect(accountText({ ...base, transport: 'ssh', account: null })).toEqual({
-      text: "No forge account for git.example.com (SSH: pushes use the runner's own keys)",
-      addAccount: true,
+      text: 'None: an ssh origin uses the SSH key below',
+      addAccount: false,
     });
+    expect(accountText({ ...base, transport: 'ssh' })?.text).toBe(
+      'None: an ssh origin uses the SSH key below',
+    );
   });
 });
 

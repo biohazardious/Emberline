@@ -21,6 +21,8 @@ import {
   presetChoices,
   previousStep,
   repoNameFromUrl,
+  repoNextLabel,
+  sshKeyStepProblem,
   stepProblem,
   stepsFor,
   stripUrlCredentials,
@@ -963,5 +965,69 @@ describe('reference material: bodies and draft', () => {
         ?.materialNames,
     ).toEqual(['ok.png']);
     expect(parseDraft(JSON.stringify({ ...old, referenceUrlsText: 7 }))).toBeNull();
+  });
+});
+
+describe('ssh key on the Repository step (Ruling 21)', () => {
+  const sshImport = (url = 'git@github.com:acme/shop.git'): WizardState => ({
+    ...run([
+      { type: 'source', source: 'import_url' },
+      { type: 'field', field: 'repoUrl', value: url },
+    ]),
+    step: 'repo',
+  });
+  const shared = {
+    key: {
+      publicKey: 'ssh-ed25519 AAAA emberline',
+      fingerprint: 'SHA256:s',
+      createdAt: new Date(),
+      algorithm: 'ed25519' as const,
+    },
+  };
+
+  it('uses the shared key by default and sends sshKeyChoice only for its own key on an ssh address', () => {
+    const s = sshImport();
+    expect(s.sshKeyChoice).toBe('shared');
+    expect(buildCreateBody(s)).not.toHaveProperty('sshKeyChoice');
+    const own = wizardReducer(s, { type: 'sshKeyChoice', choice: 'own' });
+    expect(buildCreateBody(own)).toEqual({
+      name: 'shop',
+      source: 'import_url',
+      repoUrl: 'git@github.com:acme/shop.git',
+      sshKeyChoice: 'own',
+    });
+    // An https address never asks for a key: the choice is not sent.
+    const https = wizardReducer(own, {
+      type: 'field',
+      field: 'repoUrl',
+      value: 'https://github.com/acme/shop.git',
+    });
+    expect(buildCreateBody(https)).not.toHaveProperty('sshKeyChoice');
+  });
+
+  it('blocks the clone with the shared key while there is none, never its own key or https', () => {
+    const s = sshImport();
+    expect(sshKeyStepProblem(s, undefined)).toBe('Checking the SSH key…');
+    expect(sshKeyStepProblem(s, { key: null })).toBe(
+      'Create a shared key, or use a key for this project only.',
+    );
+    expect(sshKeyStepProblem(s, shared)).toBeNull();
+    expect(
+      sshKeyStepProblem(wizardReducer(s, { type: 'sshKeyChoice', choice: 'own' }), { key: null }),
+    ).toBeNull();
+    expect(sshKeyStepProblem(sshImport('https://github.com/acme/shop.git'), { key: null })).toBeNull();
+    expect(sshKeyStepProblem({ ...s, step: 'start' }, { key: null })).toBeNull();
+  });
+
+  it('names the Next button after what it does', () => {
+    const s = sshImport();
+    expect(repoNextLabel(s)).toBe('Clone');
+    expect(repoNextLabel(wizardReducer(s, { type: 'sshKeyChoice', choice: 'own' }))).toBe('Create the key');
+    expect(repoNextLabel({ ...s, source: 'import_folder' })).toBe('Use this folder');
+  });
+
+  it('a reset or a restored draft starts with the shared key again', () => {
+    const own = wizardReducer(sshImport(), { type: 'sshKeyChoice', choice: 'own' });
+    expect(wizardReducer(own, { type: 'reset' }).sshKeyChoice).toBe('shared');
   });
 });

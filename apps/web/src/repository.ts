@@ -29,11 +29,11 @@ export function mainStateText(s: RepositoryStatus): string {
 
 export function accountText(s: RepositoryStatus): { text: string; addAccount: boolean } | null {
   if (!s.originUrl) return null;
-  const ssh = s.transport === 'ssh' ? " (SSH: pushes use the runner's own keys)" : '';
-  if (!s.account)
-    return { text: `No forge account for ${s.originHost ?? 'this host'}${ssh}`, addAccount: true };
+  // A forge account's token is for https only; an ssh origin uses Emberline's SSH key (ProjectSshKey).
+  if (s.transport === 'ssh') return { text: 'None: an ssh origin uses the SSH key below', addAccount: false };
+  if (!s.account) return { text: `No forge account for ${s.originHost ?? 'this host'}`, addAccount: true };
   return {
-    text: `${PROVIDER_LABEL[s.account.provider]} account ${s.account.username ?? s.originHost ?? ''}${ssh}`.trim(),
+    text: `${PROVIDER_LABEL[s.account.provider]} account ${s.account.username ?? s.originHost ?? ''}`.trim(),
     addAccount: false,
   };
 }

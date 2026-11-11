@@ -6123,3 +6123,118 @@ dialog.cmd-dialog::backdrop {
 .container-preview-suggest {
   margin: 0 0 8px;
 }
+
+/* --- SSH keys: Settings → SSH key, Project settings → Repository, the wizard ------ */
+.ssh-key-line-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ssh-key-line {
+  display: block;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
+}
+
+.ssh-key-line-block p.muted.small:empty,
+.ssh-key-panel p.form-error:empty,
+.ssh-key-panel p.muted.small:empty {
+  display: none;
+}
+
+.ssh-key-shown,
+.ssh-key-empty {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ssh-key-shown p,
+.ssh-key-empty p,
+.ssh-key-detail p,
+.wizard-ssh-key p,
+.host-key-trust p,
+.host-key-changed p {
+  margin: 0;
+}
+
+.ssh-host-keys {
+  margin-top: 16px;
+}
+
+.ssh-host-keys h3 {
+  margin: 0 0 4px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.ssh-key-panel .panel-head {
+  margin-bottom: 10px;
+}
+
+.ssh-key-empty > p:first-child,
+.ssh-host-keys > p.muted:not(.small) {
+  font-size: 0.86rem;
+}
+
+.ssh-host-keys > p.muted.small {
+  margin: 0 0 8px;
+}
+
+.ssh-key-choice {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.ssh-key-choice legend {
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.ssh-key-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.ssh-key-detail {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 24px;
+}
+
+.wizard-ssh-key {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.host-key-trust,
+.host-key-changed {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.wizard-ssh-key > p:not(.small),
+.ssh-key-shown > p:not(.small) {
+  font-size: 0.85rem;
+}

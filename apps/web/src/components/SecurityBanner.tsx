@@ -1,6 +1,8 @@
-import { UPGRADE_NOTES_URL } from '@emberline/protocol';
-import { useState } from 'react';
+import { type SshKeyMissingProject, UPGRADE_NOTES_URL } from '@emberline/protocol';
+import { Fragment, useState } from 'react';
+import { Link } from 'wouter';
 import { isPlainHttpOnNetwork } from '../plainHttp';
+import { bannerProjects, SSH_KEY_HREF } from '../sshKeys';
 
 const DISMISSED_KEY = 'emberline.plainHttpBannerDismissed';
 const SECURITY_URL = 'https://github.com/biohazardious/Emberline#security';
@@ -114,6 +116,36 @@ export function RunnerSecurityUpdateBanner({ outdated }: { outdated: boolean | u
         <code>make up</code>; with the published images,{' '}
         <code>docker compose pull &amp;&amp; docker compose up -d</code>. Agents that were already running
         keep running: you can watch and stop them.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Shown while projects reach their repository over ssh with a key that does not exist
+ * (`sshKeyMissing`; e.g. after the update from the runner's own ~/.ssh): their Refresh and pushes
+ * fail until a key is made.
+ */
+export function SshKeyMissingBanner({ projects }: { projects: SshKeyMissingProject[] | undefined }) {
+  if (!projects || projects.length === 0) return null;
+  const { shown, more } = bannerProjects(projects);
+  const one = projects.length === 1;
+  return (
+    <div className="banner banner-warn" role="status">
+      <span>
+        <strong>SSH key missing.</strong>{' '}
+        {shown.map((p, i) => (
+          <Fragment key={p.projectId}>
+            {i > 0 && (i === shown.length - 1 && more === 0 ? ' and ' : ', ')}
+            <Link href={`/projects/${p.projectId}/settings`}>{p.name}</Link>
+          </Fragment>
+        ))}
+        {more > 0 && ` and ${more} more`}{' '}
+        {one
+          ? 'reaches its repository over ssh, but the key it uses does not exist, so Refresh and pushes fail.'
+          : 'reach their repositories over ssh, but the keys they use do not exist, so Refresh and pushes fail.'}{' '}
+        Create a key in <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>, or in{' '}
+        {one ? "the project's" : "each project's"} settings.
       </span>
     </div>
   );

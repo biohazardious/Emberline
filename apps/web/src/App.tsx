@@ -51,6 +51,7 @@ import {
   RunnerNotSecuredBanner,
   RunnerSecurityUpdateBanner,
   SecurityBanner,
+  SshKeyMissingBanner,
 } from './components/SecurityBanner';
 import { RunStatePill } from './components/RunStatePill';
 import { useApi } from './hooks/useApi';
@@ -974,6 +975,7 @@ function Shell() {
 
         <SecurityBanner />
         <OpsMissingBanner missing={system.data?.opsMissing} />
+        <SshKeyMissingBanner projects={system.data?.sshKeyMissing} />
         <RunnerSecurityUpdateBanner outdated={system.data?.runnerOutdated} />
         <RunnerNotSecuredBanner notSecured={system.data?.runnerNotSecured} />
         <RunnerNotAnsweringBanner problem={system.data?.runnerProblem} />
