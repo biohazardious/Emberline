@@ -50,6 +50,10 @@ const POLL_MS = 1_000;
  * the host key, make a key, add the key on the forge); any other address is removed and cloned
  * afresh. An import with its own key waits for Clone now. A folder import goes straight to
  * detection; Cancel unregisters it and never deletes the folder.
+ *
+ * A folder a failed clone left behind (`directory_exists`) is cloned afresh (the project removed and
+ * registered again) only in the wizard, and only once the project's keys are read and it has no own
+ * key or own key choice to lose; otherwise, and always with `keepProject`, it is explained.
  */
 export function ImportProgress({
   source,
@@ -60,6 +64,8 @@ export function ImportProgress({
   onDetected,
   onRecreated,
   onCancelled,
+  keepProject = false,
+  confirmCancel,
 }: {
   source: 'import_url' | 'import_folder';
   projectId: string;
@@ -73,6 +79,10 @@ export function ImportProgress({
   onRecreated: (projectId: string) => void;
   /** The project is gone; `failure` when a Try again could not register it again. */
   onCancelled: (failure?: { message: string; onName: boolean }) => void;
+  /** Never removes the project to clone it afresh (Project settings): Try again always clones into it. */
+  keepProject?: boolean;
+  /** Asked (window.confirm) before Cancel removes the project. */
+  confirmCancel?: string;
 }) {
   const [phase, setPhase] = useState<Phase>(
     source !== 'import_url'
@@ -187,10 +197,14 @@ export function ImportProgress({
     await api(`/api/projects/${projectId}${source === 'import_folder' ? '?deleteFiles=0' : ''}`, 'DELETE');
   };
 
-  /** The project has its own key (a deploy key that goes with the project on Cancel or a fresh clone). */
+  /**
+   * The project has its own key, or chose one (a deploy key, a choice, that go with the project on
+   * Cancel or a fresh clone).
+   */
   const ownKey =
     createBody.sshKeyChoice === 'own' ||
     (phase.kind === 'awaitingKey' && phase.sshKey !== null) ||
+    keys?.choice === 'own' ||
     (keys?.key ?? null) !== null;
 
   /** Removes the failed project and registers it again from the same body (a new clone). */
@@ -236,21 +250,22 @@ export function ImportProgress({
       setPollRun((n) => n + 1);
     } catch (err) {
       if (!alive.current) return;
-      // A failed clone left files behind (a tag checked out, say): with the shared key nothing is
-      // lost by cloning afresh, as for https; a project's own key would be, so it says so instead.
-      if (
-        err instanceof ApiRequestError &&
-        err.code === PROJECT_CONFLICT.directoryExists &&
-        before.kind === 'cloneFailed' &&
-        !ownKey
-      ) {
+      const leftover = err instanceof ApiRequestError && err.code === PROJECT_CONFLICT.directoryExists;
+      // A failed clone left files behind (a tag checked out, say): in the wizard, with the shared key
+      // (known: the keys were read), nothing is lost by cloning afresh, as for https; a project's own
+      // key or choice would be, so it says so instead. Project settings never remove the project.
+      if (leftover && !keepProject && before.kind === 'cloneFailed' && keys !== null && !ownKey) {
         void recreate(before);
         return;
       }
       setActionError(
-        err instanceof ApiRequestError && err.code === PROJECT_CONFLICT.directoryExists
-          ? `The failed clone left files in the project's folder (${err.message}). Cancel removes the project and its key; then import it again.`
-          : errorMessage(err),
+        !leftover
+          ? errorMessage(err)
+          : keepProject
+            ? `The failed clone left files in the project's folder (${err.message}); Emberline never clones into them or removes them. Remove what is in the folder (from a terminal, say), then try again. Cancel removes the project with its folder${ownKey ? ' and its own key' : ''}.`
+            : ownKey
+              ? `The failed clone left files in the project's folder (${err.message}). Cancel removes the project and its key; then import it again.`
+              : `The failed clone left files in the project's folder (${err.message}). Try again in a moment, or Cancel removes the project; then import it again.`,
       );
       setPhase(before);
     }
@@ -262,7 +277,7 @@ export function ImportProgress({
       void detect();
       return;
     }
-    if (ssh) {
+    if (ssh || keepProject) {
       void cloneAgain();
       return;
     }
@@ -270,6 +285,7 @@ export function ImportProgress({
   };
 
   const cancel = async () => {
+    if (confirmCancel !== undefined && !window.confirm(confirmCancel)) return;
     setActionError(null);
     const before = phase;
     setPhase({ kind: 'busy', label: 'Removing the project…' });

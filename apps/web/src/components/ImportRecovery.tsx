@@ -25,7 +25,8 @@ function useUnfinishedImport(project: Project) {
 /**
  * Project settings → Repository, for an import the wizard left unfinished (Ruling 23): the import's
  * own progress view (the project's public key with Copy and the deploy-key hint, Clone now, the
- * fixes for an ssh failure, Try again), and removing the project.
+ * fixes for an ssh failure, Try again), and removing the project (asked first). Try again always
+ * clones into this project: a folder a failed clone left is explained, the project never removed.
  */
 export function ImportRecovery({ project }: { project: Project }) {
   const state = useUnfinishedImport(project);
@@ -76,6 +77,12 @@ export function ImportRecovery({ project }: { project: Project }) {
           repoUrl: project.repoUrl ?? '',
           ...(keys.data?.choice === 'own' ? { sshKeyChoice: 'own' as const } : {}),
         }}
+        keepProject
+        confirmCancel={`Remove ${project.name}? Its folder goes too${
+          keys.data?.choice === 'own' || keys.data?.key
+            ? ", with its own SSH key (remove it from the repository's deploy keys too)"
+            : ''
+        }.`}
         onDetected={() => {
           setDone(true);
           refreshProject();

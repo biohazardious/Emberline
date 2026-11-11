@@ -8,7 +8,7 @@ import type {
 } from '@emberline/protocol';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../../api';
+import { api, ApiRequestError } from '../../api';
 import type * as ApiModule from '../../api';
 import { apiRoutes, cleanup, click, getButton, queryButton, renderDom, waitFor } from '../../domRender';
 import { MISSING_KEY_TEXT, OWN_KEY_BUTTON } from '../../sshKeys';
@@ -242,5 +242,109 @@ describe('ImportProgress: ssh clone failures', () => {
     await click(getButton('Try again'));
     await waitFor(() => expect(handlers.onRecreated).toHaveBeenCalledWith('p2'));
     expect(calls).toEqual(['delete-project', 'create-project']);
+  });
+});
+
+describe('ImportProgress: a failed clone left files in the folder (directory_exists)', () => {
+  const leftover = () => {
+    throw new ApiRequestError(
+      409,
+      'directory_exists',
+      'directory already exists and is not empty: /workspaces/shop',
+    );
+  };
+  const withRoutes = (extra: Record<string, (body?: unknown) => unknown>) => {
+    const base = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path: string, method = 'GET', body?: unknown) => {
+      const route = extra[`${method} ${path}`];
+      return (route ? await route(body) : await base(path, method, body)) as never;
+    });
+  };
+
+  it('with the shared key (known): the wizard clones afresh, as for https', async () => {
+    statuses = [failed({ code: 'auth_refused', reason: 'refused' })];
+    withRoutes({
+      'POST /api/projects/p1/import-clone': () => {
+        calls.push('import-clone');
+        leftover();
+      },
+    });
+    const { handlers } = await mount();
+    await waitFor(() => expect(text()).toContain('ssh-ed25519 AAAAshared emberline-shared'));
+    await click(getButton('Try again'));
+    await waitFor(() => expect(handlers.onRecreated).toHaveBeenCalledWith('p2'));
+    expect(calls).toEqual(['import-clone', 'delete-project', 'create-project']);
+  });
+
+  it('before the keys are read: never removes the project (it may have its own key)', async () => {
+    statuses = [failed({ code: 'auth_refused', reason: 'refused' })];
+    withRoutes({
+      'GET /api/projects/p1/ssh-key': () => new Promise(() => undefined), // still loading
+      'POST /api/projects/p1/import-clone': () => {
+        calls.push('import-clone');
+        leftover();
+      },
+    });
+    const { handlers } = await mount();
+    await waitFor(() => expect(queryButton('Try again')).not.toBeNull());
+    await click(getButton('Try again'));
+    await waitFor(() => expect(text()).toContain("left files in the project's folder"));
+    expect(calls).toEqual(['import-clone']);
+    expect(handlers.onRecreated).not.toHaveBeenCalled();
+    expect(handlers.onCancelled).not.toHaveBeenCalled();
+  });
+
+  it('a project switched to its own key (choice own, the key deleted) keeps it: never cloned afresh', async () => {
+    statuses = [failed({ code: 'ssh_key_missing', reason: MISSING_KEY_TEXT })];
+    keyState = { choice: 'own', key: null, shared: k('shared') };
+    withRoutes({
+      'POST /api/projects/p1/import-clone': () => {
+        calls.push('import-clone');
+        leftover();
+      },
+    });
+    const { handlers } = await mount(); // the body that registered it chose the shared key
+    await waitFor(() => expect(queryButton("Create this project's key")).not.toBeNull());
+    await click(getButton('Try again'));
+    await waitFor(() => expect(text()).toContain("left files in the project's folder"));
+    expect(calls).toEqual(['import-clone']);
+    expect(handlers.onRecreated).not.toHaveBeenCalled();
+  });
+
+  it('keepProject (Project settings): never removes the project, says what to do about the folder', async () => {
+    statuses = [failed({ code: 'auth_refused', reason: 'refused' })];
+    withRoutes({
+      'POST /api/projects/p1/import-clone': () => {
+        calls.push('import-clone');
+        leftover();
+      },
+    });
+    const { handlers } = await mount({ keepProject: true });
+    await waitFor(() => expect(text()).toContain('ssh-ed25519 AAAAshared emberline-shared'));
+    await click(getButton('Try again'));
+    await waitFor(() => expect(text()).toContain("left files in the project's folder"));
+    expect(text()).toContain('/workspaces/shop');
+    expect(text()).toContain('then try again');
+    expect(calls).toEqual(['import-clone']);
+    expect(handlers.onRecreated).not.toHaveBeenCalled();
+  });
+
+  it('confirmCancel: Cancel asks first; no removes nothing', async () => {
+    statuses = [failed({ code: 'auth_refused', reason: 'refused' })];
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      const { handlers } = await mount({ confirmCancel: 'Remove the project?' });
+      await waitFor(() => expect(queryButton('Cancel and remove the clone')).not.toBeNull());
+      await click(getButton('Cancel and remove the clone'));
+      expect(confirm).toHaveBeenCalledWith('Remove the project?');
+      expect(calls).toEqual([]);
+      expect(handlers.onCancelled).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      await click(getButton('Cancel and remove the clone'));
+      await waitFor(() => expect(handlers.onCancelled).toHaveBeenCalledOnce());
+      expect(calls).toEqual(['delete-project']);
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });
