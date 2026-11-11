@@ -21,6 +21,7 @@ import {
   CreateMilestoneBody,
   CreateProjectBody,
   type CreateProjectResponse,
+  type ImportCloneResponse,
   CreateRoadmapItemBody,
   type CrossCriticResult,
   DeleteWorkspaceFileBody,
@@ -86,12 +87,21 @@ import {
 } from '../git-exec.js';
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
+import {
+  type ImportClone,
+  readImportClone,
+  readImportSource,
+  writeProjectSettings,
+  writeWizardTickets,
+} from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import { gitCredentialForRemote } from '../forge/account-store.js';
 import { gatewayCredentialFor, isSshAddress, sshKeyMissing } from '../ssh-keys/remote.js';
+import { generateKey } from '../ssh-keys/store.js';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
+import type { GatewayCredential } from '../git-gateway/gateway.js';
 import { gatewayCloneArgs } from '../git-gateway/remote-git.js';
+
 import {
   browserFilesFor,
   isBrowsableUrl,
@@ -144,7 +154,7 @@ import {
   writeProjectBlueprint,
   writeWorkspaceFileContent,
 } from '../factory/service.js';
-import { inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
+import { importStatus, inspectImportFolder, resolveWorkspaceFolder } from '../factory/project-import.js';
 import { opsBridgeOf } from '../ptyd-bridge.js';
 import { decodeMaterials, writeMaterials } from '../factory/materials.js';
 import { isWizardCreate, planNewProject, plannedTickets } from '../factory/project-plan.js';
@@ -169,6 +179,10 @@ import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
 import { ToolchainService } from '../toolchain/service.js';
+
+/** `sshKeyChoice: 'own'` with an http(s) address. */
+const OWN_KEY_SSH_ONLY =
+  "A project's own SSH key is only for an ssh address (such as git@host:owner/repo.git); an https address uses a forge account or none.";
 
 type ProjectRow = typeof projects.$inferSelect;
 
@@ -305,6 +319,64 @@ export function registerProjectRoutes(
 
   /** Slugs a wizard create is writing right now. */
   const creating = new Set<string>();
+  /** Import projects whose clone `import-clone` is starting right now. */
+  const startingClone = new Set<string>();
+
+  /**
+   * Starts an import's clone in a terminal on ops; returns its id. Through the gateway (an account,
+   * or an SSH key) the PTY's git clones from a one-time gateway URL: the token or key stays in core.
+   * `branch`: the one checked out; without one the remote's default branch is, and import-status
+   * records it.
+   */
+  const startClone = async (clone: {
+    id: string;
+    name: string;
+    repoUrl: string;
+    projectPath: string;
+    branch: string | null;
+    credential: GatewayCredential | null;
+  }): Promise<string> => {
+    const { id, repoUrl, projectPath, branch, credential } = clone;
+    const args = credential
+      ? gatewayCloneArgs(
+          { gateway: runs.gitGateway, projectId: id, url: repoUrl, credential },
+          projectPath,
+          branch,
+        )
+      : [
+          // The same hardening execGitFile applies, plus the remote-transport restriction, since
+          // the clone runs in a ptyd terminal rather than through execGitFile.
+          ...HARDENED_GIT_ARGS,
+          ...REMOTE_PROTOCOL_ARGS,
+          ...NO_SUBMODULES,
+          'clone',
+          '--progress',
+          '--no-recurse-submodules',
+          ...(branch ? ['--branch', branch] : []),
+          '--',
+          repoUrl,
+          projectPath,
+        ];
+    try {
+      const session = await clones.get().spawn({
+        // The image's own git, with only the hardened env (system PATH, no global/system config,
+        // no prompt, no askpass) and nothing of the runner's; LC_ALL=C with a branch so
+        // import-status can read git's English "Remote branch … not found".
+        file: RUNNER_BIN.git,
+        args,
+        cwd: config.workspacesDir,
+        env: cloneGitEnv(Boolean(branch)),
+        inheritEnv: false,
+        // `noLog`: ptyd keeps no on-disk log of the clone, so a token a server echoes into the
+        // terminal is never stored where agents can read it. The live view stays raw, unstored.
+        meta: { kind: 'clone', noLog: '1', projectId: id, title: `git clone · ${clone.name}` },
+      });
+      return session.id;
+    } catch (error) {
+      runs.gitGateway.forgetClone(id);
+      throw error;
+    }
+  };
 
   /**
    * Whether the Docker engine answers (bounded wait right after boot): the wizard previews compose
@@ -577,6 +649,9 @@ export function registerProjectRoutes(
       const id = randomUUID();
       const projectPath = path.join(config.workspacesDir, slug);
       let terminalId: string | null = null;
+      /** An import with its own SSH key: created with the key, cloned once it is on the forge. */
+      let awaitingKey = false;
+      let cloneBranch: string | null = null;
 
       if (body.repoUrl) {
         if (existsSync(projectPath))
@@ -592,52 +667,27 @@ export function registerProjectRoutes(
         }
         // An ssh address goes through the gateway too: the same URL shapes as Connect.
         if (isSshAddress(body.repoUrl)) validateRepositoryUrl(body.repoUrl);
-        // A new project uses the shared key for an ssh address: none, and nothing runs.
-        const credential = gatewayCredentialFor(db, { id, sshKeyChoice: 'shared' }, body.repoUrl);
-        if (credential === 'ssh_key_missing') throw sshKeyMissing();
         // A branch given is the one checked out; without one the remote's default branch is, and
         // import-status records it.
-        const branch = body.defaultBranch ?? null;
-        // Through the gateway (an account, or an SSH key) the PTY's git clones from a one-time
-        // gateway URL: the token or key stays in core.
-        const args = credential
-          ? gatewayCloneArgs(
-              { gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential },
-              projectPath,
-              branch,
-            )
-          : [
-              // The same hardening execGitFile applies, plus the remote-transport restriction, since
-              // the clone runs in a ptyd terminal rather than through execGitFile.
-              ...HARDENED_GIT_ARGS,
-              ...REMOTE_PROTOCOL_ARGS,
-              ...NO_SUBMODULES,
-              'clone',
-              '--progress',
-              '--no-recurse-submodules',
-              ...(branch ? ['--branch', branch] : []),
-              '--',
-              body.repoUrl,
-              projectPath,
-            ];
-        try {
-          const session = await clones.get().spawn({
-            // The image's own git, with only the hardened env (system PATH, no global/system config,
-            // no prompt, no askpass) and nothing of the runner's; LC_ALL=C with a branch so
-            // import-status can read git's English "Remote branch … not found".
-            file: RUNNER_BIN.git,
-            args,
-            cwd: config.workspacesDir,
-            env: cloneGitEnv(Boolean(branch)),
-            inheritEnv: false,
-            // `noLog`: ptyd keeps no on-disk log of the clone, so a token a server echoes into the
-            // terminal is never stored where agents can read it. The live view stays raw, unstored.
-            meta: { kind: 'clone', noLog: '1', projectId: id, title: `git clone · ${body.name}` },
+        cloneBranch = body.defaultBranch ?? null;
+        if (body.sshKeyChoice === 'own') {
+          if (!isSshAddress(body.repoUrl)) throw badRequest(OWN_KEY_SSH_ONLY);
+          // Only the address is checked (one the gateway cannot reach is refused); the key is made
+          // with the project, and the clone waits until it is on the forge (import-clone).
+          gatewayCredentialFor(db, { id, sshKeyChoice: 'own' }, body.repoUrl);
+          awaitingKey = true;
+        } else {
+          // A new project uses the shared key for an ssh address: none, and nothing runs.
+          const credential = gatewayCredentialFor(db, { id, sshKeyChoice: 'shared' }, body.repoUrl);
+          if (credential === 'ssh_key_missing') throw sshKeyMissing();
+          terminalId = await startClone({
+            id,
+            name: body.name,
+            repoUrl: body.repoUrl,
+            projectPath,
+            branch: cloneBranch,
+            credential,
           });
-          terminalId = session.id;
-        } catch (error) {
-          runs.gitGateway.forgetClone(id);
-          throw error;
         }
       } else {
         // Never write blueprint files or `git init` into someone's existing folder.
@@ -701,14 +751,20 @@ export function registerProjectRoutes(
         description: body.description,
         techStack: body.techStack ?? null,
         createdAt: new Date(),
-        sshKeyChoice: 'shared',
+        sshKeyChoice: awaitingKey ? 'own' : 'shared',
       };
       const importSource = body.repoUrl ? 'url' : 'new';
+      const importClone: ImportClone | undefined = body.repoUrl
+        ? { branch: cloneBranch, awaitingKey }
+        : undefined;
       db.transaction((tx) => {
         tx.insert(projects).values(row).run();
-        tx.insert(projectSettings).values({ projectId: id, settings: { importSource } }).run();
+        tx.insert(projectSettings)
+          .values({ projectId: id, settings: { importSource, ...(importClone ? { importClone } : {}) } })
+          .run();
       });
       const project: Project = { ...projectResponse(row), importSource };
+      const ownKey = awaitingKey ? generateKey(db, { projectId: id, slug }) : null;
 
       saveActiveProjectId(project.id);
 
@@ -717,7 +773,63 @@ export function registerProjectRoutes(
       }
 
       reply.code(201);
-      return { project, terminalId };
+      return ownKey
+        ? {
+            project,
+            terminalId,
+            importStatus: 'awaiting_key',
+            sshKey: { publicKey: ownKey.publicKey, fingerprint: ownKey.fingerprint },
+          }
+        : { project, terminalId };
+    },
+  );
+
+  /**
+   * Starts, or starts again, the clone of an import that has no successful clone yet (it waits for
+   * its own key, or its clone failed), keeping the project and its SSH key (Ruling 21). The same
+   * checks as the create's clone: a missing key, and nothing runs.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/import-clone',
+    async (request): Promise<ImportCloneResponse> => {
+      const row = db.select().from(projects).where(eq(projects.id, request.params.id)).get();
+      if (!row) throw notFound('no such project');
+      if (readImportSource(db, row.id) !== 'url' || !row.repoUrl)
+        throw conflict('This project was not imported from a repository address.', 'not_an_import');
+      if (startingClone.has(row.id)) throw conflict('The clone is being started.', 'clone_running');
+      startingClone.add(row.id);
+      try {
+        const state = readImportClone(db, row.id);
+        if (!state?.awaitingKey) {
+          const current = await importStatus(clones, toProject(row));
+          if (current.status === 'cloning')
+            throw conflict('The repository is still being cloned.', 'clone_running');
+          if (current.status === 'ready')
+            throw conflict('The repository is already cloned.', 'already_cloned');
+        }
+        // What a failed clone left (a tag checked out, say) is never cloned into or removed.
+        if (existsSync(row.path) && (await readdir(row.path)).length > 0)
+          throw conflict(
+            `directory already exists and is not empty: ${row.path}`,
+            PROJECT_CONFLICT.directoryExists,
+          );
+        const credential = gatewayCredentialFor(db, row, row.repoUrl);
+        if (credential === 'ssh_key_missing') throw sshKeyMissing();
+        const branch = state?.branch ?? null;
+        runs.gitGateway.forgetClone(row.id); // an earlier clone's capability, if still held
+        const terminalId = await startClone({
+          id: row.id,
+          name: row.name,
+          repoUrl: row.repoUrl,
+          projectPath: row.path,
+          branch,
+          credential,
+        });
+        writeProjectSettings(db, row.id, { importClone: { branch, awaitingKey: false } });
+        return { terminalId };
+      } finally {
+        startingClone.delete(row.id);
+      }
     },
   );
 

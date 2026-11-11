@@ -32,7 +32,7 @@ import { parseWorktreeYml } from './worktree-config/load.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
 import { trustHostKey } from './ssh-keys/known-hosts.js';
-import { generateKey } from './ssh-keys/store.js';
+import { deleteKey, generateKey, getPublicKey } from './ssh-keys/store.js';
 import { SSHD, type SshForge, startSshForge } from './test-ssh-forge.js';
 import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
@@ -955,6 +955,141 @@ describe('GET /api/projects/:id/import-status', () => {
           "The server refused Emberline's SSH key: add the public key shown in Settings → SSH key to the repository or account.",
       });
     });
+
+    describe("with the project's own key (Ruling 21)", () => {
+      const trustForge = () =>
+        trustHostKey(t.db, {
+          host: '127.0.0.1',
+          port: forge.port,
+          keyType: forge.hostKey.keyType,
+          key: forge.hostKey.key,
+        });
+      const importOwn = (name: string, repoUrl = forge.address('x')) =>
+        api('POST', '/api/projects', { name, source: 'import_url', repoUrl, sshKeyChoice: 'own' });
+      const importClone = (id: string) => api('POST', `/api/projects/${id}/import-clone`);
+      const ownKey = (id: string) => getPublicKey(t.db, { projectId: id });
+
+      it('creates the project and its key and starts no clone; once the key is on the server, import-clone clones it', async () => {
+        const head = seeded();
+        const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+        // No shared key is needed for a project with its own.
+        const res = await importOwn('Own Key');
+        expect(res.statusCode, res.body).toBe(201);
+        const created = res.json() as CreateProjectResponse;
+        const key = ownKey(created.project.id)!;
+        expect(key).not.toBeNull();
+        expect(created).toMatchObject({
+          terminalId: null,
+          importStatus: 'awaiting_key',
+          sshKey: { publicKey: key.publicKey, fingerprint: key.fingerprint },
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(
+          t.db.select().from(projects).where(eq(projects.id, created.project.id)).get()?.sshKeyChoice,
+        ).toBe('own');
+        expect(await status(created.project.id)).toMatchObject({
+          status: 'awaiting_key',
+          terminalId: null,
+          sshKey: { publicKey: key.publicKey, fingerprint: key.fingerprint },
+        });
+        expect(forge.sessions()).toEqual([]);
+
+        // The person added the deploy key and trusted the host.
+        trustForge();
+        forge.authorize(key.publicKey);
+        const started = await importClone(created.project.id);
+        expect(started.statusCode, started.body).toBe(200);
+        expect(started.json().terminalId).toEqual(expect.any(String));
+        await vi.waitFor(async () => expect((await status(created.project.id)).status).toBe('ready'), {
+          timeout: 10_000,
+        });
+        expect(git(created.project.path, 'rev-parse', 'HEAD')).toBe(head);
+        expect(git(created.project.path, 'remote', 'get-url', 'origin')).toBe(forge.address('x'));
+        // Once cloned there is nothing to start again.
+        const again = await importClone(created.project.id);
+        expect(again.statusCode).toBe(409);
+        expect(again.json().error).toBe('already_cloned');
+      });
+
+      it('import-clone after a refused key keeps the project and the same key', async () => {
+        const head = seeded();
+        trustForge();
+        const created = (await importOwn('Retry')).json() as CreateProjectResponse;
+        const fingerprint = ownKey(created.project.id)!.fingerprint;
+        expect((await importClone(created.project.id)).statusCode).toBe(200);
+        await vi.waitFor(async () => expect((await status(created.project.id)).status).toBe('failed'), {
+          timeout: 10_000,
+        });
+        expect(await status(created.project.id)).toMatchObject({
+          code: 'auth_refused',
+          reason:
+            "The server refused Emberline's SSH key: add the public key shown in this project's settings to the repository or account.",
+        });
+        forge.authorize(ownKey(created.project.id)!.publicKey);
+        expect((await importClone(created.project.id)).statusCode).toBe(200);
+        await vi.waitFor(async () => expect((await status(created.project.id)).status).toBe('ready'), {
+          timeout: 10_000,
+        });
+        expect(ownKey(created.project.id)!.fingerprint).toBe(fingerprint);
+        expect(git(created.project.path, 'rev-parse', 'HEAD')).toBe(head);
+      });
+
+      it('its key deleted, import-clone is refused before anything runs', async () => {
+        trustForge();
+        const created = (await importOwn('Deleted Key')).json() as CreateProjectResponse;
+        deleteKey(t.db, { projectId: created.project.id });
+        const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+        const res = await importClone(created.project.id);
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({
+          error: 'ssh_key_missing',
+          message: "Create a key in Settings → SSH key, or in this project's settings.",
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(forge.sessions()).toEqual([]);
+      });
+    });
+  });
+
+  it('an own SSH key is only for an ssh address; import-clone only for an import that is not cloning or cloned', async () => {
+    const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+    const https = await api('POST', '/api/projects', {
+      name: 'Https Own',
+      source: 'import_url',
+      repoUrl: 'https://example.com/x.git',
+      sshKeyChoice: 'own',
+    });
+    expect(https.statusCode).toBe(400);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(t.db.select().from(projects).all()).toEqual([]);
+    vi.restoreAllMocks();
+
+    const created = (await api('POST', '/api/projects', { name: 'Not Imported', initGit: true })).json();
+    const notImport = await api('POST', `/api/projects/${created.project.id}/import-clone`);
+    expect(notImport.statusCode).toBe(409);
+    expect(notImport.json().error).toBe('not_an_import');
+
+    const { project } = await importUrl('Running', (dest) => ({
+      file: 'sh',
+      args: ['-c', 'mkdir -p "$1" && echo Cloning && sleep 3', 'sh', dest],
+    }));
+    const running = await api('POST', `/api/projects/${project.id}/import-clone`);
+    expect(running.statusCode).toBe(409);
+    expect(running.json().error).toBe('clone_running');
+
+    // A failed clone that left files behind: the folder is never cloned into or removed.
+    vi.restoreAllMocks(); // the next clone's own command, not the running one's
+    const left = await importUrl('Leftover', (dest) => ({
+      file: 'sh',
+      args: ['-c', 'mkdir -p "$1" && echo x > "$1/f" && exit 1', 'sh', dest],
+    }));
+    await vi.waitFor(async () => expect((await status(left.project.id)).status).toBe('failed'), {
+      timeout: 10_000,
+    });
+    const leftover = await api('POST', `/api/projects/${left.project.id}/import-clone`);
+    expect(leftover.statusCode).toBe(409);
+    expect(leftover.json().error).toBe('directory_exists');
+    expect(readFileSync(path.join(left.project.path, 'f'), 'utf8')).toBe('x\n');
   });
 
   it('a host key that is not the one the runner knows fails with what to check', async () => {

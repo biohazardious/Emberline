@@ -45,6 +45,19 @@ export function readImportSource(db: Db, projectId: string): ProjectImportSource
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * An `import_url` project's clone: the branch it was asked for (null: the remote's default), and
+ * whether it waits for its own SSH key to be added on the forge before the first clone (Ruling 21).
+ */
+export const ImportClone = z.object({ branch: z.string().nullable(), awaitingKey: z.boolean() });
+export type ImportClone = z.infer<typeof ImportClone>;
+
+/** Null for a project that is not an import of a URL, or one imported before 0.7.0. */
+export function readImportClone(db: Db, projectId: string): ImportClone | null {
+  const parsed = ImportClone.safeParse(readProjectSettings(db, projectId).importClone);
+  return parsed.success ? parsed.data : null;
+}
+
 /** Which tickets of a wizard project play which role. */
 export const WizardTickets = z.object({
   bootstrap: z.string(),

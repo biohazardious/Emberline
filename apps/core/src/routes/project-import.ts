@@ -12,7 +12,7 @@ import {
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { writeProjectSettings } from '../db/project-settings.js';
+import { readImportClone, writeProjectSettings } from '../db/project-settings.js';
 import { projects, projectWorktreeConfig } from '../db/schema.js';
 import { notFound } from '../errors.js';
 import { detectProject } from '../factory/detect.js';
@@ -28,6 +28,7 @@ import {
 import { redactCapabilityUrls } from '../git-gateway/gateway.js';
 import { finishGatewayClone } from '../git-gateway/remote-git.js';
 import { opsBridgeOf } from '../ptyd-bridge.js';
+import { getPublicKey } from '../ssh-keys/store.js';
 import type { CoreDeps } from '../server.js';
 import { projectResponse, redactedProject, toProject } from './projects.js';
 
@@ -69,6 +70,17 @@ export function registerProjectImportRoutes(
     '/api/projects/:id/import-status',
     async (request): Promise<ImportStatusResponse> => {
       const project = projectOr404(request.params.id);
+      if (readImportClone(db, project.id)?.awaitingKey) {
+        // Its own key is to be added on the forge first: no clone has run (Ruling 21).
+        const key = getPublicKey(db, { projectId: project.id });
+        return {
+          status: 'awaiting_key',
+          exitCode: null,
+          terminalId: null,
+          tail: '',
+          sshKey: key ? { publicKey: key.publicKey, fingerprint: key.fingerprint } : null,
+        };
+      }
       const status = await importStatus(clones, project);
       if (status.status !== 'cloning') {
         // A clone through the gateway: release its capability and point origin at the real URL (once).

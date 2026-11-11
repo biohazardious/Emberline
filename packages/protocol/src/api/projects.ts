@@ -1,7 +1,7 @@
 /** API contracts: projects & AI factory metadata. */
 import { z } from 'zod';
 import { GitBranchName } from './common.js';
-import { HostKeyDetails, SshRemoteProblem } from './ssh-keys.js';
+import { HostKeyDetails, SshKeyChoice, SshRemoteProblem } from './ssh-keys.js';
 import {
   MATERIALS_MAX_FILES,
   PlannedMaterialSummary,
@@ -122,6 +122,11 @@ const CreateProjectFields = z.object({
   vision: z.string().trim().max(4000).optional(),
   /** `import_folder`: name of a direct child of the workspaces directory. */
   folder: FolderName.optional(),
+  /**
+   * `import_url` with an ssh address: the key the project uses (default `shared`). `own` creates the
+   * project with its own key and starts no clone (`awaiting_key`) until `POST …/import-clone`.
+   */
+  sshKeyChoice: SshKeyChoice.optional(),
   /** Wizard (new project) only: files committed to docs/reference/ and links listed in PROJECT.md. */
   materials: z
     .array(ProjectMaterialInput)
@@ -155,10 +160,17 @@ export const PROJECT_CONFLICT = {
   directoryExists: 'directory_exists',
 } as const;
 
+/** A project's own public key as the wizard shows it, to add as a deploy key before the clone. */
+export const ImportSshKey = z.object({ publicKey: z.string(), fingerprint: z.string() });
+export type ImportSshKey = z.infer<typeof ImportSshKey>;
+
 export const CreateProjectResponse = z.object({
   project: Project,
-  /** Terminal running `git clone`, when a repo URL was given. */
+  /** Terminal running `git clone`, when a repo URL was given (null while `awaiting_key`). */
   terminalId: z.string().nullable(),
+  /** An import with its own key: created, no clone yet; the key to add on the forge. */
+  importStatus: z.literal('awaiting_key').optional(),
+  sshKey: ImportSshKey.optional(),
   /** The project exists but a later step failed (e.g. its tickets); shown to the person. */
   warning: z.string().optional(),
 });
@@ -199,7 +211,8 @@ export const ProjectPreviewResponse = z.object({
 export type ProjectPreviewResponse = z.infer<typeof ProjectPreviewResponse>;
 
 export const ImportStatusResponse = z.object({
-  status: z.enum(['cloning', 'ready', 'failed']),
+  /** `awaiting_key`: an import with its own key, not cloned yet (`POST …/import-clone` starts it). */
+  status: z.enum(['awaiting_key', 'cloning', 'ready', 'failed']),
   /** Clone process exit code once finished. */
   exitCode: z.number().int().nullable(),
   terminalId: z.string().nullable(),
@@ -211,8 +224,14 @@ export const ImportStatusResponse = z.object({
   code: SshRemoteProblem.optional(),
   /** host_key_unknown / host_key_changed: the key the server offered (absent when it offered no known type). */
   hostKey: HostKeyDetails.optional(),
+  /** `awaiting_key`: the project's own public key (null once it was deleted). */
+  sshKey: ImportSshKey.nullable().optional(),
 });
 export type ImportStatusResponse = z.infer<typeof ImportStatusResponse>;
+
+/** `POST /api/projects/:id/import-clone`: the clone terminal it started. */
+export const ImportCloneResponse = z.object({ terminalId: z.string() });
+export type ImportCloneResponse = z.infer<typeof ImportCloneResponse>;
 
 const DetectedService = z.object({ name: z.string(), command: z.string(), preview: z.boolean().optional() });
 
