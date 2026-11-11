@@ -22,6 +22,7 @@ import {
   previousStep,
   repoNameFromUrl,
   repoNextLabel,
+  importWaitHint,
   sshKeyStepProblem,
   stepProblem,
   stepsFor,
@@ -1029,5 +1030,14 @@ describe('ssh key on the Repository step (Ruling 21)', () => {
   it('a reset or a restored draft starts with the shared key again', () => {
     const own = wizardReducer(sshImport(), { type: 'sshKeyChoice', choice: 'own' });
     expect(wizardReducer(own, { type: 'reset' }).sshKeyChoice).toBe('shared');
+  });
+});
+
+describe('the import step while its own key is awaited (Ruling 23)', () => {
+  it('says what is awaited instead of the inspection', () => {
+    const s: WizardState = { ...initialWizardState(), source: 'import_url', step: 'import' };
+    expect(importWaitHint(s, true)).toBe('Add the key to the repository, then select Clone now.');
+    expect(importWaitHint(s, false)).toBeNull();
+    expect(importWaitHint({ ...s, step: 'stack' }, true)).toBeNull();
   });
 });

@@ -658,6 +658,13 @@ export function sshKeyStepProblem(s: WizardState, shared: SshKeyResponse | undef
   return shared.key ? null : 'Create a shared key, or use a key for this project only.';
 }
 
+/** The footer while an import with its own key waits for it (instead of the inspection it has not reached). */
+export function importWaitHint(s: WizardState, waitingForKey: boolean): string | null {
+  return s.step === 'import' && waitingForKey
+    ? 'Add the key to the repository, then select Clone now.'
+    : null;
+}
+
 /** The Repository step's Next button: a clone, the project's own key first, or the folder. */
 export function repoNextLabel(s: WizardState): string {
   if (s.source !== 'import_url') return 'Use this folder';

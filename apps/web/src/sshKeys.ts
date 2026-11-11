@@ -1,6 +1,8 @@
 /** Pure helpers for Emberline's SSH keys in the web UI: addresses, the hints and the failure kinds. */
 import type {
   HostKeyDetails,
+  ImportStatusResponse,
+  Project,
   ProjectSshKeyResponse,
   SshKeyPublic,
   SshRemoteProblem,
@@ -111,4 +113,23 @@ export function createdText(createdAt: Date | string): string {
 /** The ssh-key-missing banner's projects: the first `max` by name, and how many more there are. */
 export function bannerProjects<T>(projects: readonly T[], max = 3): { shown: T[]; more: number } {
   return { shown: projects.slice(0, max), more: Math.max(0, projects.length - max) };
+}
+
+type ImportedProject = Pick<Project, 'id' | 'importSource' | 'repoUrl'>;
+
+/** The import status of a project imported from an address (null for any other project: nothing to read). */
+export const unfinishedImportUrl = (p: ImportedProject): string | null =>
+  p.importSource === 'url' && p.repoUrl ? `/api/projects/${p.id}/import-status` : null;
+
+/**
+ * Whether an import is left unfinished in a way it can be finished outside the wizard (Ruling 23):
+ * it waits for its own key, or its ssh clone failed (`import-clone` clones it again, keeping its key).
+ */
+export function unfinishedImport(
+  p: ImportedProject,
+  status: ImportStatusResponse | undefined,
+): 'awaiting_key' | 'failed' | null {
+  if (!status || !unfinishedImportUrl(p)) return null;
+  if (status.status === 'awaiting_key') return 'awaiting_key';
+  return status.status === 'failed' && isSshAddress(p.repoUrl ?? '') ? 'failed' : null;
 }

@@ -21,6 +21,7 @@ import { keptWorktreesSummary, type PrunePending, prunePendingNote } from '../gc
 import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
+import { UnfinishedImportNote } from '../components/ImportRecovery';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
@@ -193,6 +194,7 @@ export function Dashboard({
 
   return (
     <div className="dashboard">
+      {activeProject && <UnfinishedImportNote project={activeProject} />}
       {runnerDown && (
         <div className="banner banner-warn" role="status">
           Runner (ptyd) is {system?.ptyd ?? 'unknown'} — terminals are unavailable until it reconnects.

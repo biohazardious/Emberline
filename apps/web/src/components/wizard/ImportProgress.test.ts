@@ -128,13 +128,17 @@ describe('ImportProgress: own key waits for the forge (Ruling 21)', () => {
         sshKey: { publicKey: 'ssh-ed25519 AAAAown emberline-shop', fingerprint: 'SHA256:own' },
       },
     ];
-    const { handlers } = await mount({ createBody: { ...sshBody, sshKeyChoice: 'own' } });
+    const onWaitingForKey = vi.fn();
+    const { handlers } = await mount({ createBody: { ...sshBody, sshKeyChoice: 'own' }, onWaitingForKey });
     await waitFor(() => expect(text()).toContain('ssh-ed25519 AAAAown emberline-shop'));
     expect(text()).toContain('Add it to alice/shop → Settings → Deploy keys, tick "Allow write access"');
     expect(text()).toContain('remove the deploy key');
+    // The wizard's footer says what is awaited (Ruling 23).
+    expect(onWaitingForKey).toHaveBeenLastCalledWith(true);
     await click(getButton('Clone now'));
     await waitFor(() => expect(handlers.onDetected).toHaveBeenCalledWith(detect));
     expect(calls).toEqual(['import-clone']);
+    expect(onWaitingForKey).toHaveBeenLastCalledWith(false);
   });
 
   it('Cancel removes the project and says the deploy key can go too', async () => {

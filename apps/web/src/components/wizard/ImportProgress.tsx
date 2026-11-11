@@ -56,6 +56,7 @@ export function ImportProgress({
   projectId,
   createBody,
   initialSshKey,
+  onWaitingForKey,
   onDetected,
   onRecreated,
   onCancelled,
@@ -66,6 +67,8 @@ export function ImportProgress({
   createBody: CreateProjectBody;
   /** The create answered `awaiting_key` with this key: show it at once (the first status read confirms it). */
   initialSshKey?: ImportSshKey | null;
+  /** Whether it now waits for the project's key (Clone now): the wizard's footer says so. */
+  onWaitingForKey?: (waiting: boolean) => void;
   onDetected: (detect: ProjectDetectResponse) => void;
   onRecreated: (projectId: string) => void;
   /** The project is gone; `failure` when a Try again could not register it again. */
@@ -314,6 +317,9 @@ export function ImportProgress({
 
   const failed = phase.kind === 'cloneFailed' || phase.kind === 'detectFailed';
   const waiting = phase.kind === 'awaitingKey';
+  const onWaitingRef = useRef(onWaitingForKey);
+  onWaitingRef.current = onWaitingForKey;
+  useEffect(() => onWaitingRef.current?.(waiting), [waiting]);
 
   // The buttons swap with the phase: keep focus on what replaced the one that was pressed.
   const statusRef = useRef<HTMLParagraphElement>(null);

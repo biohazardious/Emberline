@@ -26,6 +26,7 @@ import {
 } from '../repository';
 import { hostKeyOf, SSH_KEY_HREF } from '../sshKeys';
 import { HostKeyChangedNote, HostKeyTrust } from './HostKeyTrust';
+import { ImportRecovery } from './ImportRecovery';
 import { ProjectSshKey } from './ProjectSshKey';
 
 type RepoForm = 'connect' | 'create' | 'actions';
@@ -169,6 +170,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
   return (
     <section className="repo-block" aria-labelledby="repository-title">
       <h3 id="repository-title">Repository</h3>
+      <ImportRecovery project={project} />
       {status.error !== undefined && !s && (
         <p className="banner banner-error" role="alert">
           {errorMessage(status.error)}{' '}
@@ -207,7 +209,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
           )}
         </dl>
       )}
-      {s && <ProjectSshKey project={project} originUrl={s.originUrl} />}
+      {s && <ProjectSshKey project={project} originUrl={s.originUrl ?? project.repoUrl} />}
       {credentials && (
         <p className="banner banner-warn" role="alert">
           {credentials}

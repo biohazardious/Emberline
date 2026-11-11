@@ -35,6 +35,7 @@ import {
   isNameConflict,
   isStepValid,
   nextStep,
+  importWaitHint,
   previousStep,
   repoIsSsh,
   repoNextLabel,
@@ -91,6 +92,8 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const [done, setDone] = useState<{ name: string; warning: string } | null>(null);
   /** The own key the create made (`awaiting_key`): the import step starts by showing it. */
   const [importSshKey, setImportSshKey] = useState<ImportSshKey | null | undefined>(undefined);
+  /** The import step waits for the project's key (Clone now), not for an inspection. */
+  const [waitingForKey, setWaitingForKey] = useState(false);
   // The shared key, for an ssh address only (the Repository step shows it; same cache as there).
   const queryClient = useQueryClient();
   const sharedKey = useQuery({
@@ -298,7 +301,9 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
 
   // A shared key that could not be read does not block: the step shows the error, and core refuses a missing key.
   const problem =
-    stepProblem(state, state.step) ?? (sharedKey.isError ? null : sshKeyStepProblem(state, sharedKey.data));
+    importWaitHint(state, waitingForKey) ??
+    stepProblem(state, state.step) ??
+    (sharedKey.isError ? null : sshKeyStepProblem(state, sharedKey.data));
   const cloneBlocked = state.step === 'repo' && state.source === 'import_url' && runnerDown;
   const summaryBlocked = state.step === 'summary' && !preview.ready;
   const nextDisabled =
@@ -430,6 +435,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
                   projectId={state.importProjectId}
                   createBody={buildCreateBody(state)}
                   initialSshKey={importSshKey}
+                  onWaitingForKey={setWaitingForKey}
                   onDetected={onDetected}
                   onRecreated={onRecreated}
                   onCancelled={onCancelled}

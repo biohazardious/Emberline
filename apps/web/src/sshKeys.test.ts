@@ -9,6 +9,8 @@ import {
   keyInUse,
   repoPathOf,
   sshProblemFor,
+  unfinishedImport,
+  unfinishedImportUrl,
 } from './sshKeys';
 
 const key = (fingerprint: string) => ({
@@ -88,5 +90,33 @@ describe('small texts', () => {
   it('names a few projects, then counts the rest', () => {
     expect(bannerProjects(['A', 'B'])).toEqual({ shown: ['A', 'B'], more: 0 });
     expect(bannerProjects(['A', 'B', 'C', 'D', 'E'])).toEqual({ shown: ['A', 'B', 'C'], more: 2 });
+  });
+});
+
+describe('unfinished imports (Ruling 23)', () => {
+  const ssh = { id: 'p1', importSource: 'url' as const, repoUrl: 'git@github.com:a/s.git' };
+  const https = { ...ssh, repoUrl: 'https://github.com/a/s.git' };
+  const st = (status: 'awaiting_key' | 'cloning' | 'ready' | 'failed') => ({
+    status,
+    exitCode: null,
+    terminalId: null,
+    tail: '',
+  });
+
+  it('reads the import status only for a project imported from an address', () => {
+    expect(unfinishedImportUrl(ssh)).toBe('/api/projects/p1/import-status');
+    expect(unfinishedImportUrl({ ...ssh, importSource: 'folder' })).toBeNull();
+    expect(unfinishedImportUrl({ ...ssh, importSource: 'new' })).toBeNull();
+    expect(unfinishedImportUrl({ ...ssh, importSource: null })).toBeNull();
+    expect(unfinishedImportUrl({ ...ssh, repoUrl: null })).toBeNull();
+  });
+
+  it('is unfinished while it waits for its key, or after a failed ssh clone', () => {
+    expect(unfinishedImport(ssh, st('awaiting_key'))).toBe('awaiting_key');
+    expect(unfinishedImport(ssh, st('failed'))).toBe('failed');
+    expect(unfinishedImport(https, st('failed'))).toBeNull();
+    expect(unfinishedImport(ssh, st('ready'))).toBeNull();
+    expect(unfinishedImport(ssh, st('cloning'))).toBeNull();
+    expect(unfinishedImport(ssh, undefined)).toBeNull();
   });
 });

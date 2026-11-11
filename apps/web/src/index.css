@@ -6238,3 +6238,22 @@ dialog.cmd-dialog::backdrop {
 .ssh-key-shown > p:not(.small) {
   font-size: 0.85rem;
 }
+
+.import-recovery {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.import-recovery h4,
+.import-recovery > p {
+  margin: 0;
+}
+
+.import-recovery h4 {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
