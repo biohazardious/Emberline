@@ -17,10 +17,11 @@ export function runExec(
   const problem = cwdProblem(params.cwd);
   if (problem) return Promise.reject(new ExecCwdError(problem));
   return new Promise((resolve) => {
-    const command = wrapForUser(params.file, params.args, user, params.cwd);
+    const env = params.inheritEnv ? { ...baseEnv, ...params.env } : { ...params.env };
+    const command = wrapForUser(params.file, params.args, user, params.cwd, env);
     const child = spawn(command.file, command.args, {
       cwd: command.cwd,
-      env: params.inheritEnv ? { ...baseEnv, ...params.env } : { ...params.env },
+      env: command.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group, so a timeout also kills what the command started (npm -> node).
       detached: true,

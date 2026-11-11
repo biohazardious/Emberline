@@ -32,20 +32,60 @@ export function dropArgs(user: string): string[] {
 }
 
 /**
- * `file args` started in `cwd` as `user`; unchanged without a user (the dev stack, an ops ptyd). With
- * a user the directory is entered after the drop (`env --chdir`, started from `/`): an agent's
- * directory may be one only the agents' user can enter. `file` must not contain `=` then (env would
- * take it for a variable): {@link droppableFile}.
+ * Variables the dynamic loader and glibc read at a program's start (glibc's own list of those it drops
+ * for a setuid program, but TMPDIR, which neither setpriv nor env uses), plus every `LD_*` and
+ * `MALLOC_*`. setpriv runs with ptyd's capabilities, and as a program that is not setuid it gets no
+ * secure mode from the kernel: it must not see them. (After the drop env gets them as arguments, so
+ * for the moment until it starts the command they show in its command line.)
+ */
+const LOADER_VARIABLES = new Set([
+  'GCONV_PATH',
+  'GETCONF_DIR',
+  'GLIBC_TUNABLES',
+  'HOSTALIASES',
+  'LOCALDOMAIN',
+  'LOCPATH',
+  'MALLOC_TRACE',
+  'NIS_PATH',
+  'NLSPATH',
+  'RESOLV_HOST_CONF',
+  'RES_OPTIONS',
+  'TZDIR',
+]);
+
+function isLoaderVariable(name: string): boolean {
+  return name.startsWith('LD_') || name.startsWith('MALLOC_') || LOADER_VARIABLES.has(name);
+}
+
+/**
+ * `file args` started in `cwd` as `user`, with `env`; unchanged without a user (the dev stack, an ops
+ * ptyd). With a user the directory is entered after the drop (`env --chdir`, started from `/`): an
+ * agent's directory may be one only the agents' user can enter. The loader's variables
+ * ({@link isLoaderVariable}) are kept from setpriv and env and set by env after the drop, so the
+ * command still gets them. `file` must not contain `=` then (env would take it for a variable):
+ * {@link droppableFile}.
  */
 export function wrapForUser(
   file: string,
   args: string[],
   user: string | undefined,
   cwd: string,
-): { file: string; args: string[]; cwd: string } {
-  if (user === undefined) return { file, args, cwd };
+  env: Record<string, string> = {},
+): { file: string; args: string[]; cwd: string; env: Record<string, string> } {
+  if (user === undefined) return { file, args, cwd, env };
   const [setpriv = SETPRIV, ...options] = dropArgs(user);
-  return { file: setpriv, args: [...options, ENV, `--chdir=${cwd}`, '--', file, ...args], cwd: '/' };
+  const kept: Record<string, string> = {};
+  const afterDrop: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (isLoaderVariable(name)) afterDrop.push(`${name}=${value}`);
+    else kept[name] = value;
+  }
+  return {
+    file: setpriv,
+    args: [...options, ENV, `--chdir=${cwd}`, '--', ...afterDrop, file, ...args],
+    cwd: '/',
+    env: kept,
+  };
 }
 
 /** Whether `file` can be started through `env` as itself (a name with `=` would be a variable). */

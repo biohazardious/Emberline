@@ -86,7 +86,45 @@ describe('wrapForUser', () => {
       file: '/usr/bin/setpriv',
       args: [...DROP, '/usr/bin/env', '--chdir=/workspaces/demo', '--', '/bin/sh', '-c', 'id'],
       cwd: '/',
+      env: {},
     });
+  });
+
+  it("keeps the loader's variables from setpriv (it holds ptyd's capabilities) and hands them to the command after the drop", () => {
+    const env = {
+      PATH: '/usr/bin:/bin',
+      LD_PRELOAD: '/tmp/evil.so',
+      LD_LIBRARY_PATH: '/opt/lib',
+      GCONV_PATH: '/tmp/gconv',
+      GLIBC_TUNABLES: 'glibc.malloc.check=3',
+      LOCPATH: '/tmp/locale',
+      NLSPATH: '/tmp/nls',
+      MALLOC_TRACE: '/tmp/trace',
+      HOSTALIASES: '/tmp/hosts',
+      RESOLV_HOST_CONF: '/tmp/host.conf',
+    };
+    const command = wrapForUser('/bin/sh', ['-c', 'id'], 'node', '/w', env);
+    expect(command.env).toEqual({ PATH: '/usr/bin:/bin' });
+    expect(command.args).toEqual([
+      ...DROP,
+      '/usr/bin/env',
+      '--chdir=/w',
+      '--',
+      'LD_PRELOAD=/tmp/evil.so',
+      'LD_LIBRARY_PATH=/opt/lib',
+      'GCONV_PATH=/tmp/gconv',
+      'GLIBC_TUNABLES=glibc.malloc.check=3',
+      'LOCPATH=/tmp/locale',
+      'NLSPATH=/tmp/nls',
+      'MALLOC_TRACE=/tmp/trace',
+      'HOSTALIASES=/tmp/hosts',
+      'RESOLV_HOST_CONF=/tmp/host.conf',
+      '/bin/sh',
+      '-c',
+      'id',
+    ]);
+    // Without a drop nothing runs with ptyd's capabilities in front of the command: env as it is.
+    expect(wrapForUser('/bin/sh', [], undefined, '/w', env).env).toEqual(env);
   });
 
   it('leaves the command as it is without a user', () => {
@@ -94,6 +132,7 @@ describe('wrapForUser', () => {
       file: '/bin/sh',
       args: ['-c', 'id'],
       cwd: '/tmp',
+      env: {},
     });
   });
 
@@ -147,6 +186,23 @@ describe('the drop', () => {
     expect(browser.uid).toBe(1002);
     expect(browser.groups).toEqual([1002]);
     expect(browser.caps).toEqual(NO_CAPS);
+  });
+
+  it.skipIf(!isRoot)("the loader's variables reach the command, not setpriv or env in front of it", () => {
+    // The loader prints the auxiliary vector of every program it starts with LD_SHOW_AUXV set: once
+    // here (the command), not three times (setpriv, env, the command).
+    const { file, args, cwd, env } = wrapForUser(
+      '/bin/sh',
+      ['-c', 'echo "show:$LD_SHOW_AUXV"'],
+      'node',
+      '/',
+      { PATH: '/usr/bin:/bin', LD_SHOW_AUXV: '1' },
+    );
+    const [setpriv = '', ...prefix] = AS_RUNNER_PTYD;
+    const run = spawnSync(setpriv, [...prefix, file, ...args], { cwd, env, encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain('show:1');
+    expect(run.stdout.match(/^AT_ENTRY:/gm)).toHaveLength(1);
   });
 
   // Runs wherever the tests do not run as root (the dev container): there the drop cannot work,

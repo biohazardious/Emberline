@@ -97,18 +97,18 @@ export class PtySession {
       );
     }
 
-    const command = wrapForUser(params.file, params.args, user, params.cwd);
+    const command = wrapForUser(params.file, params.args, user, params.cwd, {
+      ...(params.inheritEnv ? pickBaseEnv() : {}),
+      ...params.env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+    });
     this.proc = nodePty.spawn(command.file, command.args, {
       name: 'xterm-256color',
       cols: params.cols,
       rows: params.rows,
       cwd: command.cwd,
-      env: {
-        ...(params.inheritEnv ? pickBaseEnv() : {}),
-        ...params.env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-      },
+      env: command.env,
     });
 
     if (user !== undefined) this.giveTerminalTo(user, config);
