@@ -276,7 +276,11 @@ export class PtydBridge extends EventEmitter<BridgeEvents> {
     let delay = 250;
     while (!this.stopped) {
       try {
-        const client = await PtydClient.connect(this.socketPath);
+        const client = await PtydClient.connect(this.socketPath).catch((error: unknown) => {
+          // Nothing answers any more: no mode was found (the health check stops naming one).
+          this._foundMode = null;
+          throw error;
+        });
         if (this.stopped) {
           client.close();
           break;

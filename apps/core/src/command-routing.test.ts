@@ -187,6 +187,16 @@ describe('the ops bridge', () => {
       }),
     ).rejects.toMatchObject({ code: 'ptyd_unavailable' });
   });
+
+  it('forgets the wrong mode once that ptyd is gone: the health check no longer names it', async () => {
+    const opsSock = path.join(dir, 'ops.sock');
+    const wrong = await listen(opsSock, 'runner');
+    const ops = bridge(opsSock, { mode: 'ops' });
+    await vi.waitFor(() => expect(ops.foundMode).toBe('runner'));
+    await wrong.close();
+    await vi.waitFor(() => expect(ops.foundMode).toBeNull(), { timeout: 10_000 });
+    expect(ops.available).toBe(false);
+  }, 20_000);
 });
 
 const git = (cwd: string, ...args: string[]) =>
