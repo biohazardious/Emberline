@@ -440,6 +440,50 @@ r agentFiles "$(stat -c '%U:%G' /home/node /opt/ai-tools /home/node/.e2e-0.6-mar
   },
 );
 
+await step("an agent's terminal holds no other session's terminal", async () => {
+  // A first terminal stays open (its pty master lives in ptyd) while a second one looks at its own
+  // descriptors: only its own terminal (0-2), never another session's (/dev/ptmx or another pts).
+  const first = await api('POST', '/api/terminals', { kind: 'shell' });
+  assert.equal(first.status, 201, first.text);
+  const ws = new WebSocket(`${BASE.replace(/^http/, 'ws')}/api/terminals/${first.json.id}/ws`, {
+    protocols: ['emberline', `emberline.key.${sessionKey}`],
+    headers: { cookie, origin: BASE },
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the first terminal never answered')), 30_000);
+      ws.addEventListener('message', (message) => {
+        const event = JSON.parse(String(message.data));
+        if (event.type === 'snapshot' || event.type === 'output') {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      ws.addEventListener('error', () => reject(new Error('the first terminal socket failed')));
+    });
+    const seen = await agentShell(`
+own="$(readlink /proc/$$/fd/0)"
+foreign=''
+for fd in /proc/$$/fd/*; do
+  t="$(readlink "$fd")"
+  case "$t" in *ptmx|/dev/pts/*) [ "$t" = "$own" ] || foreign="$foreign \${fd##*/}:$t" ;; esac
+done
+r terminals "$(for n in 0 1 2; do readlink /proc/$$/fd/$n; done | sort -u | wc -l)"
+r own "$own"
+r foreign "\${foreign:-none}"
+`);
+    assert.match(seen.own ?? '', /^\/dev\/pts\/\d+$/, JSON.stringify(seen));
+    assert.deepEqual(
+      { terminals: seen.terminals, foreign: seen.foreign },
+      { terminals: '1', foreign: 'none' },
+      JSON.stringify(seen),
+    );
+  } finally {
+    ws.close();
+    await api('DELETE', `/api/terminals/${first.json.id}`);
+  }
+});
+
 await step('demo is served sandboxed through a capability URL', async () => {
   const entry = await api('GET', `/api/projects/${project.id}/demo/main/`);
   assert.equal(entry.status, 302);
