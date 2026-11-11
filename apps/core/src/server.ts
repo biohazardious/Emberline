@@ -33,6 +33,7 @@ import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
 import { registerForgeAccountRoutes } from './routes/forge-accounts.js';
 import { registerSshKeyRoutes } from './routes/ssh-keys.js';
+import { sshKeyMissingProjects } from './ssh-keys/remote.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
@@ -264,6 +265,7 @@ export async function buildServer(
     runnerNotSecured: deps.ptyd.status === 'connected' && deps.ptyd.unsecured,
     runnerProblem: deps.ptyd.startProblem,
     opsMissing: opsShownMissing(deps),
+    sshKeyMissing: sshKeyMissingProjects(deps.db),
     docker: deps.runs.docker.status,
   }));
   registerProjectRoutes(app, { ...deps, postMerge, mainPush });

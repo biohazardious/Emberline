@@ -7,6 +7,7 @@ import {
   type ImportStatusResponse,
   type Project,
   type ProjectDetectResponse,
+  SshRemoteProblem,
   type WorkspaceFoldersResponse,
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
@@ -25,7 +26,7 @@ import {
   planAdopt,
 } from '../factory/project-import.js';
 import { redactCapabilityUrls } from '../git-gateway/gateway.js';
-import { finishAccountClone } from '../git-gateway/remote-git.js';
+import { finishGatewayClone } from '../git-gateway/remote-git.js';
 import { opsBridgeOf } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import { projectResponse, redactedProject, toProject } from './projects.js';
@@ -70,9 +71,18 @@ export function registerProjectImportRoutes(
       const project = projectOr404(request.params.id);
       const status = await importStatus(clones, project);
       if (status.status !== 'cloning') {
-        // An account clone: release its capability and point origin at the real URL (once).
-        const refusal = await finishAccountClone(runs.gitGateway, project, status.status === 'ready');
-        if (refusal && status.status === 'failed') status.tail = `${status.tail}\n${refusal}`.trim();
+        // A clone through the gateway: release its capability and point origin at the real URL (once).
+        const outcome = await finishGatewayClone(runs.gitGateway, project, status.status === 'ready');
+        if (outcome && status.status === 'failed') {
+          status.tail = `${status.tail}\n${outcome.message}`.trim();
+          // The gateway's reason, not git's view of it (ssh's own output is only read for a direct clone).
+          const code = SshRemoteProblem.safeParse(outcome.code);
+          if (code.success) {
+            status.reason = outcome.message;
+            status.code = code.data;
+            if (outcome.hostKey) status.hostKey = outcome.hostKey;
+          }
+        }
       }
       if (status.status === 'ready') await reconcileClonedBranch(project);
       return { ...status, tail: redactCapabilityUrls(status.tail) };

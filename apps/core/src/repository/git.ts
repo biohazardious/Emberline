@@ -4,12 +4,14 @@ import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets } from '../git-gateway/gateway.js';
+import { GitGatewayError } from '../git-gateway/upstream.js';
 import {
-  type AccountRemote,
-  accountFetchBranchObjects,
-  accountPushBranch,
-  accountRemoteBranches,
-  accountRemoteHead,
+  type GatewayRemote,
+  gatewayHttpCredential,
+  gatewayFetchBranchObjects,
+  gatewayPushBranch,
+  gatewayRemoteBranches,
+  gatewayRemoteHead,
 } from '../git-gateway/remote-git.js';
 
 export const MAIN_MOVED_MESSAGE =
@@ -26,17 +28,42 @@ const BAD_URL =
   'Enter a repository URL such as https://github.com/you/app.git or git@github.com:you/app.git.';
 
 /**
- * How origin is reached. With an account (an http(s) URL under its server) the runner's git goes
- * through core's gateway, which adds the credential, and the token never leaves core; otherwise
- * (ssh with the runner's keys, a public https remote) the runner's git goes straight to the URL.
+ * How origin is reached. Through core's git gateway (`remote`): an http(s) URL under a forge
+ * account's server, with that account, or an ssh address, with the project's chosen SSH key; the
+ * token or key never leaves core. Otherwise (a public http(s) remote) git goes straight to the URL.
  */
 export interface RemoteAccess {
   /**
-   * projects.repoUrl, or the URL being connected. Without an account it may be origin as configured,
+   * projects.repoUrl, or the URL being connected. Without the gateway it may be origin as configured,
    * with a token typed into it, but only when that names the same repository as projects.repoUrl.
    */
   url: string;
-  account: AccountRemote | null;
+  remote: GatewayRemote | null;
+}
+
+/** What core knows is secret around a git command to this remote (the account's token, the URL's password). */
+export const accessSecrets = (
+  access: RemoteAccess,
+  addresses: readonly string[] = [access.url],
+): KnownSecrets => ({
+  credential: gatewayHttpCredential(access.remote),
+  addresses,
+});
+
+/**
+ * An ssh setup failure the person fixes in Emberline (no key, a host key to trust, a changed host
+ * key), as the API error with the gateway's code and, for a host key, the key the server offered.
+ * Null for any other failure.
+ */
+export function sshSetupError(error: unknown, prefix = ''): HttpError | null {
+  if (!(error instanceof GitGatewayError)) return null;
+  if (!['ssh_key_missing', 'host_key_unknown', 'host_key_changed'].includes(error.code)) return null;
+  return new HttpError(
+    409,
+    error.code,
+    `${prefix}${error.message}`,
+    error.hostKey ? { hostKey: error.hostKey } : undefined,
+  );
 }
 
 /**
@@ -229,9 +256,9 @@ export async function listRemoteBranches(
   access: RemoteAccess,
   branch?: string,
 ): Promise<string[]> {
-  if (!access.account) assertSupportedRemote(access.url);
-  const names = access.account
-    ? await accountRemoteBranches(access.account, mainPath, branch)
+  if (!access.remote) assertSupportedRemote(access.url);
+  const names = access.remote
+    ? await gatewayRemoteBranches(access.remote, mainPath, branch)
     : (
         await execGitFile(
           [
@@ -260,7 +287,7 @@ export async function remoteBranchHead(
   access: RemoteAccess,
   branch: string,
 ): Promise<string | null> {
-  if (access.account) return accountRemoteHead(access.account, mainPath, branch);
+  if (access.remote) return gatewayRemoteHead(access.remote, mainPath, branch);
   assertSupportedRemote(access.url);
   const out = (
     await execGitFile([...NO_SUBMODULES, 'ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
@@ -290,10 +317,10 @@ export async function fetchBranchObjects(
   oid: string,
 ): Promise<void> {
   if (await hasRealCommit(mainPath, oid)) return;
-  if (access.account) await accountFetchBranchObjects(access.account, mainPath, branch);
+  if (access.remote) await gatewayFetchBranchObjects(access.remote, mainPath, branch);
   else {
     assertSupportedRemote(access.url);
-    // Only the real objects, as on the account path: no replace refs, grafts or commit-graph.
+    // Only the real objects, as on the gateway path: no replace refs, grafts or commit-graph.
     await execGitFile(
       [
         ...NO_SUBMODULES,
@@ -359,13 +386,16 @@ export async function pushBranch(
   oid: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
-  const known: KnownSecrets = { credential: access.account?.credential, addresses: [access.url] };
-  if (access.account) {
+  const known = accessSecrets(access);
+  if (access.remote) {
     try {
-      return await accountPushBranch(access.account, mainPath, branch, oid);
+      return await gatewayPushBranch(access.remote, mainPath, branch, oid);
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
-      throw new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`);
+      throw (
+        sshSetupError(error, 'Push failed: ') ??
+        new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`)
+      );
     }
   } else {
     assertSupportedRemote(access.url);

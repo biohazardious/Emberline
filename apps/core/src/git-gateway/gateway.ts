@@ -262,6 +262,9 @@ export class GitGateway {
       if (!parseSshRemote(grant.upstreamUrl))
         throw new GitGatewayError('url_refused', 'Emberline uses an SSH key only for an ssh address.');
       if (!this.options.db) throw new Error('the git gateway needs the database for ssh');
+      // Defence in depth: a capability never carries another project's key.
+      if (credential.keyScope !== 'shared' && credential.keyScope !== grant.projectId)
+        throw new Error("an ssh capability uses the shared key or its own project's key");
     }
     if ((grant.service === 'git-receive-pack') !== Boolean(grant.push))
       throw new Error('a push capability needs a push plan, and only it');

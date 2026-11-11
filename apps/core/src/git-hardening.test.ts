@@ -42,7 +42,7 @@ import {
   UnsafeGitConfigError,
 } from './git-exec.js';
 import { GitGateway } from './git-gateway/gateway.js';
-import { type AccountRemote, accountPushBranch, accountRemoteBranches } from './git-gateway/remote-git.js';
+import { type GatewayRemote, gatewayPushBranch, gatewayRemoteBranches } from './git-gateway/remote-git.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { fetchBranchObjects, listRemoteBranches, pushBranch, remoteBranchHead } from './repository/git.js';
 import { pushWorktreeBranch } from './runs/git.js';
@@ -171,7 +171,7 @@ describe('git commands that reach a remote ignore config that runs a command or 
       it('a push (no account) runs no planted command and reaches no proxy', async () => {
         const { work, url } = workAndOrigin();
         plant(work);
-        await pushBranch(work, { url, account: null }, 'main', git(work, 'rev-parse', 'HEAD')).catch(
+        await pushBranch(work, { url, remote: null }, 'main', git(work, 'rev-parse', 'HEAD')).catch(
           () => undefined,
         );
         nothingRan();
@@ -190,8 +190,8 @@ describe('git commands that reach a remote ignore config that runs a command or 
         const { work, url } = workAndOrigin();
         git(work, 'push', '-q', path.join(root, 'origin.git'), 'main');
         plant(work);
-        const oid = await remoteBranchHead(work, { url, account: null }, 'main').catch(() => null);
-        if (oid) await fetchBranchObjects(work, { url, account: null }, 'main', oid).catch(() => undefined);
+        const oid = await remoteBranchHead(work, { url, remote: null }, 'main').catch(() => null);
+        if (oid) await fetchBranchObjects(work, { url, remote: null }, 'main', oid).catch(() => undefined);
         nothingRan();
       });
 
@@ -257,7 +257,7 @@ describe('git commands that reach a remote ignore config that runs a command or 
     const { work } = workAndOrigin();
     const oid = git(work, 'rev-parse', 'HEAD');
     for (const url of [path.join(root, 'origin.git'), 'file:///srv/x.git', 'ext::sh -c id']) {
-      const error = await pushBranch(work, { url, account: null }, 'main', oid).catch((e: unknown) => e);
+      const error = await pushBranch(work, { url, remote: null }, 'main', oid).catch((e: unknown) => e);
       expect((error as { code?: string }).code, url).toBe('remote_not_supported');
     }
     expect(existsSync(marker)).toBe(false);
@@ -328,9 +328,9 @@ describe('TLS, proxy and extra headers from repo config on a command that reache
   /** Push main, Refresh's read and a run's push, all to `url`; failures are fine, only what reached a server counts. */
   async function everyRemotePath(work: string, url: string): Promise<void> {
     const oid = git(work, 'rev-parse', 'HEAD');
-    await pushBranch(work, { url, account: null }, 'main', oid).catch(() => undefined);
-    const head = await remoteBranchHead(work, { url, account: null }, 'main').catch(() => null);
-    await fetchBranchObjects(work, { url, account: null }, 'main', head ?? oid).catch(() => undefined);
+    await pushBranch(work, { url, remote: null }, 'main', oid).catch(() => undefined);
+    const head = await remoteBranchHead(work, { url, remote: null }, 'main').catch(() => null);
+    await fetchBranchObjects(work, { url, remote: null }, 'main', head ?? oid).catch(() => undefined);
     git(work, 'remote', 'add', 'origin', url);
     git(work, 'checkout', '-q', '-b', 'emberline/run-1');
     await pushWorktreeBranch(work, 'emberline/run-1', 'main').catch(() => undefined);
@@ -413,11 +413,14 @@ describe("an address for a host name, or any other http key, in repo config neve
   const resolveTo = (host: string) => `${host}:${fake.port}:127.0.0.1`;
   const fakeOrigin = () => `http://origin.invalid:${fake.port}/alice/app.git`;
   const gatewayBase = () => `http://gateway.invalid:${fake.port}`;
-  const account = (): AccountRemote => ({
+  const account = (): GatewayRemote => ({
     gateway: new GitGateway({ baseUrl: gatewayBase(), runnerHosts: [] }),
     projectId: 'p1',
     url: 'https://forge.invalid/alice/app.git',
-    credential: { serverUrl: 'https://forge.invalid', username: 'alice', token: 'forge-token' },
+    credential: {
+      kind: 'http',
+      http: { serverUrl: 'https://forge.invalid', username: 'alice', token: 'forge-token' },
+    },
   });
   const nothingReachedTheFake = () =>
     expect(
@@ -434,7 +437,7 @@ describe("an address for a host name, or any other http key, in repo config neve
     it(`${name}: Push main, Refresh and a run push without an account never reach the agent's listener`, async () => {
       const { work, oid } = workAtFake();
       git(work, 'config', key(fakeOrigin()), resolveTo('origin.invalid'));
-      const access = { url: fakeOrigin(), account: null };
+      const access = { url: fakeOrigin(), remote: null };
       const pushed = await pushBranch(work, access, 'main', oid).catch((e: unknown) => e);
       expect(pushed).not.toBe('pushed');
       await expect(remoteBranchHead(work, access, 'main')).rejects.toThrow();
@@ -448,13 +451,13 @@ describe("an address for a host name, or any other http key, in repo config neve
     it(`${name}: with a forge account, a push is never reported done by the agent's listener and no capability reaches it`, async () => {
       const { work, oid } = workAtFake();
       git(work, 'config', key(gatewayBase()), resolveTo('gateway.invalid'));
-      const pushed = await pushBranch(work, { url: account().url, account: account() }, 'main', oid).catch(
+      const pushed = await pushBranch(work, { url: account().url, remote: account() }, 'main', oid).catch(
         (e: unknown) => e,
       );
       expect(pushed).not.toBe('pushed');
-      await expect(accountRemoteBranches(account(), work)).rejects.toThrow();
+      await expect(gatewayRemoteBranches(account(), work)).rejects.toThrow();
       git(work, 'checkout', '-q', '-b', 'emberline/run-1');
-      await expect(accountPushBranch(account(), work, 'emberline/run-1')).rejects.toThrow();
+      await expect(gatewayPushBranch(account(), work, 'emberline/run-1')).rejects.toThrow();
       nothingReachedTheFake();
     });
   }
@@ -465,7 +468,7 @@ describe("an address for a host name, or any other http key, in repo config neve
     const refused = await assertSafeGitConfig(work, { remote: true }).catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(UnsafeGitConfigError);
     expect((refused as UnsafeGitConfigError).keys).toEqual([`http.${gatewayBase()}.curloptresolve`]);
-    const viaGateway = await accountRemoteBranches(account(), work).catch((e: unknown) => e);
+    const viaGateway = await gatewayRemoteBranches(account(), work).catch((e: unknown) => e);
     expect(String((viaGateway as Error).message)).toContain('curloptresolve');
     await expect(assertSafeGitConfig(work)).resolves.toBeUndefined();
   });
@@ -483,9 +486,9 @@ describe("an address for a host name, or any other http key, in repo config neve
     it(`${name} is refused on the account path and without an account`, async () => {
       const { work, oid } = workAtFake();
       git(work, 'config', key(), value);
-      await expect(accountRemoteBranches(account(), work)).rejects.toThrow(/does not allow/);
+      await expect(gatewayRemoteBranches(account(), work)).rejects.toThrow(/does not allow/);
       await expect(
-        pushBranch(work, { url: http.url('origin.git'), account: null }, 'main', oid),
+        pushBranch(work, { url: http.url('origin.git'), remote: null }, 'main', oid),
       ).rejects.toThrow(/does not allow/);
       nothingReachedTheFake();
     });
@@ -516,8 +519,8 @@ describe("an address for a host name, or any other http key, in repo config neve
     for (const [key, value] of allowed) git(work, 'config', key, value);
     await expect(assertSafeGitConfig(work, { remote: true })).resolves.toBeUndefined();
     const oid = git(work, 'rev-parse', 'HEAD');
-    await expect(pushBranch(work, { url, account: null }, 'main', oid)).resolves.toBe('pushed');
-    await expect(remoteBranchHead(work, { url, account: null }, 'main')).resolves.toBe(oid);
+    await expect(pushBranch(work, { url, remote: null }, 'main', oid)).resolves.toBe('pushed');
+    await expect(remoteBranchHead(work, { url, remote: null }, 'main')).resolves.toBe(oid);
     git(work, 'remote', 'add', 'origin', url);
     git(work, 'checkout', '-q', '-b', 'emberline/run-1');
     await expect(pushWorktreeBranch(work, 'emberline/run-1', 'main')).resolves.toMatchObject({
@@ -669,9 +672,9 @@ describe("the runner's environment and PATH never reach core's commands", () => 
         git(work, 'checkout', '-q', '-b', 'emberline/run-1');
         plantEverything();
         // Real work through the clean environment: no dubious ownership, no missing helper.
-        expect(await pushBranch(work, { url, account: null }, 'main', oid)).toBe('pushed');
-        expect(await remoteBranchHead(work, { url, account: null }, 'main')).toBe(oid);
-        await fetchBranchObjects(work, { url, account: null }, 'main', oid);
+        expect(await pushBranch(work, { url, remote: null }, 'main', oid)).toBe('pushed');
+        expect(await remoteBranchHead(work, { url, remote: null }, 'main')).toBe(oid);
+        await fetchBranchObjects(work, { url, remote: null }, 'main', oid);
         await pushWorktreeBranch(work, 'emberline/run-1', 'main');
         const listed = await execGitFile(['ls-remote', '--heads', '--', url], { cwd: work, remote: true });
         expect(listed.stdout).toContain('refs/heads/emberline/run-1');
@@ -682,12 +685,12 @@ describe("the runner's environment and PATH never reach core's commands", () => 
       it('ssh, https and a 401 run no planted ssh, askpass or helper, and TLS stays verified', async () => {
         const { work } = workAndOrigin();
         plantEverything();
-        await listRemoteBranches(work, { url: 'ssh://git@127.0.0.1:1/o/r.git', account: null }).catch(
+        await listRemoteBranches(work, { url: 'ssh://git@127.0.0.1:1/o/r.git', remote: null }).catch(
           () => [],
         );
-        await listRemoteBranches(work, { url: 'git@127.0.0.1:o/r.git', account: null }).catch(() => []);
-        await remoteBranchHead(work, { url: tls.url('origin.git'), account: null }, 'main').catch(() => null);
-        await remoteBranchHead(work, { url: http.url('private/origin.git'), account: null }, 'main').catch(
+        await listRemoteBranches(work, { url: 'git@127.0.0.1:o/r.git', remote: null }).catch(() => []);
+        await remoteBranchHead(work, { url: tls.url('origin.git'), remote: null }, 'main').catch(() => null);
+        await remoteBranchHead(work, { url: http.url('private/origin.git'), remote: null }, 'main').catch(
           () => null,
         );
         nothingReached();

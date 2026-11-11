@@ -13,14 +13,16 @@ import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } fro
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
-import { accountForGitRemote, accountForRemote, gitCredentialForRemote } from '../forge/account-store.js';
+import { accountForGitRemote, accountForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { remoteCompareKey } from '../forge/hosts.js';
 import { secretDigest } from '../secrets/box.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway, type KnownSecrets } from '../git-gateway/gateway.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { gatewayRemoteFor } from '../ssh-keys/remote.js';
 import {
+  accessSecrets,
   aheadBehind,
   branchTip,
   DIVERGED_MESSAGE,
@@ -39,6 +41,7 @@ import {
   setRemoteTracking,
   setUpstream,
   shortGitError,
+  sshSetupError,
   validateRepositoryUrl,
 } from './git.js';
 
@@ -235,16 +238,18 @@ export class RepositoryService {
     // Refused before the remote is contacted; checked again under the lock when origin is set.
     const { fetch: current } = await originUrls(ws.path);
     if (current && current !== url && !body.replace) throw this.originExists(current, url);
-    const access = this.accessFor(projectId, url); // an unchecked account keeps its own error
-    const known: KnownSecrets = { credential: access.account?.credential, addresses: [url] };
+    // An unchecked account keeps its own error; an ssh address without its key fails here, before
+    // anything runs.
+    const access = this.accessFor(projectId, url);
+    const known = accessSecrets(access);
     try {
       // Readable before anything changes; an empty repository answers with no branches.
       await listRemoteBranches(ws.path, access);
     } catch (error) {
-      throw new HttpError(
-        409,
-        'remote_unreachable',
-        `Couldn't read the repository on ${host}: ${remoteErrorText(error, known)}`,
+      const prefix = `Couldn't read the repository on ${host}: `;
+      throw (
+        sshSetupError(error, prefix) ??
+        new HttpError(409, 'remote_unreachable', `${prefix}${remoteErrorText(error, known)}`)
       );
     }
     await this.setOriginLocked(projectId, ws.path, url, body.replace);
@@ -403,9 +408,9 @@ export class RepositoryService {
     });
   }
 
+  /** Through the gateway with the account or the chosen SSH key, or direct; a missing key throws `ssh_key_missing`. */
   private accessFor(projectId: string, url: string): RemoteAccess {
-    const credential = gitCredentialForRemote(this.db, url);
-    return { url, account: credential ? { gateway: this.gateway, projectId, url, credential } : null };
+    return { url, remote: gatewayRemoteFor(this.db, this.gateway, this.project(projectId), url) };
   }
 
   /**
@@ -434,7 +439,7 @@ export class RepositoryService {
       );
     }
     const access = this.accessFor(projectId, connected);
-    return { access: access.account ? access : { url: fetch, account: null }, origin: fetch };
+    return { access: access.remote ? access : { url: fetch, remote: null }, origin: fetch };
   }
 
   /**
@@ -449,9 +454,11 @@ export class RepositoryService {
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
     const key = originKey(ws.origin);
     // origin as configured: a token typed into it is masked wherever git quotes it.
-    const known: KnownSecrets = { credential: ws.access.account?.credential, addresses: [ws.origin] };
+    const known = accessSecrets(ws.access, [ws.origin]);
     let check: RemoteCheck;
     let remoteOid: string | null = null;
+    // A host key to trust or one that changed: recorded as the read's failure, and also the answer.
+    let setup: HttpError | null = null;
     try {
       remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
       if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
@@ -459,6 +466,7 @@ export class RepositoryService {
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
+      setup = sshSetupError(error);
       const reason = error instanceof HttpError ? error.message : describeGitError(error, known);
       check = { url: checkedUrl, originKey: key, branch, at, published: false, error: reason };
     }
@@ -482,6 +490,7 @@ export class RepositoryService {
         // the project was deleted meanwhile
       }
     });
+    if (setup) throw setup;
   }
 
   /** Names origin without user info, query or fragment: a token set by hand in it is never echoed. */

@@ -10,6 +10,7 @@
     "src/test-utils.ts",
     "src/test-agent-harness.ts",
     "src/test-setup.ts",
-    "src/test-fake-forge.ts"
+    "src/test-fake-forge.ts",
+    "src/test-ssh-forge.ts"
   ]
 }

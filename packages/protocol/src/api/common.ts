@@ -1,5 +1,6 @@
 /** API contracts: common. */
 import { z } from 'zod';
+import { SshKeyMissingProject } from './ssh-keys.js';
 
 /**
  * Every mutating API request must carry this header (CSRF defence, see core auth). Signed in, its
@@ -89,6 +90,11 @@ export const SystemStatus = z.object({
    * longer than a restart takes, or cannot be used: core starts nothing anywhere until it answers.
    */
   opsMissing: z.boolean(),
+  /**
+   * Projects whose repository is an ssh address and whose chosen SSH key (the shared one, or the
+   * project's own) does not exist: their remote operations fail until a key is created.
+   */
+  sshKeyMissing: z.array(SshKeyMissingProject),
   docker: DockerEngineStatus,
 });
 export type SystemStatus = z.infer<typeof SystemStatus>;

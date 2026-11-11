@@ -51,7 +51,7 @@ describe('pushBranch without an account (the runner git straight to the URL)', (
     git(work, 'add', 'b.txt');
     git(work, 'commit', '-q', '-m', 'b'); // main moved on: only `first` is pushed
     try {
-      expect(await pushBranch(work, { url, account: null }, 'main', first)).toBe('pushed');
+      expect(await pushBranch(work, { url, remote: null }, 'main', first)).toBe('pushed');
     } finally {
       await http.close();
     }
@@ -70,7 +70,7 @@ describe('pushBranch without an account (the runner git straight to the URL)', (
       'ext::sh -c id',
       'git://h/o/r.git',
     ]) {
-      const error = await pushBranch(work, { url, account: null }, 'main', oid).catch((e: unknown) => e);
+      const error = await pushBranch(work, { url, remote: null }, 'main', oid).catch((e: unknown) => e);
       expect(error, url).toBeInstanceOf(HttpError);
       expect((error as HttpError).code, url).toBe('remote_not_supported');
     }
@@ -194,7 +194,7 @@ describe('pushBranch without an account: refusals', () => {
     const oid = git(work, 'rev-parse', 'HEAD');
     const http = await startGitHttp(dir);
     try {
-      const error = await pushBranch(work, { url: http.url('remote.git'), account: null }, 'main', oid).catch(
+      const error = await pushBranch(work, { url: http.url('remote.git'), remote: null }, 'main', oid).catch(
         (e: unknown) => e,
       );
       expect(error).toBeInstanceOf(HttpError);
@@ -519,7 +519,7 @@ describe('reading origin without an account (the runner git straight to the URL)
     git(pusher, 'commit', '-q', '--allow-empty', '-m', 'one');
     git(pusher, 'push', '-q', bare, 'main');
     http = await startGitHttp(dir);
-    return { bare, pusher, main, access: { url: http.url('remote.git'), account: null } };
+    return { bare, pusher, main, access: { url: http.url('remote.git'), remote: null } };
   };
   afterEach(async () => {
     await http?.close();

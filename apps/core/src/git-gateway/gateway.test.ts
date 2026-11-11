@@ -13,11 +13,11 @@ import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import { execGitFile } from '../git-exec.js';
 import { GitGateway } from './gateway.js';
 import {
-  accountFetchBranchObjects,
+  gatewayFetchBranchObjects,
   gatewayGitArgs,
-  accountPushBranch,
-  accountRemoteBranches,
-  type AccountRemote,
+  gatewayPushBranch,
+  gatewayRemoteBranches,
+  type GatewayRemote,
 } from './remote-git.js';
 import { rmTemp } from '../test-rm.js';
 
@@ -31,11 +31,11 @@ let repo: string;
 const logs: string[] = [];
 const execs: ExecRequest[] = [];
 const cred = (): GitHttpCredential => ({ serverUrl: a.url, username: 'alice', token: TOKEN });
-const remote = (): AccountRemote => ({
+const remote = (): GatewayRemote => ({
   gateway,
   projectId: 'p1',
   url: `${a.url}/alice/app.git`,
-  credential: cred(),
+  credential: { kind: 'http', http: cred() },
 });
 const gitIn = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -99,8 +99,8 @@ afterEach(async () => {
 
 describe('the git gateway', () => {
   it('ls-remote, push and fetch go through it with the account; no log, exec or error holds the token or a live capability', async () => {
-    expect(await accountRemoteBranches(remote(), repo)).toEqual([]);
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed');
+    expect(await gatewayRemoteBranches(remote(), repo)).toEqual([]);
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('pushed');
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
       gitIn(repo, 'rev-parse', 'HEAD'),
     );
@@ -108,7 +108,7 @@ describe('the git gateway', () => {
     execFileSync('git', ['clone', '-q', a.bare('alice', 'app'), elsewhere]);
     commit(elsewhere, 'b.txt');
     gitIn(elsewhere, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
-    await accountFetchBranchObjects(remote(), repo, 'main');
+    await gatewayFetchBranchObjects(remote(), repo, 'main');
     // The objects only: no ref is written.
     expect(gitIn(repo, 'cat-file', '-t', gitIn(elsewhere, 'rev-parse', 'HEAD'))).toBe('commit');
     expect(gitIn(repo, 'for-each-ref', '--format=%(refname)', 'refs/remotes')).toBe('');
@@ -254,12 +254,12 @@ describe('the git gateway', () => {
 
   it('a redirect to another server, a refused token and an upstream outside the account fail with a sentence and no token', async () => {
     a.redirectTo = b.url;
-    const redirected = await accountRemoteBranches(remote(), repo).catch((e: unknown) => e);
+    const redirected = await gatewayRemoteBranches(remote(), repo).catch((e: unknown) => e);
     expect(redirected).toMatchObject({ code: 'redirect_refused' });
     expect(b.seen).toEqual([]);
     a.redirectTo = null;
-    const refused = await accountRemoteBranches(
-      { ...remote(), credential: { ...cred(), token: 'revoked' } },
+    const refused = await gatewayRemoteBranches(
+      { ...remote(), credential: { kind: 'http', http: { ...cred(), token: 'revoked' } } },
       repo,
     ).catch((e: unknown) => e);
     expect(refused).toMatchObject({
@@ -281,7 +281,7 @@ describe('the git gateway', () => {
     writeFileSync(path.join(repo, 'big.bin'), randomBytes(3 * 1024 * 1024)); // incompressible, over http.postBuffer
     gitIn(repo, 'add', 'big.bin');
     gitIn(repo, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'big');
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('pushed');
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
       gitIn(repo, 'rev-parse', 'HEAD'),
     );
@@ -298,7 +298,7 @@ describe('the git gateway', () => {
     writeFileSync(path.join(repo, 'big.bin'), randomBytes(64 * 1024)); // incompressible
     gitIn(repo, 'add', 'big.bin');
     gitIn(repo, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'big');
-    await expect(accountPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
+    await expect(gatewayPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
       code: 'too_large',
       message: 'This git operation moved more than 512 bytes; Emberline stopped it.',
     });
@@ -459,9 +459,9 @@ describe('the git gateway, one push and its limits', () => {
   });
 
   it('a push is planned from the remote branch: fast-forward passes, a diverged or unrelated branch is rejected and the remote keeps its commits', async () => {
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed'); // new branch: planned from the zero id
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('pushed'); // new branch: planned from the zero id
     commit(repo, 'b.txt');
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed'); // fast-forward
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('pushed'); // fast-forward
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
       gitIn(repo, 'rev-parse', 'HEAD'),
     );
@@ -473,27 +473,27 @@ describe('the git gateway, one push and its limits', () => {
     const theirs = gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main');
     commit(repo, 'ours.txt');
     const pushes = receivePosts().length;
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('rejected');
     // An unrelated history (what a force push would put there) is rejected the same way.
     gitIn(repo, 'checkout', '-q', '--orphan', 'other');
     commit(repo, 'orphan.txt');
     gitIn(repo, 'branch', '-f', 'main', 'HEAD');
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('rejected');
     // History an agent can fake in the shared repository does not count: a replace ref or a graft
     // that makes the unrelated commit a child of the remote's.
     const orphan = gitIn(repo, 'rev-parse', 'HEAD');
     gitIn(repo, 'replace', '--graft', orphan, theirs);
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('rejected');
     gitIn(repo, 'replace', '-d', orphan);
     writeFileSync(path.join(repo, '.git', 'info', 'grafts'), `${orphan} ${theirs}\n`);
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('rejected');
     rmSync(path.join(repo, '.git', 'info', 'grafts'));
     // A shallow repository cannot show ancestry: refused with a sentence.
     writeFileSync(path.join(repo, '.git', 'shallow'), `${theirs}\n`);
-    await expect(accountPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
+    await expect(gatewayPushBranch(remote(), repo, 'main')).rejects.toMatchObject({
       code: 'git_failed',
       message:
-        'Emberline pushes with the forge account only from a complete clone; this repository is shallow.',
+        'Emberline pushes through its git gateway only from a complete clone; this repository is shallow.',
     });
     rmSync(path.join(repo, '.git', 'shallow'));
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(theirs);
@@ -502,7 +502,7 @@ describe('the git gateway, one push and its limits', () => {
   });
 
   it('a remote that moves between the check and the push gives "rejected", not an error', async () => {
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('pushed');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('pushed');
     commit(repo, 'c2.txt');
     const c2 = gitIn(repo, 'rev-parse', 'HEAD');
     commit(repo, 'c3.txt');
@@ -520,7 +520,7 @@ describe('the git gateway, one push and its limits', () => {
       }
       return localCommandExecutor(request);
     });
-    expect(await accountPushBranch(remote(), repo, 'main')).toBe('rejected');
+    expect(await gatewayPushBranch(remote(), repo, 'main')).toBe('rejected');
     expect(gitIn(a.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(c2);
   });
 
@@ -567,7 +567,7 @@ describe('the git gateway, one push and its limits', () => {
       '#!/bin/sh\necho "GH006: Protected branch update failed for refs/heads/main." >&2\nexit 1\n',
     );
     chmodSync(hook, 0o755);
-    const error = await accountPushBranch(remote(), repo, 'main').catch((e: unknown) => e);
+    const error = await gatewayPushBranch(remote(), repo, 'main').catch((e: unknown) => e);
     expect(error).toMatchObject({
       code: 'git_failed',
       message: 'The forge refused the push: GH006: Protected branch update failed for refs/heads/main.',

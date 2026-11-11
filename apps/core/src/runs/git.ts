@@ -20,8 +20,8 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
 import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets, redactGitText } from '../git-gateway/gateway.js';
-import { type AccountRemote, accountPushBranch } from '../git-gateway/remote-git.js';
-import { assertSupportedRemote } from '../repository/git.js';
+import { type GatewayRemote, gatewayHttpCredential, gatewayPushBranch } from '../git-gateway/remote-git.js';
+import { assertSupportedRemote, sshSetupError } from '../repository/git.js';
 import { isMissing, type OpenedFile, openVerifiedFile, UnsafePathError } from '../outputs/safe-fs.js';
 
 const MAX_TEXT_BYTES = 512 * 1024;
@@ -718,7 +718,7 @@ export async function pushWorktreeBranch(
   worktreePath: string,
   branch: string | null,
   defaultBranch: string,
-  account?: AccountRemote | null,
+  account?: GatewayRemote | null,
 ): Promise<GitPushResponse> {
   if (!existsSync(path.join(worktreePath, '.git'))) throw conflict('project is not a git repository');
   const currentBranch = (await git(worktreePath, ['branch', '--show-current']).catch(() => '')).trim();
@@ -731,10 +731,10 @@ export async function pushWorktreeBranch(
   const branchToPush = targetBranch;
 
   if (account) {
-    // The account pushes the run's own branch only: an agent may have switched its worktree.
+    // The gateway pushes the run's own branch only: an agent may have switched its worktree.
     if (!branch)
       throw conflict(
-        'this run has no branch of its own; Emberline pushes only a run branch with the forge account',
+        "this run has no branch of its own; Emberline pushes only a run branch with the forge account or Emberline's SSH key",
       );
     if (currentBranch && currentBranch !== branch) {
       throw conflict(
@@ -743,9 +743,14 @@ export async function pushWorktreeBranch(
     }
     let result: 'pushed' | 'rejected';
     try {
-      result = await accountPushBranch(account, worktreePath, branch);
+      result = await gatewayPushBranch(account, worktreePath, branch);
     } catch (error) {
-      throw conflict(`git push failed: ${describeGitError(error, { credential: account.credential })}`);
+      throw (
+        sshSetupError(error, 'git push failed: ') ??
+        conflict(
+          `git push failed: ${describeGitError(error, { credential: gatewayHttpCredential(account) })}`,
+        )
+      );
     }
     if (result === 'rejected')
       throw conflict(`git push failed: the remote ${branch} has commits this run doesn't have`);

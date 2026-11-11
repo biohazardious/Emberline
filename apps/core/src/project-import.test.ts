@@ -1,4 +1,4 @@
-import { type ChildProcess, execFileSync, spawn as spawnProcess } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -10,7 +10,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -32,7 +31,10 @@ import { HARDENED_GIT_ARGS } from './git-exec.js';
 import { parseWorktreeYml } from './worktree-config/load.js';
 import { projects, projectWorktreeConfig } from './db/schema.js';
 import { readProjectSettings } from './db/project-settings.js';
-import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import { trustHostKey } from './ssh-keys/known-hosts.js';
+import { generateKey } from './ssh-keys/store.js';
+import { SSHD, type SshForge, startSshForge } from './test-ssh-forge.js';
+import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
 
 /** While set, `git init` waits for it: holds a wizard create in progress. */
@@ -97,17 +99,6 @@ const git = (cwd: string, ...args: string[]) =>
     cwd,
     encoding: 'utf8',
   }).trim();
-
-/** An OpenSSH server to clone from (Debian/Ubuntu and Arch paths); its tests skip without one. */
-const SSHD = ['/usr/sbin/sshd', '/usr/bin/sshd'].find((p) => existsSync(p));
-const freePort = () =>
-  new Promise<number>((resolve, reject) => {
-    const server = createServer().listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-    server.on('error', reject);
-  });
 
 /** A folder in the workspaces dir with `files`, committed on `branch` unless `git: false`. */
 function fixture(
@@ -883,63 +874,86 @@ describe('GET /api/projects/:id/import-status', () => {
     expect(s.tail).toContain('Cloning');
   });
 
-  describe.skipIf(!SSHD)('an ssh origin whose host key the runner does not know', () => {
-    let sshd: ChildProcess;
-    let port: number;
+  describe.skipIf(!SSHD)("an ssh address (through the git gateway with Emberline's key)", () => {
+    let forge: SshForge;
     beforeEach(async () => {
-      const dir = mkdtempSync(path.join(tmpdir(), 'sshd-'));
-      execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(dir, 'key')]);
-      port = await freePort();
-      const config = path.join(dir, 'sshd_config');
-      writeFileSync(
-        config,
-        [
-          `HostKey ${path.join(dir, 'key')}`,
-          'PidFile none',
-          'UsePAM no',
-          'StrictModes no',
-          'ListenAddress 127.0.0.1',
-          `Port ${port}`,
-        ].join('\n'),
-      );
-      sshd = spawnProcess(SSHD!, ['-D', '-e', '-f', config], { stdio: ['ignore', 'ignore', 'pipe'] });
-      await new Promise<void>((resolve, reject) => {
-        sshd.stderr!.on('data', (d: Buffer) => d.toString().includes('Server listening') && resolve());
-        sshd.on('exit', (code) => reject(new Error(`sshd exited with ${code}`)));
+      forge = await startSshForge();
+      await startGitGateway(t); // the local git plays the ops container and reaches core's gateway
+      return () => forge.close();
+    });
+    /** The forge's repository `x` with one commit on main. */
+    const seeded = () => {
+      const seed = fixture('seed', STATIC_SITE);
+      git(seed, 'push', '-q', forge.bare('x'), 'HEAD:refs/heads/main');
+      return git(seed, 'rev-parse', 'HEAD');
+    };
+    const importSsh = (name: string) =>
+      api('POST', '/api/projects', { name, source: 'import_url', repoUrl: forge.address('x') });
+
+    it('without a key the import is refused before anything runs, with what to do', async () => {
+      const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+      const res = await importSsh('No Key');
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toMatchObject({
+        error: 'ssh_key_missing',
+        message: "Create a key in Settings → SSH key, or in this project's settings.",
       });
-      return () => {
-        sshd.kill();
-        rmTemp(dir);
-      };
+      expect(spawn).not.toHaveBeenCalled();
+      expect(t.db.select().from(projects).all()).toEqual([]);
+      expect(forge.sessions()).toEqual([]);
     });
 
-    it('the clone fails at once in its terminal, with what to do, instead of waiting at ssh\'s "yes/no" prompt', async () => {
-      // Core's own clone command, in a real PTY (where ssh would ask), against the unknown sshd.
-      const client = t.ptyd.get();
-      const spawn = client.spawn.bind(client);
-      const url = `ssh://git@127.0.0.1:${port}/x.git`;
-      vi.spyOn(client, 'spawn').mockImplementation((params) =>
-        spawn({ ...params, args: params.args?.map((a) => (a === 'https://example.com/x.git' ? url : a)) }),
-      );
-      const res = await api('POST', '/api/projects', {
-        name: 'Unknown Host',
-        source: 'import_url',
-        repoUrl: 'https://example.com/x.git',
-      });
+    it('an unknown host key fails the clone at once with the key to trust; trusted, the clone succeeds', async () => {
+      const head = seeded();
+      forge.authorize(generateKey(t.db, 'shared').publicKey);
+      const res = await importSsh('Unknown Host');
       expect(res.statusCode, res.body).toBe(201);
       const { project } = res.json() as CreateProjectResponse;
       await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
         timeout: 10_000,
       });
       const s = await status(project.id);
-      expect(s.tail).toContain('Host key verification failed.');
+      expect(s).toMatchObject({
+        code: 'host_key_unknown',
+        hostKey: { host: '127.0.0.1', port: forge.port, ...forge.hostKey },
+      });
+      expect(s.reason).toContain(forge.hostKey.fingerprint);
       expect(s.tail).not.toContain('Are you sure you want to continue connecting');
-      expect(s.reason).toBe(
-        `The runner does not know the SSH host key of [127.0.0.1]:${port}, so it did not connect. ` +
-          "Add the host's key to the runner's known_hosts (~/.ssh/known_hosts of the runner's user), " +
-          'after checking it against the fingerprint your Git host publishes, then try again. ' +
-          'The keys of GitHub, GitLab and Bitbucket come with Emberline.',
-      );
+      expect(s.tail).not.toMatch(/api\/internal\/git\/[A-Za-z0-9_-]{20,}/);
+      expect(forge.sessions()).toEqual([]);
+
+      // The wizard's "Trust this host key", then Try again (a new import).
+      expect((await api('POST', '/api/ssh-host-keys', s.hostKey)).statusCode).toBe(201);
+      const again = await importSsh('Known Host');
+      expect(again.statusCode, again.body).toBe(201);
+      const cloned = (again.json() as CreateProjectResponse).project;
+      await vi.waitFor(async () => expect((await status(cloned.id)).status).toBe('ready'), {
+        timeout: 10_000,
+      });
+      expect(git(cloned.path, 'rev-parse', 'HEAD')).toBe(head);
+      // origin is the real address, never the gateway's.
+      expect(git(cloned.path, 'remote', 'get-url', 'origin')).toBe(forge.address('x'));
+      expect(forge.sessions().length).toBeGreaterThan(0);
+    });
+
+    it('a key the server does not accept fails with auth_refused, naming where the public key is', async () => {
+      seeded();
+      generateKey(t.db, 'shared');
+      trustHostKey(t.db, {
+        host: '127.0.0.1',
+        port: forge.port,
+        keyType: forge.hostKey.keyType,
+        key: forge.hostKey.key,
+      });
+      const { project } = (await importSsh('Refused')).json() as CreateProjectResponse;
+      await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
+        timeout: 10_000,
+      });
+      expect(await status(project.id)).toMatchObject({
+        code: 'auth_refused',
+        reason:
+          "The server refused Emberline's SSH key: add the public key shown in Settings → SSH key to the repository or account.",
+      });
     });
   });
 

@@ -130,7 +130,8 @@ import { type AttentionFacts, attachAttention, loadAttentionFacts } from './atte
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
-import { accountForGitRemote, gitCredentialForRemote } from '../forge/account-store.js';
+import { accountForGitRemote } from '../forge/account-store.js';
+import { gatewayRemoteFor } from '../ssh-keys/remote.js';
 import { execGitFile } from '../git-exec.js';
 import { GitGateway } from '../git-gateway/gateway.js';
 import { stripControlChars } from '../text/control-chars.js';
@@ -2539,12 +2540,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async push(id: string): Promise<GitPushResponse> {
     const row = this.row(id);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
-    // The account goes only to the project's own repository URL, never to an origin an agent set.
-    const credential = project?.repoUrl ? gitCredentialForRemote(this.db, project.repoUrl) : null;
-    const account =
-      credential && project?.repoUrl
-        ? { gateway: this.gitGateway, projectId: project.id, url: project.repoUrl, credential }
-        : null;
+    // The account or SSH key goes only to the project's own repository URL, never to an origin an
+    // agent set; an ssh address without its key fails here, before anything runs.
+    const account = project?.repoUrl
+      ? gatewayRemoteFor(this.db, this.gitGateway, project, project.repoUrl)
+      : null;
     let res: GitPushResponse;
     try {
       res = await pushWorktreeBranch(

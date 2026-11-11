@@ -89,8 +89,9 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { readImportSource, writeProjectSettings, writeWizardTickets } from '../db/project-settings.js';
 import { openBlockingCount } from '../review/blocking.js';
 import { gitCredentialForRemote } from '../forge/account-store.js';
+import { gatewayCredentialFor, isSshAddress, sshKeyMissing } from '../ssh-keys/remote.js';
 import { remoteUrlForDisplay } from '../forge/hosts.js';
-import { accountCloneArgs } from '../git-gateway/remote-git.js';
+import { gatewayCloneArgs } from '../git-gateway/remote-git.js';
 import {
   browserFilesFor,
   isBrowsableUrl,
@@ -580,23 +581,27 @@ export function registerProjectRoutes(
       if (body.repoUrl) {
         if (existsSync(projectPath))
           throw conflict(`directory already exists: ${projectPath}`, PROJECT_CONFLICT.directoryExists);
-        const credential = gitCredentialForRemote(db, body.repoUrl);
         // With an account the URL must be one Connect accepts (no query or fragment), so both entry
         // points bind capabilities to, and store, the same URL shapes.
-        if (credential) validateRepositoryUrl(body.repoUrl);
+        if (gitCredentialForRemote(db, body.repoUrl)) validateRepositoryUrl(body.repoUrl);
         else {
           // git reaches only https/ssh; a local path or file:// would run that repository's hooks.
           assertSupportedRemote(body.repoUrl);
-          // Without an account git uses what the URL holds; a password it would print in the clone's
-          // terminal is refused before it shows.
+          // A password git would print in the clone's terminal is refused before it shows.
           if (passwordGitWouldShow(body.repoUrl)) throw badRequest(PASSWORD_GIT_WOULD_SHOW);
         }
+        // An ssh address goes through the gateway too: the same URL shapes as Connect.
+        if (isSshAddress(body.repoUrl)) validateRepositoryUrl(body.repoUrl);
+        // A new project uses the shared key for an ssh address: none, and nothing runs.
+        const credential = gatewayCredentialFor(db, { id, sshKeyChoice: 'shared' }, body.repoUrl);
+        if (credential === 'ssh_key_missing') throw sshKeyMissing();
         // A branch given is the one checked out; without one the remote's default branch is, and
         // import-status records it.
         const branch = body.defaultBranch ?? null;
-        // With a forge account the PTY's git clones from a one-time gateway URL: the token stays in core.
+        // Through the gateway (an account, or an SSH key) the PTY's git clones from a one-time
+        // gateway URL: the token or key stays in core.
         const args = credential
-          ? accountCloneArgs(
+          ? gatewayCloneArgs(
               { gateway: runs.gitGateway, projectId: id, url: body.repoUrl, credential },
               projectPath,
               branch,

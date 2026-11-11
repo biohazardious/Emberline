@@ -25,6 +25,33 @@ export type ProjectSshKeyResponse = z.infer<typeof ProjectSshKeyResponse>;
 export const SetSshKeyChoiceRequest = z.object({ choice: SshKeyChoice });
 export type SetSshKeyChoiceRequest = z.infer<typeof SetSshKeyChoiceRequest>;
 
+/**
+ * An ssh server's host key as a failed git operation reports it (`host_key_unknown`: to trust it
+ * after comparing the fingerprint; `host_key_changed`: to compare it). It may be absent for
+ * `host_key_changed` when a known host offered none of its known key types.
+ */
+export const HostKeyDetails = z.object({
+  host: z.string(),
+  port: z.number().int(),
+  keyType: z.string(),
+  key: z.string(),
+  fingerprint: z.string(),
+});
+export type HostKeyDetails = z.infer<typeof HostKeyDetails>;
+
+/** Why an ssh remote failed in a way the person fixes in Emberline (or, for auth_refused, at the forge). */
+export const SshRemoteProblem = z.enum([
+  'ssh_key_missing',
+  'host_key_unknown',
+  'host_key_changed',
+  'auth_refused',
+]);
+export type SshRemoteProblem = z.infer<typeof SshRemoteProblem>;
+
+/** A project with an ssh repository whose chosen SSH key does not exist (the banner names it). */
+export const SshKeyMissingProject = z.object({ projectId: z.string(), name: z.string() });
+export type SshKeyMissingProject = z.infer<typeof SshKeyMissingProject>;
+
 export const TrustedHostKey = z.object({
   host: z.string(),
   port: z.number().int(),

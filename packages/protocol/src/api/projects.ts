@@ -1,6 +1,7 @@
 /** API contracts: projects & AI factory metadata. */
 import { z } from 'zod';
 import { GitBranchName } from './common.js';
+import { HostKeyDetails, SshRemoteProblem } from './ssh-keys.js';
 import {
   MATERIALS_MAX_FILES,
   PlannedMaterialSummary,
@@ -206,6 +207,10 @@ export const ImportStatusResponse = z.object({
   tail: z.string(),
   /** Why a clone failed, in a plain sentence, when core can tell (a tag, a missing branch, no commit). */
   reason: z.string().optional(),
+  /** The git gateway's reason for an ssh clone that failed in a way the wizard offers a fix for. */
+  code: SshRemoteProblem.optional(),
+  /** host_key_unknown / host_key_changed: the key the server offered (absent when it offered no known type). */
+  hostKey: HostKeyDetails.optional(),
 });
 export type ImportStatusResponse = z.infer<typeof ImportStatusResponse>;
 

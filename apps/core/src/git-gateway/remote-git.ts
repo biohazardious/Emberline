@@ -1,6 +1,7 @@
 /**
- * Emberline's own git with a forge account, run by the runner's hardened git (no credentials)
- * against a capability URL of the gateway. The capability URL is only the explicit URL argument of
+ * Emberline's own git through the gateway (a forge account over http(s), or an SSH key over ssh),
+ * run by the ops container's hardened git (no credentials) against a capability URL of the gateway.
+ * The capability URL is only the explicit URL argument of
  * that one command (for the import clone, a command-scope `insteadOf` for the real URL); nothing is
  * written to `.git/config`; submodules are never recursed into; only the gateway's scheme is
  * allowed; no redirect, proxy, credential helper or address of the repository's config applies (a
@@ -11,19 +12,29 @@ import { isRunnerUnavailable } from '../command-exec.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile, HARDENED_GIT_ARGS, NO_SUBMODULES, REMOTE_HTTP_ARGS } from '../git-exec.js';
 import type { GitHttpCredential } from '../git-credentials.js';
-import { CAPABILITY_ROUTE_PREFIX, type GitGateway } from './gateway.js';
+import {
+  CAPABILITY_ROUTE_PREFIX,
+  type GatewayCredential,
+  type GatewayOutcome,
+  type GitGateway,
+} from './gateway.js';
 import { oldValueRefusal } from './receive-pack.js';
 import { GitGatewayError } from './upstream.js';
 
 const MINUTE = 60_000;
 
-export interface AccountRemote {
+/** A remote core's git reaches through the gateway: with a forge account (http) or an SSH key (ssh). */
+export interface GatewayRemote {
   gateway: GitGateway;
   projectId: string;
   /** projects.repoUrl, the URL being connected or imported: never a URL from .git/config. */
   url: string;
-  credential: GitHttpCredential;
+  credential: GatewayCredential;
 }
+
+/** The forge account's credential, for masking it in what git prints; null for an SSH key (git never sees it). */
+export const gatewayHttpCredential = (r: GatewayRemote | null | undefined): GitHttpCredential | null =>
+  r?.credential.kind === 'http' ? r.credential.http : null;
 
 export function gatewayGitArgs(gateway: GitGateway): string[] {
   const scheme = new URL(gateway.baseUrl).protocol.replace(':', '');
@@ -46,17 +57,17 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
   ];
 }
 
-const grant = (r: AccountRemote, extra: Partial<Parameters<GitGateway['issue']>[0]> = {}) => ({
+const grant = (r: GatewayRemote, extra: Partial<Parameters<GitGateway['issue']>[0]> = {}) => ({
   projectId: r.projectId,
   upstreamUrl: r.url,
-  credential: { kind: 'http' as const, http: r.credential },
+  credential: r.credential,
   service: 'git-upload-pack' as const,
   ...extra,
 });
 
 /** The remote's branches with their commits (`ls-remote --heads`). */
 async function remoteHeads(
-  r: AccountRemote,
+  r: GatewayRemote,
   cwd: string,
   branch?: string,
 ): Promise<{ name: string; oid: string }[]> {
@@ -85,8 +96,8 @@ async function remoteHeads(
     .map(([oid, ref]) => ({ name: ref!.trim().slice('refs/heads/'.length), oid: oid!.trim() }));
 }
 
-export async function accountRemoteBranches(
-  r: AccountRemote,
+export async function gatewayRemoteBranches(
+  r: GatewayRemote,
   cwd: string,
   branch?: string,
 ): Promise<string[]> {
@@ -94,8 +105,8 @@ export async function accountRemoteBranches(
 }
 
 /** The commit the remote's branch names now, or null when the remote has no such branch. */
-export async function accountRemoteHead(
-  r: AccountRemote,
+export async function gatewayRemoteHead(
+  r: GatewayRemote,
   cwd: string,
   branch: string,
 ): Promise<string | null> {
@@ -128,8 +139,8 @@ async function hasCommit(cwd: string, oid: string): Promise<boolean> {
  * Fetches a remote branch's objects without updating any ref (no destination, `--refmap=`, no
  * FETCH_HEAD, no commit-graph, no auto maintenance).
  */
-export async function accountFetchBranchObjects(
-  r: AccountRemote,
+export async function gatewayFetchBranchObjects(
+  r: GatewayRemote,
   repoPath: string,
   branch: string,
 ): Promise<void> {
@@ -185,8 +196,8 @@ function forgeRefusal(out: string): string | null {
  * - the push capability is bound to that old commit and the new one, so the forge updates the ref
  *   only if it still holds what was checked (no force, whatever the runner's git sends).
  */
-export async function accountPushBranch(
-  r: AccountRemote,
+export async function gatewayPushBranch(
+  r: GatewayRemote,
   repoPath: string,
   branch: string,
   oid?: string,
@@ -196,16 +207,16 @@ export async function accountPushBranch(
   if ((await planGit(['rev-parse', '--is-shallow-repository'], repoPath)).stdout.trim() !== 'false') {
     throw new GitGatewayError(
       'git_failed',
-      'Emberline pushes with the forge account only from a complete clone; this repository is shallow.',
+      'Emberline pushes through its git gateway only from a complete clone; this repository is shallow.',
     );
   }
   const newOid = (
     await planGit(['rev-parse', '--verify', '--quiet', `${oid ?? ref}^{commit}`], repoPath)
   ).stdout.trim();
-  const remoteOid = await accountRemoteHead(r, repoPath, branch);
+  const remoteOid = await gatewayRemoteHead(r, repoPath, branch);
   if (remoteOid === newOid) return 'pushed';
   if (remoteOid) {
-    if (!(await hasCommit(repoPath, remoteOid))) await accountFetchBranchObjects(r, repoPath, branch);
+    if (!(await hasCommit(repoPath, remoteOid))) await gatewayFetchBranchObjects(r, repoPath, branch);
     // Still missing: the remote moved on since; not a fast-forward of what was checked.
     if (!(await hasCommit(repoPath, remoteOid)) || !(await isAncestor(repoPath, remoteOid, newOid)))
       return 'rejected';
@@ -254,7 +265,7 @@ export async function accountPushBranch(
  * points at the capability URL: `.git/config` gets the real URL as origin, never the capability.
  * `branch`: the one to check out; the remote's default branch without it.
  */
-export function accountCloneArgs(r: AccountRemote, target: string, branch: string | null = null): string[] {
+export function gatewayCloneArgs(r: GatewayRemote, target: string, branch: string | null = null): string[] {
   const { capability, url } = r.gateway.issue(grant(r, { firstUseMs: 2 * MINUTE, operationMs: 60 * MINUTE }));
   r.gateway.trackClone(r.projectId, capability);
   return [
@@ -277,13 +288,13 @@ export function accountCloneArgs(r: AccountRemote, target: string, branch: strin
 /**
  * The clone ended: release its capability (if this core still tracks it) and, whenever origin still
  * names a gateway URL (an older clone, a restart), point it at the real URL; a failed repair throws
- * and the next poll tries again. Returns why the gateway refused, if it did.
+ * and the next poll tries again. Returns why the gateway refused or the forge failed, if it did.
  */
-export async function finishAccountClone(
+export async function finishGatewayClone(
   gateway: GitGateway,
   project: { id: string; path: string; repoUrl: string | null },
   cloned: boolean,
-): Promise<string | null> {
+): Promise<GatewayOutcome | null> {
   const ended = gateway.endClone(project.id);
   const repoUrl = project.repoUrl;
   if (cloned && repoUrl) {
@@ -297,5 +308,5 @@ export async function finishAccountClone(
       }
     });
   }
-  return ended?.outcome?.message ?? null;
+  return ended?.outcome ?? null;
 }

@@ -249,6 +249,8 @@ export async function importStatus(ptyd: PtydBridge, project: Project): Promise<
 /**
  * ssh's own words (OpenSSH is never translated) when core's ssh command, with strict host key
  * checking and no prompt, refused the server: its key is unknown, or not the one known_hosts has.
+ * Only a fallback for a clone git ran straight to the server: an ssh address goes through the git
+ * gateway, whose own reason (`host_key_unknown`, `host_key_changed`) import-status reports instead.
  */
 function hostKeyProblemText(output: string): string | null {
   const unknown = /No \S+ host key is known for (\S+) and you have requested strict checking/.exec(output);

@@ -24,6 +24,7 @@ import {
   type TestApp,
 } from '../test-utils.js';
 import { rmTemp } from '../test-rm.js';
+import { generateKey } from '../ssh-keys/store.js';
 
 const TOKEN = 'remote-git-secret-token';
 let t: TestApp;
@@ -122,7 +123,12 @@ describe('run push through the gateway', () => {
     commit(wt, 'run.txt');
     return wt;
   };
-  const account = () => ({ gateway: t.runs.gitGateway, projectId: 'p1', url: appUrl(), credential: cred() });
+  const account = () => ({
+    gateway: t.runs.gitGateway,
+    projectId: 'p1',
+    url: appUrl(),
+    credential: { kind: 'http' as const, http: cred() },
+  });
 
   it('RunService.push goes to projects.repoUrl with the account, never to the origin an agent set', async () => {
     const wt = setupRun();
@@ -252,7 +258,7 @@ describe('run push through the gateway', () => {
     // A revoked token: the gateway answers 403 (never 401), so git asks no askPass or helper.
     const refused = await pushWorktreeBranch(wt, 'emberline/run-1', 'main', {
       ...account(),
-      credential: { ...cred(), token: 'revoked' },
+      credential: { kind: 'http', http: { ...cred(), token: 'revoked' } },
     }).catch((e: unknown) => e);
     expect(refused).toMatchObject({
       statusCode: 409,
@@ -382,6 +388,28 @@ describe('import clone', () => {
     expect(t.runs.gitGateway.size).toBe(0);
     expect(JSON.stringify(status)).not.toMatch(/\/api\/internal\/git\/[A-Za-z0-9_-]{43}/);
     expectAgentsSeeNoToken(spawned);
+  });
+
+  it('an scp-style ssh address with the shared key: the PTY clones it through a capability, no key leaves core', async () => {
+    const key = generateKey(t.db, 'shared');
+    // No forge behind it (127.0.0.1:22): the clone fails, and only how it was started matters here.
+    const scp = 'git@127.0.0.1:alice/app.git';
+    const res = await create(scp, 'Ssh App');
+    expect(res.statusCode, res.body).toBe(201);
+    const { project } = res.json();
+    expectHardenedClone(spawned[0]!);
+    const insteadOf = spawned[0]!.args.find((arg) => arg.endsWith(`.insteadOf=${scp}`));
+    expect(insteadOf).toMatch(
+      /^url\.http:\/\/127\.0\.0\.1:\d+\/api\/internal\/git\/[A-Za-z0-9_-]{43}\.insteadOf=/,
+    );
+    expect(spawned[0]!.args.slice(-2)).toEqual([scp, project.path]);
+    const everything = JSON.stringify([spawned, execs]);
+    expect(everything).not.toMatch(/PRIVATE KEY|b3BlbnNzaC1rZXktdjE/);
+    expect(everything).not.toContain(key.publicKey.split(' ')[1]);
+    await clone;
+    const status = await importStatus(project.id);
+    expect(status.status).toBe('failed');
+    expect(t.runs.gitGateway.size).toBe(0);
   });
 
   it('without an account the clone is the plain PTY clone, with no credential and no capability', async () => {
