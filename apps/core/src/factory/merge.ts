@@ -62,23 +62,61 @@ async function stageRunOutput(worktreePath: string, env?: Record<string, string>
 }
 
 /**
+ * The ops container reads and copies files of a worktree's git directory, which the agent may write:
+ * only a regular file is read, never what a link the agent planted names (ops may read what the agent
+ * may not: its own processes' command lines, with capability URLs). `$1` is the file, `$2` its name
+ * in the refusal.
+ */
+const NOT_REGULAR =
+  'printf "%s is not a regular file (a link, a directory, a fifo): remove it\\n" "$2" >&2; exit 3';
+
+/**
+ * Where a file of the worktree's own git directory is (`index`, `MERGE_HEAD`, `sequencer/todo`: none
+ * of them is shared between worktrees). Not `--git-path` with `--path-format=absolute`: that resolves
+ * a link the agent made of the file, and names its target instead.
+ */
+async function gitDirFile(worktreePath: string, name: string): Promise<string> {
+  const gitDir = (
+    await execGitFile(['rev-parse', '--absolute-git-dir'], { cwd: worktreePath })
+  ).stdout.trim();
+  return path.join(gitDir, name);
+}
+
+/**
  * A file of the worktree's git directory, read in the ops container: its text, or null when it does not
- * exist (any other failure is thrown).
+ * exist; one that is no regular file is refused (any other failure is thrown too). dd opens it without
+ * following a link, so one that turns into a link after the check is not read either.
  */
 async function readGitDirFile(worktreePath: string, name: string): Promise<string | null> {
-  const file = (
-    await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', name], { cwd: worktreePath })
-  ).stdout.trim();
-  // A leading `.` tells an empty file from a missing one. The system sh and cat (systemCommand).
+  const file = await gitDirFile(worktreePath, name);
+  // A leading `.` tells an empty file from a missing one. The system sh and dd (systemCommand).
+  const script = [
+    `if [ -L "$1" ]; then ${NOT_REGULAR}; fi`,
+    '[ -e "$1" ] || exit 0',
+    `[ -f "$1" ] || { ${NOT_REGULAR}; }`,
+    'printf .',
+    `exec ${RUNNER_BIN.dd} if="$1" iflag=nofollow status=none`,
+  ].join('\n');
   const { stdout } = await execFileChecked(
-    systemCommand({
-      file: RUNNER_BIN.sh,
-      args: ['-c', 'test ! -e "$1" || { printf .; cat -- "$1"; }', 'sh', file],
-      cwd: worktreePath,
-    }),
+    systemCommand({ file: RUNNER_BIN.sh, args: ['-c', script, 'sh', file, name], cwd: worktreePath }),
   );
   return stdout.startsWith('.') ? stdout.slice(1) : null;
 }
+
+/**
+ * Copies the worktree's index (`$1`) to the merge's own copy (`$2`) in the ops container and prints
+ * `y`, or prints nothing when there is no index. An index that is no regular file is refused; cp -P
+ * opens it without following a link, and --remove-destination creates the copy afresh (a link planted
+ * where it goes is replaced, never written through). The copy must be a regular file afterwards.
+ */
+const COPY_INDEX = [
+  `if [ -L "$1" ]; then set -- "$1" index; ${NOT_REGULAR}; fi`,
+  '[ -e "$1" ] || exit 0',
+  `[ -f "$1" ] || { set -- "$1" index; ${NOT_REGULAR}; }`,
+  `${RUNNER_BIN.cp} -P --remove-destination -- "$1" "$2" || exit 1`,
+  `if [ -L "$2" ] || [ ! -f "$2" ]; then set -- "$2" "the index copy"; ${NOT_REGULAR}; fi`,
+  'printf y',
+].join('\n');
 
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
@@ -176,9 +214,7 @@ async function buildRunOutputCommit(
   pending: PendingOperation,
 ): Promise<string | null> {
   const inWorktree = { cwd: worktreePath };
-  const index = (
-    await execGitFile(['rev-parse', '--path-format=absolute', '--git-path', 'index'], inWorktree)
-  ).stdout.trim();
+  const index = await gitDirFile(worktreePath, 'index');
   const scratchIndex = `${index}.emberline-output`;
   const env = { GIT_INDEX_FILE: scratchIndex };
   // The runner image's own rm, sh and cp (systemCommand, in the ops container): a planted one never copies the index.
@@ -189,9 +225,8 @@ async function buildRunOutputCommit(
     // What the agent staged by hand (a file its .gitignore ignores, say) is part of the output too.
     // Only a worktree without an index starts from HEAD; a copy that fails fails the merge.
     const hasIndex =
-      (await inOps(RUNNER_BIN.sh, ['-c', 'test ! -e "$1" || printf y', 'sh', index])).stdout === 'y';
-    if (hasIndex) await inOps(RUNNER_BIN.cp, ['--', index, scratchIndex]);
-    else await execGitFile(['read-tree', head], { ...inWorktree, env });
+      (await inOps(RUNNER_BIN.sh, ['-c', COPY_INDEX, 'sh', index, scratchIndex])).stdout === 'y';
+    if (!hasIndex) await execGitFile(['read-tree', head], { ...inWorktree, env });
     await stageRunOutput(worktreePath, env);
     const tree = (await execGitFile(['write-tree'], { ...inWorktree, env })).stdout.trim();
     const headTree = (await execGitFile(['rev-parse', `${head}^{tree}`], inWorktree)).stdout.trim();

@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -231,14 +241,125 @@ describe('a merge refused before it starts', () => {
     const onScratch = requests
       .filter((r) => r.file !== RUNNER_BIN.git && r.args.includes(scratch))
       .map((r) => [r.file, ...r.args.filter((x) => x !== scratch)].join(' '));
-    // The image's own rm and cp, by their paths.
+    // The image's own rm and sh, by their paths (sh copies with the system cp, never following a link).
     expect(onScratch).toEqual([
       `${RUNNER_BIN.rm} -f --`,
-      `${RUNNER_BIN.cp} -- ${scratch.slice(0, -'.emberline-output'.length)}`,
+      expect.stringMatching(
+        /^\/usr\/bin\/sh -c [\s\S]*cp -P --remove-destination -- "\$1" "\$2"[\s\S]* sh \S+\/index$/,
+      ),
       `${RUNNER_BIN.rm} -f --`,
     ]);
     // The runner's own git commands do not read it.
     expect(git(a, 'status', '--porcelain')).toBe('');
+  });
+
+  /**
+   * I-2: a file only the ops container may read (there: another ops process's command line, with a
+   * capability URL), and what of it reached a place the agent reads while the merge ran.
+   */
+  function plantedSecret() {
+    const secret = path.join(dir, 'ops-only');
+    writeFileSync(secret, `${'0'.repeat(40)}\nhttp://gateway/cap/SECRET-CAPABILITY\n`);
+    const seen: string[] = [];
+    const look = (file: string) => {
+      try {
+        // As the agent finds it: the file itself, not a link's target.
+        if (lstatSync(file).isFile() && readFileSync(file, 'utf8').includes('SECRET-CAPABILITY'))
+          seen.push(file);
+      } catch {
+        // Not there.
+      }
+    };
+    return { secret, seen, look };
+  }
+
+  it('refuses an index the agent made a link: the merge copies nothing through it', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const index = git(a, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const scratch = `${index}.emberline-output`;
+    const { secret, seen, look } = plantedSecret();
+    rmSync(index);
+    symlinkSync(secret, index);
+    setCommandExecutor(async (request) => {
+      const result = await localCommandExecutor(request);
+      look(scratch);
+      return result;
+    });
+    try {
+      await expect(refusing(a, () => undefined)).rejects.toThrow(/index is not a regular file/);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(seen).toEqual([]);
+    expect(existsSync(scratch)).toBe(false);
+    expect(git(main, 'log', '--format=%s')).toBe('init');
+  });
+
+  it('never writes through a link planted where the index copy goes', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    const index = git(a, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const scratch = `${index}.emberline-output`;
+    // A file the agent may not write, but the ops container may.
+    const target = path.join(dir, 'written-through');
+    writeFileSync(target, 'ops only\n');
+    // The agent plants a link where the copy goes, right after the merge removed what was there.
+    let planted = false;
+    setCommandExecutor(async (request) => {
+      const result = await localCommandExecutor(request);
+      if (request.file === RUNNER_BIN.rm && request.args.includes(scratch) && !planted) {
+        planted = true;
+        symlinkSync(target, scratch);
+      }
+      return result;
+    });
+    try {
+      // The link is replaced by the copy: the merge goes on.
+      expect((await refusing(a, () => undefined)).ok).toBe(true);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(planted).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('ops only\n');
+    expect(existsSync(scratch)).toBe(false);
+    expect(readFileSync(path.join(main, 'feature-a.js'), 'utf8')).toBe('a\n');
+  });
+
+  it.each(['MERGE_HEAD', 'MERGE_AUTOSTASH'])(
+    'refuses a %s the agent made a link: nothing is read through it',
+    async (name) => {
+      const a = addWorktree('a');
+      writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+      const file = git(a, 'rev-parse', '--path-format=absolute', '--git-path', name);
+      const { secret } = plantedSecret();
+      symlinkSync(secret, file);
+      const outputs: string[] = [];
+      setCommandExecutor(async (request) => {
+        const result = await localCommandExecutor(request);
+        outputs.push(result.stdout, result.stderr);
+        return result;
+      });
+      try {
+        const error = await refusing(a, () => undefined).then(
+          () => null,
+          (thrown: Error) => thrown,
+        );
+        expect(error?.message).toContain(`${name} is not a regular file`);
+        expect(error?.message).not.toContain('SECRET-CAPABILITY');
+      } finally {
+        setCommandExecutor(localCommandExecutor);
+      }
+      expect(outputs.join('')).not.toContain('SECRET-CAPABILITY');
+      expect(git(main, 'log', '--format=%s')).toBe('init');
+    },
+  );
+
+  it('refuses a git-dir file that is no regular file (a directory, a fifo)', async () => {
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    mkdirSync(git(a, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'));
+    await expect(refusing(a, () => undefined)).rejects.toThrow(/MERGE_HEAD is not a regular file/);
   });
 
   it("an agent's resolved but unconcluded `git merge main` is concluded as `git commit` would: a merge commit, no MERGE_HEAD", async () => {
@@ -513,7 +634,8 @@ describe('a merge refused before it starts', () => {
     writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
     const before = git(a, 'rev-parse', 'HEAD');
     setCommandExecutor(async (request) => {
-      if (request.file === RUNNER_BIN.cp) throw new Error('No space left on device');
+      if (request.file === RUNNER_BIN.sh && request.args[1]?.includes('cp -P'))
+        throw new Error('No space left on device');
       return localCommandExecutor(request);
     });
     try {

@@ -60,6 +60,7 @@ export const RUNNER_BIN = {
   bash: '/usr/bin/bash',
   rm: '/usr/bin/rm',
   cp: '/usr/bin/cp',
+  dd: '/usr/bin/dd',
   head: '/usr/bin/head',
   curl: '/usr/bin/curl',
   node: '/usr/local/bin/node',
@@ -93,7 +94,7 @@ export function systemCommand(request: UntargetedRequest): ExecRequest {
  *
  * ops ({@link systemCommand} / {@link dockerCommand}):
  * - git-exec.ts: assertSafeGitConfig, execGitFile (every git command of core's)
- * - factory/merge.ts: the merge's file steps (sh/cat of git-dir files, rm, sh test, cp of the index)
+ * - factory/merge.ts: the merge's file steps (sh/dd of git-dir files, rm, sh/cp of the index)
  * - docker/engine.ts: the engine probe (Docker CLI)
  * - docker/compose-config.ts: `compose config` of the main workspace (sh + Docker CLI, compose.ts's composeShell)
  * - docker/compose-preview.ts: compose up/ps/logs/down/images (Docker CLI) and the readiness curl to
