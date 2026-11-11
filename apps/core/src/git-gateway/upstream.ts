@@ -21,17 +21,38 @@ export type GitGatewayErrorCode =
   | 'too_large'
   | 'timeout'
   | 'network'
-  | 'git_failed';
+  | 'git_failed'
+  | 'ssh_key_missing'
+  | 'host_key_unknown'
+  | 'host_key_changed';
 
-/** Every gateway failure: a plain sentence that never holds the token, a capability or a server's body. */
+/** An ssh server's host key as the UI shows it, to trust it (unknown) or to compare it (changed). */
+export interface HostKeyDetails {
+  /** As the host normaliser reads it (ssh-keys/known-hosts.ts). */
+  host: string;
+  port: number;
+  /** The key's own type (`ssh-rsa` for an rsa-sha2-512 signature). */
+  keyType: string;
+  /** The public key blob, base64. */
+  key: string;
+  /** `SHA256:…` as `ssh-keygen -l` prints it. */
+  fingerprint: string;
+}
+
+/**
+ * Every gateway failure: a plain sentence that never holds the token, a private key, a capability
+ * or a server's body. `host_key_unknown` and `host_key_changed` carry the key the server offered.
+ */
 export class GitGatewayError extends Error {
+  readonly hostKey?: HostKeyDetails;
   constructor(
     readonly code: GitGatewayErrorCode,
     message: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { hostKey?: HostKeyDetails },
   ) {
     super(message, options);
     this.name = 'GitGatewayError';
+    if (options?.hostKey) this.hostKey = options.hostKey;
   }
 }
 

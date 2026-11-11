@@ -52,6 +52,17 @@ export function pinnedHostKeys(): readonly HostKeyEntry[] {
   return pinned;
 }
 
+/**
+ * A host name as core compares and stores it (Ruling 18): trimmed, lower case, one trailing dot
+ * dropped (`github.com.` is github.com to DNS, so it must be to the pins too). Null for an empty
+ * host or one with a colon or whitespace inside (a port, an IPv6 literal: never a host here).
+ */
+export function normaliseSshHost(host: string): string | null {
+  let h = host.trim().toLowerCase();
+  if (h.endsWith('.')) h = h.slice(0, -1);
+  return h && !/[\s:]/.test(h) && !h.endsWith('.') ? h : null;
+}
+
 const sameKey = (a: string, b: string): boolean => Buffer.from(a, 'base64').equals(Buffer.from(b, 'base64'));
 
 /**
@@ -89,18 +100,30 @@ export function hostKeyStatus(
   keyType: string,
   keyBase64: string,
 ): HostKeyStatus {
-  const known = knownKeys(db, host.toLowerCase(), port);
+  const name = normaliseSshHost(host);
+  // The gateway reads the remote's host with the same normaliser first; nothing else asks.
+  if (name === null) throw new Error('hostKeyStatus needs a host name');
+  const known = knownKeys(db, name, port);
   if (known.keys.length === 0) return 'unknown';
   return matching(known.keys, keyType, keyBase64) ? known.source : 'changed';
 }
 
-const HOST_RE = /^[a-z0-9._:-]{1,253}$/;
+/**
+ * The key types known for a host:port (pinned, else trusted), in the order stored; empty for a
+ * host:port nothing is known for. The gateway offers only these to the server (Ruling 16), so a
+ * server with several keys shows the one core knows. `host` as the normaliser reads it.
+ */
+export function knownHostKeyTypes(db: Db, host: string, port: number): string[] {
+  return [...new Set(knownKeys(db, host, port).keys.map((k) => k.keyType))];
+}
+
+const HOST_RE = /^[a-z0-9._-]{1,253}$/;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** The entry checked and normalised (host lower case, canonical base64); 400 for anything malformed. */
 function checkedEntry(entry: HostKeyEntry): HostKeyEntry {
-  const host = entry.host.trim().toLowerCase();
-  if (!HOST_RE.test(host)) throw badRequest('the host name is not valid');
+  const host = normaliseSshHost(entry.host);
+  if (host === null || !HOST_RE.test(host)) throw badRequest('the host name is not valid');
   if (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535) {
     throw badRequest('the port must be a number from 1 to 65535');
   }
@@ -149,7 +172,7 @@ export function removeHostKey(db: Db, host: string, port: number, keyType: strin
     .delete(sshHostKeys)
     .where(
       and(
-        eq(sshHostKeys.host, host.toLowerCase()),
+        eq(sshHostKeys.host, normaliseSshHost(host) ?? ''),
         eq(sshHostKeys.port, port),
         eq(sshHostKeys.keyType, keyType),
       ),

@@ -49,7 +49,7 @@ export function gatewayGitArgs(gateway: GitGateway): string[] {
 const grant = (r: AccountRemote, extra: Partial<Parameters<GitGateway['issue']>[0]> = {}) => ({
   projectId: r.projectId,
   upstreamUrl: r.url,
-  credential: r.credential,
+  credential: { kind: 'http' as const, http: r.credential },
   service: 'git-upload-pack' as const,
   ...extra,
 });

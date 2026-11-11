@@ -709,6 +709,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       baseUrl: config.gitGatewayUrl ?? config.hookUrl,
       runnerHosts: config.runnerHosts ?? ['ops'],
       containerNetworks: config.containerNetworks ?? [],
+      db,
     });
     this.demoTokens = new DemoTokens(db);
     this.mainPreviews = new MainPreviews({

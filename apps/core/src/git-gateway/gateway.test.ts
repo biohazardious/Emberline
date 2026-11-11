@@ -123,7 +123,7 @@ describe('the git gateway', () => {
     const used = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
     });
     expect((await fetch(`${used.url}/info/refs?service=git-upload-pack`)).status).toBe(200);
@@ -133,7 +133,7 @@ describe('the git gateway', () => {
     const stale = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
       firstUseMs: 50,
     });
@@ -146,7 +146,7 @@ describe('the git gateway', () => {
     const read = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
     });
     expect((await fetch(`${read.url}/info/refs?service=git-receive-pack`)).status).toBe(403);
@@ -178,7 +178,7 @@ describe('the git gateway', () => {
       const grant = gateway.issue({
         projectId: 'p1',
         upstreamUrl: `${a.url}/alice/app.git`,
-        credential: cred(),
+        credential: { kind: 'http', http: cred() },
         service: 'git-receive-pack',
         push: { ref: 'refs/heads/main', newOid: head, oldOid: head },
       });
@@ -197,7 +197,7 @@ describe('the git gateway', () => {
     const grant = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
     });
     for (const [method, suffix] of [
@@ -245,7 +245,7 @@ describe('the git gateway', () => {
     const grant = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
     });
     expect((await fetch(`${grant.url}/info/refs?service=git-upload-pack`)).status).toBe(403);
@@ -270,7 +270,7 @@ describe('the git gateway', () => {
       gateway.issue({
         projectId: 'p1',
         upstreamUrl: `${b.url}/alice/app.git`,
-        credential: cred(),
+        credential: { kind: 'http', http: cred() },
         service: 'git-upload-pack',
       }),
     ).toThrow(expect.objectContaining({ code: 'url_refused' }));
@@ -315,7 +315,7 @@ describe('the git gateway, one push and its limits', () => {
     gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-receive-pack',
       push: { ref: 'refs/heads/main', newOid, oldOid },
     });
@@ -417,7 +417,7 @@ describe('the git gateway, one push and its limits', () => {
     const grant = gateway.issue({
       projectId: 'p1',
       upstreamUrl: `${a.url}/alice/app.git`,
-      credential: cred(),
+      credential: { kind: 'http', http: cred() },
       service: 'git-upload-pack',
     });
     for (let batch = 0; batch < 10; batch++) {
@@ -442,7 +442,7 @@ describe('the git gateway, one push and its limits', () => {
         {
           projectId: 'p1',
           upstreamUrl: `${a.url}/alice/app.git`,
-          credential: cred(),
+          credential: { kind: 'http', http: cred() },
           service: 'git-upload-pack',
           operationMs: 200,
         },

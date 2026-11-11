@@ -7,6 +7,7 @@ import { HttpError } from '../errors.js';
 import {
   hostKeyStatus,
   listTrustedHostKeys,
+  normaliseSshHost,
   pinnedHostKeys,
   removeHostKey,
   sshFingerprint,
@@ -97,7 +98,26 @@ describe('sshFingerprint', () => {
   });
 });
 
+describe('normaliseSshHost', () => {
+  it('trims, lower-cases and drops one trailing dot; refuses a host with a colon or whitespace inside', () => {
+    expect(normaliseSshHost(' GitHub.COM. ')).toBe('github.com');
+    expect(normaliseSshHost('git.example.com')).toBe('git.example.com');
+    expect(normaliseSshHost('127.0.0.1')).toBe('127.0.0.1');
+    for (const bad of ['', ' ', '.', 'github.com..', 'git example.com', 'git\texample.com', '::1', 'host:22'])
+      expect(normaliseSshHost(bad), JSON.stringify(bad)).toBeNull();
+  });
+});
+
 describe('hostKeyStatus', () => {
+  it('reads the host as the normaliser does: a trailing dot or spaces never step around a pin', () => {
+    const { key } = hostKey();
+    for (const host of ['github.com.', ' GITHUB.com ', 'GitHub.Com.']) {
+      expect(hostKeyStatus(db, host, 22, 'ssh-ed25519', GITHUB_ED25519), host).toBe('pinned');
+      expect(hostKeyStatus(db, host, 22, 'ssh-ed25519', key), host).toBe('changed');
+    }
+    expect(() => hostKeyStatus(db, 'github.com:22', 22, 'ssh-ed25519', key)).toThrow();
+  });
+
   it('a pinned key is pinned, on github.com:22 and on [ssh.github.com]:443', () => {
     expect(hostKeyStatus(db, 'github.com', 22, 'ssh-ed25519', GITHUB_ED25519)).toBe('pinned');
     expect(hostKeyStatus(db, 'GitHub.com', 22, 'ssh-ed25519', GITHUB_ED25519)).toBe('pinned');
@@ -200,6 +220,21 @@ describe('trusted host keys', () => {
     ]);
   });
 
+  it('stores the host as the normaliser reads it, so a trailing dot finds the same entry', () => {
+    const k = hostKey();
+    expect(trustHostKey(db, { host: ' Git.Example.com. ', port: 22, ...k }).host).toBe('git.example.com');
+    expect(hostKeyStatus(db, 'git.example.com.', 22, k.keyType, k.key)).toBe('trusted');
+    expect(() => trustHostKey(db, { host: 'git.example.com.', port: 22, ...hostKey() })).toThrow(
+      expect.objectContaining({ code: 'host_key_changed' }),
+    );
+    // A trailing dot or capitals on github.com: still its pins.
+    expect(() => trustHostKey(db, { host: 'GitHub.com.', port: 22, keyType: k.keyType, key: k.key })).toThrow(
+      expect.objectContaining({ code: 'host_key_changed' }),
+    );
+    expect(removeHostKey(db, 'GIT.example.com.', 22, k.keyType)).toBe(true);
+    expect(listTrustedHostKeys(db)).toEqual([]);
+  });
+
   it('a pinned host keeps its pinned keys: trusting another key for it is refused', () => {
     const k = hostKey();
     for (const [host, port] of [
@@ -226,6 +261,9 @@ describe('trusted host keys', () => {
       { host: 'git.example.com', port: 65536, ...k },
       { host: '', port: 22, ...k },
       { host: 'git example.com', port: 22, ...k },
+      { host: 'git.example.com:22', port: 22, ...k },
+      { host: '::1', port: 22, ...k },
+      { host: '.', port: 22, ...k },
     ];
     for (const entry of bad) expect(() => trustHostKey(db, entry)).toThrow(HttpError);
     expect(listTrustedHostKeys(db)).toEqual([]);

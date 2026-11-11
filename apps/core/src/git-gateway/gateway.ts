@@ -1,9 +1,10 @@
 /**
  * Credential gateway (spec §2 revision 2). The runner's git, which holds no credentials, talks smart
  * HTTP to `/api/internal/git/<capability>/…`; core adds the account's Basic header and streams both
- * bodies to and from the one repository the capability names. A capability is 256 random bits for one
- * git command:
- * - it is bound to project, account, upstream URL, service and, for a push, ref and commit;
+ * bodies to and from the one repository the capability names, or, for an ssh address, speaks ssh to
+ * it with Emberline's key (ssh-upstream.ts). A capability is 256 random bits for one git command:
+ * - it is bound to project, account or SSH key (its id: a key replaced or deleted since fails with
+ *   `ssh_key_missing`, Ruling 17), upstream URL, service and, for a push, ref and commit;
  * - it must be used within `firstUseMs`, ends after `operationMs`, and is released when the command
  *   ends; a receive-pack capability carries one push (git's lone-flush auth probe before it is answered here);
  * - it is accepted only from the runner's address.
@@ -13,22 +14,40 @@
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { pipeline, Readable, Transform } from 'node:stream';
+import { createGunzip } from 'node:zlib';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ContainerAddresses } from '../auth/container-addresses.js';
+import type { Db } from '../db/index.js';
 import { HttpError } from '../errors.js';
 import { addressSecrets } from '../forge/hosts.js';
 import { type GitHttpCredential, redactCredential, urlUnderServer } from '../git-credentials.js';
 import { PUSH_PROBE, type PushPlan, readPushRequest } from './receive-pack.js';
 import { redactCapabilityUrls, withoutUrlCredentials } from './redact-text.js';
+import { hostKeyStatus, knownHostKeyTypes, sshFingerprint } from '../ssh-keys/known-hosts.js';
+import { getPublicKey, privateKeyById } from '../ssh-keys/store.js';
+import { SecretsKeyError } from '../secrets/box.js';
+import { openSshUpstream, parseSshRemote, sshWhere } from './ssh-upstream.js';
 
 export { redactCapabilityUrls, type ScanMeter, withoutUrlCredentials } from './redact-text.js';
-import { GitGatewayError, type GitGatewayErrorCode, openUpstream, UpstreamAgents } from './upstream.js';
+import {
+  GitGatewayError,
+  type GitGatewayErrorCode,
+  type HostKeyDetails,
+  openUpstream,
+  UpstreamAgents,
+} from './upstream.js';
 
 export type GitService = 'git-upload-pack' | 'git-receive-pack';
+/**
+ * What the gateway reaches the repository with: a forge account over http(s), or an SSH key over
+ * ssh, bound by its id (`keyScope`: `shared` or the project's id, the scope the key was chosen in).
+ */
+export type GatewayCredential =
+  { kind: 'http'; http: GitHttpCredential } | { kind: 'ssh'; keyId: string; keyScope: 'shared' | string };
 export interface GatewayGrant {
   projectId: string;
   upstreamUrl: string;
-  credential: GitHttpCredential;
+  credential: GatewayCredential;
   service: GitService;
   push?: PushPlan;
   firstUseMs?: number;
@@ -37,6 +56,8 @@ export interface GatewayGrant {
 export interface GatewayOutcome {
   code: GitGatewayErrorCode;
   message: string;
+  /** host_key_unknown, host_key_changed: the key the server offered. */
+  hostKey?: HostKeyDetails;
 }
 
 interface Capability extends GatewayGrant {
@@ -179,6 +200,13 @@ const sizeText = (bytes: number) =>
       ? `${Math.round(bytes / 1024 ** 2)} MB`
       : `${bytes} bytes`;
 
+const httpCredential = (grant: GatewayGrant): GitHttpCredential | null =>
+  grant.credential.kind === 'http' ? grant.credential.http : null;
+
+const GZIP = new Set(['gzip', 'x-gzip']);
+/** The copy for an ssh address without a usable key (spec). */
+export const MISSING_KEY = "Create a key in Settings → SSH key, or in this project's settings.";
+
 const plain = (reply: FastifyReply, status: number, message: string) =>
   reply.code(status).type('text/plain; charset=utf-8').send(`${message}\n`);
 
@@ -207,6 +235,8 @@ export class GitGateway {
       localNetworks?: () => string[];
       /** EMBERLINE_CONTAINER_NETWORKS. */
       containerNetworks?: readonly string[];
+      /** Core's database: SSH keys and host keys, for ssh capabilities. */
+      db?: Db;
     },
   ) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -221,11 +251,17 @@ export class GitGateway {
   }
 
   issue(grant: GatewayGrant): { capability: string; url: string } {
-    if (!urlUnderServer(grant.upstreamUrl, grant.credential.serverUrl)) {
+    const credential = grant.credential;
+    if (credential.kind === 'http' && !urlUnderServer(grant.upstreamUrl, credential.http.serverUrl)) {
       throw new GitGatewayError(
         'url_refused',
-        `Emberline uses this account only for repositories under ${grant.credential.serverUrl}.`,
+        `Emberline uses this account only for repositories under ${credential.http.serverUrl}.`,
       );
+    }
+    if (credential.kind === 'ssh') {
+      if (!parseSshRemote(grant.upstreamUrl))
+        throw new GitGatewayError('url_refused', 'Emberline uses an SSH key only for an ssh address.');
+      if (!this.options.db) throw new Error('the git gateway needs the database for ssh');
     }
     if ((grant.service === 'git-receive-pack') !== Boolean(grant.push))
       throw new Error('a push capability needs a push plan, and only it');
@@ -266,8 +302,8 @@ export class GitGateway {
     } catch (error) {
       const outcome = record.outcome;
       throw outcome
-        ? new GitGatewayError(outcome.code, outcome.message)
-        : new GitGatewayError('git_failed', describeGitError(error, { credential: grant.credential }), {
+        ? new GitGatewayError(outcome.code, outcome.message, { hostKey: outcome.hostKey })
+        : new GitGatewayError('git_failed', describeGitError(error, { credential: httpCredential(grant) }), {
             cause: error,
           });
     } finally {
@@ -382,8 +418,9 @@ export class GitGateway {
     status: number,
     code: GitGatewayErrorCode,
     message: string,
+    hostKey?: HostKeyDetails,
   ) {
-    cap.outcome ??= { code, message };
+    cap.outcome ??= hostKey ? { code, message, hostKey } : { code, message };
     return plain(reply, status, message);
   }
 
@@ -487,11 +524,35 @@ export class GitGateway {
             .send('');
         }
         body = this.meter(cap, pushed);
+      } else if (cap.credential.kind === 'ssh') {
+        // git gzips a large upload-pack request; ssh carries git's own bytes.
+        if (typeof encoding === 'string' && GZIP.has(encoding))
+          body = this.meter(
+            cap,
+            pipeline(source, createGunzip(), () => undefined),
+          );
+        else if (encoding && encoding !== 'identity')
+          return this.refuse(
+            cap,
+            reply,
+            415,
+            'service_refused',
+            'This git request is encoded in a way Emberline does not read.',
+          );
+        else body = this.meter(cap, source);
       } else {
         if (typeof encoding === 'string') headers['content-encoding'] = encoding;
         body = this.meter(cap, source);
       }
     }
+    if (cap.credential.kind === 'ssh') {
+      const v2 =
+        cap.service === 'git-upload-pack' &&
+        typeof gitProtocol === 'string' &&
+        /(?:^|:)version=2(?::|$)/.test(gitProtocol);
+      return this.viaSsh(cap, cap.credential, reply, body, v2, signal);
+    }
+    const credential = cap.credential.http;
     const upstream = new URL(
       `${cap.upstreamUrl.replace(/\/+$/, '')}/${kind === 'advertise' ? `info/refs?service=${cap.service}` : kind}`,
     );
@@ -502,7 +563,7 @@ export class GitGateway {
         method: kind === 'advertise' ? 'GET' : 'POST',
         headers,
         body,
-        credential: cap.credential,
+        credential,
         agents: this.agents,
         signal,
         idleTimeoutMs: this.idleTimeoutMs,
@@ -545,5 +606,89 @@ export class GitGateway {
       if (typeof value === 'string') reply.header(name, value);
     }
     return reply.code(status).send(this.meter(cap, res));
+  }
+
+  /** The request over ssh with the capability's key (Ruling 17: that key, or none). */
+  private async viaSsh(
+    cap: Capability,
+    credential: Extract<GatewayCredential, { kind: 'ssh' }>,
+    reply: FastifyReply,
+    body: Readable | undefined,
+    protocolV2: boolean,
+    signal: AbortSignal,
+  ) {
+    const db = this.options.db!;
+    const remote = parseSshRemote(cap.upstreamUrl)!;
+    const scope = credential.keyScope === 'shared' ? 'shared' : { projectId: credential.keyScope };
+    let key: ReturnType<typeof privateKeyById>;
+    try {
+      key = privateKeyById(db, credential.keyId);
+    } catch (error) {
+      if (!(error instanceof SecretsKeyError)) throw error;
+      return this.refuse(
+        cap,
+        reply,
+        403,
+        'ssh_key_missing',
+        `Emberline could not open its SSH key (the secrets key changed). ${MISSING_KEY}`,
+      );
+    }
+    const bound =
+      key &&
+      (key.scope === 'shared'
+        ? credential.keyScope === 'shared'
+        : key.scope.projectId === credential.keyScope);
+    if (!key || !bound) {
+      const message = getPublicKey(db, scope)
+        ? 'The SSH key was replaced while this git operation was starting; run it again.'
+        : MISSING_KEY;
+      return this.refuse(cap, reply, 403, 'ssh_key_missing', message);
+    }
+    const where = sshWhere(remote);
+    let res: Awaited<ReturnType<typeof openSshUpstream>>;
+    try {
+      res = await openSshUpstream({
+        url: cap.upstreamUrl,
+        privateKey: key.privateKey,
+        service: cap.service,
+        body,
+        protocolV2,
+        signal,
+        idleTimeoutMs: this.idleTimeoutMs,
+        hostKeyTypes: knownHostKeyTypes(db, remote.host, remote.port),
+        keyShownIn: credential.keyScope === 'shared' ? 'Settings → SSH key' : "this project's settings",
+        hostKey: (info) => {
+          const status = hostKeyStatus(db, info.host, info.port, info.keyType, info.key);
+          if (status === 'pinned' || status === 'trusted') return 'ok';
+          const hostKey = { ...info, fingerprint: sshFingerprint(info.key) };
+          return status === 'unknown'
+            ? new GitGatewayError(
+                'host_key_unknown',
+                `Emberline does not know the host key of ${where} (${info.keyType} ${hostKey.fingerprint}). Trust it only if it is the one the server's admin publishes.`,
+                { hostKey },
+              )
+            : new GitGatewayError(
+                'host_key_changed',
+                `The host key of ${where} is not the one Emberline knows (${info.keyType} ${hostKey.fingerprint} offered), so Emberline did not connect. If the server's key really changed, remove the stored key in Settings → SSH key.`,
+                { hostKey },
+              );
+        },
+      });
+    } catch (error) {
+      const e =
+        error instanceof GitGatewayError ? error : new GitGatewayError('network', `Couldn't reach ${where}.`);
+      const status =
+        e.code === 'auth_refused' || e.code === 'ssh_key_missing' ? 403 : e.code === 'not_found' ? 404 : 502;
+      return this.refuse(cap, reply, status, e.code, e.message, e.hostKey);
+    }
+    // A connection that drops or stalls mid-stream: git's own error would only say the stream ended.
+    res.body.on('error', (error) => {
+      if (error instanceof GitGatewayError) cap.outcome ??= { code: error.code, message: error.message };
+    });
+    return reply
+      .code(200)
+      .header('cache-control', 'no-cache')
+      .type(res.contentType)
+      .send(this.meter(cap, res.body));
   }
 }
