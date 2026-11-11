@@ -335,6 +335,8 @@ class Session {
         reject(this.failure ?? new GitGatewayError('network', `${this.where} closed the connection.`));
       this.conn.once('close', closed);
       const env = this.r.protocolV2 ? { GIT_PROTOCOL: 'version=2' } : undefined;
+      // From the request on: a server that never answers it runs into the idle limit too.
+      this.touch();
       this.conn.exec(command, env ? { env } : {}, (error, channel) => {
         this.conn.off('close', closed);
         if (error) return reject(this.notFound());

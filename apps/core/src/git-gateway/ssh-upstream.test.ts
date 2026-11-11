@@ -7,7 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { utils } from 'ssh2';
+import { Server, utils } from 'ssh2';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Db, openDb } from '../db/index.js';
 import { projects } from '../db/schema.js';
@@ -16,7 +16,7 @@ import { removeHostKey, trustHostKey } from '../ssh-keys/known-hosts.js';
 import { rmTemp } from '../test-rm.js';
 import { type GatewayGrant, GitGateway } from './gateway.js';
 import { gatewayGitArgs } from './remote-git.js';
-import { parseSshRemote } from './ssh-upstream.js';
+import { openSshUpstream, parseSshRemote } from './ssh-upstream.js';
 import { GitGatewayError } from './upstream.js';
 
 const run = promisify(execFile);
@@ -77,6 +77,58 @@ async function freePort(): Promise<number> {
     });
   });
 }
+
+describe('a server that logs in but never answers the git command', () => {
+  // sshd always answers an exec request; ssh2's own server need not: the client waits for a reply
+  // that never comes, and only the idle limit ends the operation.
+  it('runs into the idle limit, the connection closed', async () => {
+    const server = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private] }, (client) => {
+      client.on('authentication', (ctx) => ctx.accept());
+      client.on('ready', () =>
+        client.on('session', (accept) => {
+          accept().on('exec', () => undefined); // neither accepted nor rejected
+        }),
+      );
+      client.on('error', () => undefined);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    let closed = false;
+    const clients: { end: () => void }[] = [];
+    server.on('connection', (client) => {
+      clients.push(client);
+      client.on('close', () => (closed = true));
+    });
+    try {
+      const started = Date.now();
+      const opened = openSshUpstream({
+        url: `ssh://git@127.0.0.1:${port}/app.git`,
+        privateKey: utils.generateKeyPairSync('ed25519').private,
+        service: 'git-upload-pack',
+        protocolV2: false,
+        signal: new AbortController().signal,
+        idleTimeoutMs: 300,
+        hostKeyTypes: [],
+        hostKey: () => 'ok',
+        keyShownIn: 'Settings',
+      });
+      const outcome = await Promise.race([
+        opened.then(
+          () => 'answered',
+          (error: unknown) => error,
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('still waiting'), 3_000)),
+      ]);
+      expect(outcome).toBeInstanceOf(GitGatewayError);
+      expect((outcome as GitGatewayError).code).toBe('timeout');
+      expect(Date.now() - started).toBeLessThan(3_000);
+      await expect.poll(() => closed).toBe(true);
+    } finally {
+      for (const client of clients) client.end();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
 
 /**
  * The forge: a real sshd on 127.0.0.1 that logs in only the current user (also root, as CI runs it)
