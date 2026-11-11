@@ -1,0 +1,96 @@
+diff --git a/src/unix/pty.cc b/src/unix/pty.cc
+index 7b4b9e1f990fbf95b51528bb56dc9717f5b87532..d2fd9ab6418f581417416c2b1291b347e01909d0 100644
+--- a/src/unix/pty.cc
++++ b/src/unix/pty.cc
+@@ -59,6 +59,7 @@
+ #if defined(__linux__)
+ #include <stdio.h>
+ #include <stdint.h>
++#include <sys/syscall.h>
+ #elif defined(__APPLE__)
+ #include <libproc.h>
+ #include <os/availability.h>
+@@ -228,6 +229,14 @@ Napi::Value PtyGetProc(const Napi::CallbackInfo& info);
+ static int
+ pty_nonblock(int);
+ 
++static int
++pty_cloexec(int);
++
++#if !defined(__APPLE__) && !defined(__OpenBSD__)
++static void
++pty_close_inherited(void);
++#endif
++
+ #if defined(__APPLE__)
+ static char *
+ pty_getproc(int);
+@@ -375,6 +384,9 @@ Napi::Value PtyFork(const Napi::CallbackInfo& info) {
+   if (pty_nonblock(master) == -1) {
+     throw Napi::Error::New(napiEnv, "Could not set master fd to nonblocking.");
+   }
++  if (pty_cloexec(master) == -1) {
++    throw Napi::Error::New(napiEnv, "Could not set master fd to close-on-exec.");
++  }
+ #else
+   int argc = argv_.Length();
+   int argl = argc + 2;
+@@ -433,6 +445,10 @@ Napi::Value PtyFork(const Napi::CallbackInfo& info) {
+         }
+       }
+ 
++      // Emberline: the child gets its own terminal on 0, 1 and 2 and nothing else: no other
++      // session's terminal (pty master), whatever the parent left without close-on-exec.
++      pty_close_inherited();
++
+       {
+         char **old = environ;
+         environ = env;
+@@ -445,6 +461,11 @@ Napi::Value PtyFork(const Napi::CallbackInfo& info) {
+       if (pty_nonblock(master) == -1) {
+         throw Napi::Error::New(napiEnv, "Could not set master fd to nonblocking.");
+       }
++      // Emberline: this session's terminal (its pty master) never reaches a process started later,
++      // by node-pty or by child_process.
++      if (pty_cloexec(master) == -1) {
++        throw Napi::Error::New(napiEnv, "Could not set master fd to close-on-exec.");
++      }
+   }
+ #endif
+ 
+@@ -586,6 +607,35 @@ pty_nonblock(int fd) {
+   return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+ }
+ 
++/**
++ * Emberline: close-on-exec, so a descriptor stays in this process only.
++ */
++
++static int
++pty_cloexec(int fd) {
++  int flags = fcntl(fd, F_GETFD, 0);
++  if (flags == -1) return -1;
++  return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
++}
++
++#if !defined(__APPLE__) && !defined(__OpenBSD__)
++/**
++ * Emberline: in the child, after forkpty: every descriptor above 2 is closed (0, 1 and 2 are the
++ * session's terminal). Only system calls here: the parent has threads, so after fork nothing that
++ * may allocate is safe.
++ */
++
++static void
++pty_close_inherited(void) {
++#if defined(__linux__) && defined(SYS_close_range)
++  if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0) return;
++#endif
++  long max = sysconf(_SC_OPEN_MAX);
++  if (max < 0 || max > 1048576) max = 1048576;
++  for (long fd = 3; fd < max; fd++) close((int)fd);
++}
++#endif
++
+ /**
+  * pty_getproc
+  * Taken from tmux.

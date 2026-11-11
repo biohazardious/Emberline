@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  node-pty@1.1.0:
+    hash: 469c281bc169657a8a58404acffdcd53962a908145378a635f741863d6b73db8
+    path: patches/node-pty@1.1.0.patch
+
 importers:
 
   .:
@@ -113,7 +118,7 @@ importers:
         version: 5.5.0
       node-pty:
         specifier: ^1.0.0
-        version: 1.1.0
+        version: 1.1.0(patch_hash=469c281bc169657a8a58404acffdcd53962a908145378a635f741863d6b73db8)
       zod:
         specifier: ^4.1.5
         version: 4.6.7
@@ -4408,7 +4413,7 @@ snapshots:
 
   node-addon-api@7.1.1: {}
 
-  node-pty@1.1.0:
+  node-pty@1.1.0(patch_hash=469c281bc169657a8a58404acffdcd53962a908145378a635f741863d6b73db8):
     dependencies:
       node-addon-api: 7.1.1
 

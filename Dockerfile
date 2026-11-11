@@ -89,6 +89,8 @@ ENV CI=true
 WORKDIR /src
 # Manifests first for better layer caching.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# node-pty is patched (patches/): a session's terminal never reaches another process ptyd starts.
+COPY patches/ patches/
 COPY apps/core/package.json apps/core/
 COPY apps/web/package.json apps/web/
 COPY apps/ptyd/package.json apps/ptyd/

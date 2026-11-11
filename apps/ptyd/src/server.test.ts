@@ -331,6 +331,42 @@ const NO_CAPS =
 const RUNNER_CAPS = '-all,+setuid,+setgid,+setpcap,+kill,+chown';
 const RUNNER_CAPS_MASK = '00000000000001e1';
 
+/**
+ * The descriptors a command started by ptyd holds, as `fd->target`. The shell (started with -c, it
+ * opens nothing itself) has find list them while it only waits, so these are what reached the command.
+ */
+const OPEN_FDS = `printf "fds:"; find /proc/$$/fd -mindepth 1 -printf '%f->%l,'; echo`;
+
+function openFds(text: string): string[] {
+  const match = /fds:(.*)/.exec(text);
+  if (!match) throw new Error(`no fds in ${JSON.stringify(text)}`);
+  return (match[1] ?? '')
+    .split(',')
+    .filter(Boolean)
+    .map((entry) => entry.trim())
+    .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
+}
+
+/**
+ * I-1: a session is started while another one runs, and so is a command: neither holds the other
+ * session's terminal (its pty master), nor any descriptor beyond its own 0, 1 and 2.
+ */
+async function expectOnlyStdio(client: PtydClient, cwd: string): Promise<void> {
+  const other = await client.spawn({ file: '/bin/sh', args: [], cwd, cols: 80, rows: 24 });
+  try {
+    const session = await inSession(client, OPEN_FDS, { cwd });
+    // Its own terminal on 0, 1 and 2, nothing else.
+    const fds = openFds(session.text);
+    const tty = fds[0]?.split('->')[1] ?? '';
+    expect(tty).toMatch(/^\/dev\/pts\/\d+$/);
+    expect(fds).toEqual(['0', '1', '2'].map((fd) => `${fd}->${tty}`));
+    const ran = await client.exec({ file: '/bin/sh', args: ['-c', OPEN_FDS], cwd });
+    expect(openFds(ran.stdout).map((entry) => entry.split('->')[0])).toEqual(['0', '1', '2']);
+  } finally {
+    await client.kill(other.id, 'SIGKILL');
+  }
+}
+
 /** Whether a process is gone (or only waits to be reaped). */
 function gone(pid: number): boolean {
   try {
@@ -465,6 +501,10 @@ describe.skipIf(!isRoot)("the runner's ptyd (user ptyd, the runner's capabilitie
     expect(below.stderr).toMatch(/cannot change directory/);
   });
 
+  it("hands a session or command no descriptor beyond 0, 1 and 2: no other session's terminal", async () => {
+    await expectOnlyStdio(client, work);
+  });
+
   it('gives a session its terminal: it opens it by name, and node owns it', async () => {
     const { text } = await inSession(
       client,
@@ -526,6 +566,16 @@ describe('an ops ptyd', () => {
       const ran = await client.exec({ file: '/bin/sh', args: ['-c', 'id -u'], cwd: dir });
       expect(ran).toMatchObject({ exitCode: 0, stdout: `${ownUid}\n` });
     });
+  });
+});
+
+describe('descriptors a started process gets', () => {
+  it("only 0, 1 and 2 in a ptyd that does not drop: no other session's terminal", async () => {
+    await expectOnlyStdio(await connect(), dir);
+  });
+
+  it('only 0, 1 and 2 in an ops ptyd', async () => {
+    await withPtyd({ mode: 'ops' }, (client) => expectOnlyStdio(client, dir));
   });
 });
 
