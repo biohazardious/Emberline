@@ -8,7 +8,8 @@
 import { createHash } from 'node:crypto';
 import { PINNED_SSH_HOST_KEYS } from '@emberline/protocol';
 import { and, asc, eq } from 'drizzle-orm';
-import { utils } from 'ssh2';
+// ssh2 is CommonJS: Node's ESM loader finds no named `utils` export in it (tsx and vitest do).
+import ssh2 from 'ssh2';
 import type { Db } from '../db/index.js';
 import { sshHostKeys } from '../db/schema.js';
 import { badRequest, conflict } from '../errors.js';
@@ -129,7 +130,7 @@ function checkedEntry(entry: HostKeyEntry): HostKeyEntry {
   }
   if (!BASE64_RE.test(entry.key)) throw badRequest('the host key is not valid');
   const key = Buffer.from(entry.key, 'base64').toString('base64');
-  const parsed = utils.parseKey(`${entry.keyType} ${key}`);
+  const parsed = ssh2.utils.parseKey(`${entry.keyType} ${key}`);
   if (parsed instanceof Error || Array.isArray(parsed) || parsed.type !== entry.keyType) {
     throw badRequest(`the host key is not a valid ${entry.keyType} key`);
   }
