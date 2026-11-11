@@ -46,16 +46,38 @@ export function readImportSource(db: Db, projectId: string): ProjectImportSource
 }
 
 /**
- * An `import_url` project's clone: the branch it was asked for (null: the remote's default), and
- * whether it waits for its own SSH key to be added on the forge before the first clone (Ruling 21).
+ * An `import_url` project's clone: the branch it was asked for (null: the remote's default),
+ * whether it waits for its own SSH key to be added on the forge before the first clone (Ruling 21),
+ * and whether import-status has seen it finish (Ruling 24; absent: not yet).
  */
-export const ImportClone = z.object({ branch: z.string().nullable(), awaitingKey: z.boolean() });
+export const ImportClone = z.object({
+  branch: z.string().nullable(),
+  awaitingKey: z.boolean(),
+  cloned: z.boolean().optional(),
+});
 export type ImportClone = z.infer<typeof ImportClone>;
 
 /** Null for a project that is not an import of a URL, or one imported before 0.7.0. */
 export function readImportClone(db: Db, projectId: string): ImportClone | null {
   const parsed = ImportClone.safeParse(readProjectSettings(db, projectId).importClone);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Whether an import's clone has not been seen to finish (it waits for its key, runs or failed),
+ * from what core recorded alone: nothing runs. False for any other project and for imports from
+ * before 0.7.0.
+ */
+export function readImportUnfinished(db: Db, projectId: string): boolean {
+  const clone = readImportClone(db, projectId);
+  return clone !== null && clone.cloned !== true;
+}
+
+/** import-status saw the clone finish: the project list stops calling the import unfinished. */
+export function markImportCloned(db: Db, projectId: string): void {
+  const clone = readImportClone(db, projectId);
+  if (clone && clone.cloned !== true)
+    writeProjectSettings(db, projectId, { importClone: { ...clone, cloned: true } });
 }
 
 /** Which tickets of a wizard project play which role. */

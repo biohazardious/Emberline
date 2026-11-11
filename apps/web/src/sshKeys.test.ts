@@ -94,7 +94,12 @@ describe('small texts', () => {
 });
 
 describe('unfinished imports (Ruling 23)', () => {
-  const ssh = { id: 'p1', importSource: 'url' as const, repoUrl: 'git@github.com:a/s.git' };
+  const ssh = {
+    id: 'p1',
+    importSource: 'url' as const,
+    repoUrl: 'git@github.com:a/s.git',
+    importUnfinished: true,
+  };
   const https = { ...ssh, repoUrl: 'https://github.com/a/s.git' };
   const st = (status: 'awaiting_key' | 'cloning' | 'ready' | 'failed') => ({
     status,
@@ -109,6 +114,10 @@ describe('unfinished imports (Ruling 23)', () => {
     expect(unfinishedImportUrl({ ...ssh, importSource: 'new' })).toBeNull();
     expect(unfinishedImportUrl({ ...ssh, importSource: null })).toBeNull();
     expect(unfinishedImportUrl({ ...ssh, repoUrl: null })).toBeNull();
+    // A finished import is never read: import-status finishes an import (it may rewrite the
+    // default branch), so it is asked only while core says the import is unfinished (Ruling 24).
+    expect(unfinishedImportUrl({ ...ssh, importUnfinished: false })).toBeNull();
+    expect(unfinishedImportUrl({ ...ssh, importUnfinished: undefined })).toBeNull();
   });
 
   it('is unfinished while it waits for its key, or after a failed ssh clone', () => {

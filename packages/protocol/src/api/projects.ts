@@ -70,6 +70,11 @@ export const Project = z.object({
   createdAt: z.string(),
   /** Unknown (null or absent) for projects created before it was recorded. */
   importSource: ProjectImportSource.nullable().optional(),
+  /**
+   * An import from an address whose clone core has not seen finish (it waits for its own key, runs,
+   * or failed): only then does the web read its import status (which finishes the import).
+   */
+  importUnfinished: z.boolean().optional(),
 });
 export type Project = z.infer<typeof Project>;
 

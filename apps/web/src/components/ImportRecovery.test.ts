@@ -19,6 +19,7 @@ const project = {
   slug: 'shop',
   importSource: 'url',
   repoUrl: 'git@github.com:alice/shop.git',
+  importUnfinished: true,
 } as Project;
 const awaiting: ImportStatusResponse = {
   status: 'awaiting_key',
@@ -110,6 +111,33 @@ describe('ImportRecovery (Project settings → Repository)', () => {
     await settle(30);
     expect(text()).toBe('');
     expect(vi.mocked(api)).not.toHaveBeenCalled();
+  });
+});
+
+describe('a finished import is never asked for its status (Ruling 24)', () => {
+  it('sends no import-status request for a project core calls finished, and one for an unfinished one', async () => {
+    const asked: string[] = [];
+    vi.mocked(api).mockImplementation(
+      apiRoutes({
+        'GET /api/projects/p1/import-status': () => {
+          asked.push('p1');
+          return ready;
+        },
+        'GET /api/projects/p2/import-status': () => {
+          asked.push('p2');
+          return awaiting;
+        },
+        'GET /api/projects/p2/ssh-key': () => ({ choice: 'own', key: null, shared: null }),
+      }),
+    );
+    const finished = { ...project, importUnfinished: false };
+    await renderDom(createElement(ImportRecovery, { project: finished }));
+    await renderDom(createElement(UnfinishedImportNote, { project: finished }));
+    await settle(30);
+    expect(asked).toEqual([]);
+
+    await renderDom(createElement(UnfinishedImportNote, { project: { ...project, id: 'p2' } }));
+    await waitFor(() => expect(asked).toEqual(['p2']));
   });
 });
 

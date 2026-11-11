@@ -12,7 +12,7 @@ import {
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { readImportClone, writeProjectSettings } from '../db/project-settings.js';
+import { markImportCloned, readImportClone, writeProjectSettings } from '../db/project-settings.js';
 import { projects, projectWorktreeConfig } from '../db/schema.js';
 import { notFound } from '../errors.js';
 import { detectProject } from '../factory/detect.js';
@@ -96,7 +96,10 @@ export function registerProjectImportRoutes(
           }
         }
       }
-      if (status.status === 'ready') await reconcileClonedBranch(project);
+      if (status.status === 'ready') {
+        await reconcileClonedBranch(project);
+        markImportCloned(db, project.id);
+      }
       return { ...status, tail: redactCapabilityUrls(status.tail) };
     },
   );

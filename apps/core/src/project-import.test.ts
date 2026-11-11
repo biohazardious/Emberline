@@ -18,6 +18,7 @@ import {
   type AdoptProjectResponse,
   type CreateProjectResponse,
   type ImportStatusResponse,
+  type Project,
   type ProjectDetectResponse,
   type WorkspaceFoldersResponse,
 } from '@emberline/protocol';
@@ -872,6 +873,44 @@ describe('GET /api/projects/:id/import-status', () => {
     const s = await status(project.id);
     expect(s).toMatchObject({ status: 'ready', exitCode: 0, terminalId });
     expect(s.tail).toContain('Cloning');
+  });
+
+  /** The project list's flag for an import the wizard may have left unfinished (Ruling 24). */
+  const unfinished = async (id: string) =>
+    ((await api('GET', '/api/projects')).json() as Project[]).find((p) => p.id === id)?.importUnfinished;
+
+  it('the project list says an import is unfinished until its clone was seen to finish, and reads nothing for it', async () => {
+    const source = fixture('source-flag', STATIC_SITE);
+    const { project } = await importUrl('Flagged', (dest) => ({
+      file: 'git',
+      args: ['clone', '--progress', '--', source, dest],
+    }));
+    // The clone runs (or ran, unseen): unfinished.
+    expect(await unfinished(project.id)).toBe(true);
+    await vi.waitFor(async () => expect((await status(project.id)).status).toBe('ready'), {
+      timeout: 10_000,
+    });
+    // Listing projects runs nothing in the runner (no import-status, no git).
+    const list = vi.spyOn(t.ptyd.get(), 'list');
+    expect(await unfinished(project.id)).toBe(false);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('an import waiting for its own key is unfinished; a folder or a new project never is', async () => {
+    const own = await api('POST', '/api/projects', {
+      name: 'Waits',
+      source: 'import_url',
+      repoUrl: 'git@git.example.com:alice/waits.git',
+      sshKeyChoice: 'own',
+    });
+    expect(own.statusCode, own.body).toBe(201);
+    const created = own.json() as CreateProjectResponse;
+    expect(created.project.importUnfinished).toBe(true);
+    expect(await unfinished(created.project.id)).toBe(true);
+
+    const fresh = await api('POST', '/api/projects', { name: 'Fresh', mode: 'manual' });
+    expect(fresh.statusCode, fresh.body).toBe(201);
+    expect(await unfinished((fresh.json() as CreateProjectResponse).project.id)).toBe(false);
   });
 
   describe.skipIf(!SSHD)("an ssh address (through the git gateway with Emberline's key)", () => {

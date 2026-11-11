@@ -115,11 +115,17 @@ export function bannerProjects<T>(projects: readonly T[], max = 3): { shown: T[]
   return { shown: projects.slice(0, max), more: Math.max(0, projects.length - max) };
 }
 
-type ImportedProject = Pick<Project, 'id' | 'importSource' | 'repoUrl'>;
+type ImportedProject = Pick<Project, 'id' | 'importSource' | 'repoUrl' | 'importUnfinished'>;
 
-/** The import status of a project imported from an address (null for any other project: nothing to read). */
+/**
+ * The import status to read for a project core calls an unfinished import from an address, else
+ * null. Never for a finished one: reading the status finishes an import (it releases the clone's
+ * capability and may set the default branch to the clone's), so it is not a passive read (Ruling 24).
+ */
 export const unfinishedImportUrl = (p: ImportedProject): string | null =>
-  p.importSource === 'url' && p.repoUrl ? `/api/projects/${p.id}/import-status` : null;
+  p.importSource === 'url' && p.repoUrl && p.importUnfinished === true
+    ? `/api/projects/${p.id}/import-status`
+    : null;
 
 /**
  * Whether an import is left unfinished in a way it can be finished outside the wizard (Ruling 23):

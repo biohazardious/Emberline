@@ -8,8 +8,8 @@ import { ImportProgress } from './wizard/ImportProgress';
 
 /**
  * Whether `project` is an import left unfinished (it waits for its own key, or its ssh clone
- * failed). The status is read once in a while, only for a project imported from an address; a
- * failed read (runner down) shows nothing.
+ * failed). The status is read only while core's project list calls the import unfinished
+ * (`importUnfinished`, Ruling 24), never for a finished one; a failed read (runner down) shows nothing.
  */
 function useUnfinishedImport(project: Project) {
   const url = unfinishedImportUrl(project);
@@ -49,7 +49,6 @@ export function ImportRecovery({ project }: { project: Project }) {
   const refreshProject = () => {
     void queryClient.invalidateQueries({ queryKey: ['api', '/api/projects'] });
     void queryClient.invalidateQueries({ queryKey: ['api', `/api/projects/${project.id}/repository`] });
-    void queryClient.invalidateQueries({ queryKey: ['api', unfinishedImportUrl(project)] });
     void queryClient.invalidateQueries({ queryKey: ['api', '/api/system'] });
   };
 

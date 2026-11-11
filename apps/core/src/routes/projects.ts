@@ -91,6 +91,7 @@ import {
   type ImportClone,
   readImportClone,
   readImportSource,
+  readImportUnfinished,
   writeProjectSettings,
   writeWizardTickets,
 } from '../db/project-settings.js';
@@ -289,7 +290,11 @@ export function registerProjectRoutes(
       .from(projects)
       .orderBy(asc(projects.createdAt))
       .all()
-      .map((row) => ({ ...projectResponse(row), importSource: readImportSource(db, row.id) })),
+      .map((row) => ({
+        ...projectResponse(row),
+        importSource: readImportSource(db, row.id),
+        importUnfinished: readImportUnfinished(db, row.id),
+      })),
   );
 
   app.get('/api/projects/active', async (): Promise<ActiveProjectPreference> => {
@@ -763,7 +768,11 @@ export function registerProjectRoutes(
           .values({ projectId: id, settings: { importSource, ...(importClone ? { importClone } : {}) } })
           .run();
       });
-      const project: Project = { ...projectResponse(row), importSource };
+      const project: Project = {
+        ...projectResponse(row),
+        importSource,
+        importUnfinished: importClone !== undefined,
+      };
       const ownKey = awaitingKey ? generateKey(db, { projectId: id, slug }) : null;
 
       saveActiveProjectId(project.id);
