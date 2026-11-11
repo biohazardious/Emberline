@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-11
+
+A security release with a compose change: Emberline's own commands move out of the agents' reach (a new `ops` service, and the runner's service and the Live Browser's daemon under users of their own), and Emberline reaches ssh repositories with SSH keys it makes and keeps in core, like forge tokens. Read the upgrade notes first: the compose file changes, and projects with an ssh origin need an Emberline key.
+
 ### Added
 
 - **Settings → SSH key.** Emberline now makes an SSH key (ed25519) of its own, shared by every project, and shows its public key, fingerprint and date with **Copy**, **New key** and **Delete** (both ask first). Add the public key to GitHub (Settings → SSH and GPG keys), GitLab (Preferences → SSH Keys) or your own server, and Emberline imports, refreshes and pushes repositories with an ssh address (`git@github.com:you/app.git`, `ssh://…`) with it. The private key stays in core's database, encrypted like forge tokens: it never reaches the runner, an agent or the browser.
@@ -607,7 +611,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/biohazardious/emberline/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/biohazardious/emberline/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/biohazardious/emberline/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/biohazardious/emberline/compare/v0.5.2...v0.6.0
