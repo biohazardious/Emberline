@@ -80,16 +80,32 @@ export function deleteKey(db: Db, scope: SshKeyScope): boolean {
   );
 }
 
+function openPrivateKey(sealed: string): string {
+  if (!isSealed(sealed)) throw new SecretsKeyError('an SSH key is stored without encryption');
+  try {
+    return openWith(installedSecretsKey(), sealed);
+  } catch {
+    throw new SecretsKeyError('ssh_keys could not be decrypted with this key', { keyLost: true });
+  }
+}
+
 /** The OpenSSH private key, opened in memory: for the git gateway only. Null without a key. */
 export function privateKeyFor(db: Db, scope: SshKeyScope): string | null {
   const row = rowFor(db, scope);
   if (!row) return null;
-  if (!isSealed(row.privateKeyEnc)) throw new SecretsKeyError('an SSH key is stored without encryption');
-  try {
-    return openWith(installedSecretsKey(), row.privateKeyEnc);
-  } catch {
-    throw new SecretsKeyError('ssh_keys could not be decrypted with this key', { keyLost: true });
-  }
+  return openPrivateKey(row.privateKeyEnc);
+}
+
+/**
+ * The private key with the given id and its scope, opened in memory: for a gateway capability
+ * bound to that key id. Null once that key was replaced or deleted (the scope's key has another id
+ * or none), so a bound operation never uses a key it was not given.
+ */
+export function privateKeyById(db: Db, keyId: string): { scope: SshKeyScope; privateKey: string } | null {
+  const row = db.select().from(sshKeys).where(eq(sshKeys.id, keyId)).get();
+  if (!row) return null;
+  const scope: SshKeyScope = row.projectId === null ? 'shared' : { projectId: row.projectId };
+  return { scope, privateKey: openPrivateKey(row.privateKeyEnc) };
 }
 
 /**

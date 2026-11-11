@@ -1,8 +1,9 @@
 /**
  * SSH host keys for core's ssh remotes: the pinned keys of GitHub, GitLab and Bitbucket
  * (@emberline/protocol, the same list as the runner image's /etc/ssh/ssh_known_hosts) and the keys a
- * person trusted (`ssh_host_keys`). A changed key is never replaced by trusting the new one: the
- * stored key is removed explicitly first (Settings), and a pinned key cannot be replaced here.
+ * person trusted (`ssh_host_keys`). A host:port with known keys accepts only those: any other key is
+ * `changed`, never replaced by trusting it; a stored key is removed explicitly first (Settings), and
+ * a pinned host's keys cannot be changed here.
  */
 import { createHash } from 'node:crypto';
 import { PINNED_SSH_HOST_KEYS } from '@emberline/protocol';
@@ -53,20 +54,33 @@ export function pinnedHostKeys(): readonly HostKeyEntry[] {
 
 const sameKey = (a: string, b: string): boolean => Buffer.from(a, 'base64').equals(Buffer.from(b, 'base64'));
 
-const pinnedFor = (host: string, port: number, keyType: string) =>
-  pinnedHostKeys().filter((k) => k.host === host && k.port === port && k.keyType === keyType);
-
-const trustedRow = (db: Db, host: string, port: number, keyType: string) =>
-  db
+/**
+ * The keys known for a host:port: its pinned keys when it has any (then nothing stored counts),
+ * otherwise the keys a person trusted for it. Another port is another server.
+ */
+function knownKeys(
+  db: Db,
+  host: string,
+  port: number,
+): { source: 'pinned'; keys: readonly HostKeyEntry[] } | { source: 'trusted'; keys: TrustedHostKey[] } {
+  const pins = pinnedHostKeys().filter((k) => k.host === host && k.port === port);
+  if (pins.length > 0) return { source: 'pinned', keys: pins };
+  const keys = db
     .select()
     .from(sshHostKeys)
-    .where(and(eq(sshHostKeys.host, host), eq(sshHostKeys.port, port), eq(sshHostKeys.keyType, keyType)))
-    .get();
+    .where(and(eq(sshHostKeys.host, host), eq(sshHostKeys.port, port)))
+    .all();
+  return { source: 'trusted', keys };
+}
+
+const matching = <T extends HostKeyEntry>(keys: readonly T[], keyType: string, keyBase64: string) =>
+  keys.find((k) => k.keyType === keyType && sameKey(k.key, keyBase64));
 
 /**
- * What a server's host key is to core: one of the pinned keys, one a person trusted, a host:port
- * and key type nothing is known for, or `changed` when another key of that type is pinned or
- * trusted for that host:port. Another port is another server.
+ * What a server's host key is to core (Ruling 16): `pinned` or `trusted` when it is exactly one of
+ * the keys known for that host:port, `changed` for any other key while some are known (whatever its
+ * type, so a server offering a type nothing is known for cannot be trusted past the known ones),
+ * `unknown` only for a host:port with no pinned and no trusted key.
  */
 export function hostKeyStatus(
   db: Db,
@@ -75,12 +89,9 @@ export function hostKeyStatus(
   keyType: string,
   keyBase64: string,
 ): HostKeyStatus {
-  const h = host.toLowerCase();
-  const pins = pinnedFor(h, port, keyType);
-  if (pins.length > 0) return pins.some((k) => sameKey(k.key, keyBase64)) ? 'pinned' : 'changed';
-  const row = trustedRow(db, h, port, keyType);
-  if (!row) return 'unknown';
-  return sameKey(row.key, keyBase64) ? 'trusted' : 'changed';
+  const known = knownKeys(db, host.toLowerCase(), port);
+  if (known.keys.length === 0) return 'unknown';
+  return matching(known.keys, keyType, keyBase64) ? known.source : 'changed';
 }
 
 const HOST_RE = /^[a-z0-9._:-]{1,253}$/;
@@ -103,27 +114,27 @@ function checkedEntry(entry: HostKeyEntry): HostKeyEntry {
 }
 
 /**
- * Stores a host key a person chose to trust. The same key again changes nothing; another key for
- * a host:port and type that already has one (stored or pinned) is refused (`host_key_changed`).
+ * Stores a host key a person chose to trust, for a host:port nothing is known for. The same key
+ * again changes nothing; any other key for a host:port that has pinned or trusted keys is refused
+ * (`host_key_changed`): a stored key is removed in Settings first, a pinned one never.
  */
 export function trustHostKey(db: Db, entry: HostKeyEntry): TrustedHostKey {
   const e = checkedEntry(entry);
   const where = `${e.host}:${e.port}`;
-  const pins = pinnedFor(e.host, e.port, e.keyType);
-  if (pins.length > 0) {
-    if (pins.some((k) => sameKey(k.key, e.key))) {
+  const known = knownKeys(db, e.host, e.port);
+  if (known.source === 'pinned') {
+    if (matching(known.keys, e.keyType, e.key))
       throw conflict(`${where} uses the ${e.keyType} host key Emberline ships; there is nothing to trust`);
-    }
     throw conflict(
-      `${where} has a pinned ${e.keyType} host key and this is not it; it cannot be replaced`,
+      `${where} has pinned host keys and this is not one of them; it cannot be trusted`,
       'host_key_changed',
     );
   }
-  const existing = trustedRow(db, e.host, e.port, e.keyType);
-  if (existing) {
-    if (sameKey(existing.key, e.key)) return existing;
+  const same = matching(known.keys, e.keyType, e.key);
+  if (same) return same;
+  if (known.keys.length > 0) {
     throw conflict(
-      `another ${e.keyType} host key is trusted for ${where}; remove it in Settings first`,
+      `another host key is trusted for ${where}; remove it in Settings first`,
       'host_key_changed',
     );
   }

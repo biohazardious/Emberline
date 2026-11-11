@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Db, openDb } from '../db/index.js';
 import { projects, sshKeys } from '../db/schema.js';
 import { installedSecretsKey, installSecretsKey, SecretsKeyError } from '../secrets/box.js';
-import { deleteKey, generateKey, getPublicKey, keyForProject, privateKeyFor } from './store.js';
+import {
+  deleteKey,
+  generateKey,
+  getPublicKey,
+  keyForProject,
+  privateKeyById,
+  privateKeyFor,
+} from './store.js';
 
 /** `ssh-keygen` reading the key from stdin (`-f -`): no key file is written. */
 const keygen = (args: string[], input: string) =>
@@ -191,5 +198,28 @@ describe('keyForProject (the chosen key)', () => {
     // A project key does not stand in for a deleted shared key.
     generateKey(db, { projectId: 'p1', slug: 'p1' });
     expect(keyForProject(db, project('p1'))).toBeNull();
+  });
+});
+
+describe('privateKeyById (a capability bound to a key id)', () => {
+  it('opens the key with its scope while that id is the current key, null once replaced or deleted', () => {
+    addProject('p1');
+    generateKey(db, 'shared');
+    generateKey(db, { projectId: 'p1', slug: 'p1' });
+    const sharedId = keyForProject(db, { id: 'p1', sshKeyChoice: 'shared' })!.keyId;
+    const ownId = keyForProject(db, { id: 'p1', sshKeyChoice: 'own' })!.keyId;
+    expect(privateKeyById(db, sharedId)).toEqual({
+      scope: 'shared',
+      privateKey: privateKeyFor(db, 'shared'),
+    });
+    expect(privateKeyById(db, ownId)).toEqual({
+      scope: { projectId: 'p1' },
+      privateKey: privateKeyFor(db, { projectId: 'p1' }),
+    });
+    generateKey(db, 'shared');
+    expect(privateKeyById(db, sharedId)).toBeNull();
+    deleteKey(db, { projectId: 'p1' });
+    expect(privateKeyById(db, ownId)).toBeNull();
+    expect(privateKeyById(db, 'no-such-id')).toBeNull();
   });
 });

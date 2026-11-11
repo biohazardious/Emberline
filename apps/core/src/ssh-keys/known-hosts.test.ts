@@ -22,11 +22,11 @@ beforeEach(() => {
 afterEach(() => opened.close());
 
 /** A fresh host key as a server would offer it: type and base64 blob. */
-const hostKey = (type: 'ed25519' | 'ecdsa' = 'ed25519') => {
+const hostKey = (type: 'ed25519' | 'ecdsa' | 'ecdsa521' = 'ed25519') => {
   const pub = (
-    type === 'ecdsa'
-      ? utils.generateKeyPairSync('ecdsa', { bits: 256 })
-      : utils.generateKeyPairSync('ed25519')
+    type === 'ed25519'
+      ? utils.generateKeyPairSync('ed25519')
+      : utils.generateKeyPairSync('ecdsa', { bits: type === 'ecdsa' ? 256 : 521 })
   ).public;
   const [keyType, key] = pub.split(' ') as [string, string];
   return { keyType, key };
@@ -124,10 +124,44 @@ describe('hostKeyStatus', () => {
     expect(hostKeyStatus(db, 'git.example.com', 22, k.keyType, k.key)).toBe('trusted');
     expect(hostKeyStatus(db, 'Git.Example.com', 22, k.keyType, k.key)).toBe('trusted');
     expect(hostKeyStatus(db, 'git.example.com', 22, k.keyType, hostKey().key)).toBe('changed');
-    // Another port is another server; another key type is not a change.
+    // Another port is another server.
     expect(hostKeyStatus(db, 'git.example.com', 2222, k.keyType, k.key)).toBe('unknown');
+  });
+
+  it('a trusted host offering a key of another type is changed, and that key cannot be trusted', () => {
+    const k = hostKey();
+    trustHostKey(db, { host: 'git.example.com', port: 22, ...k });
     const ecdsa = hostKey('ecdsa');
-    expect(hostKeyStatus(db, 'git.example.com', 22, ecdsa.keyType, ecdsa.key)).toBe('unknown');
+    expect(hostKeyStatus(db, 'git.example.com', 22, ecdsa.keyType, ecdsa.key)).toBe('changed');
+    expect(() => trustHostKey(db, { host: 'git.example.com', port: 22, ...ecdsa })).toThrow(
+      expect.objectContaining({ code: 'host_key_changed' }),
+    );
+    expect(listTrustedHostKeys(db)).toHaveLength(1);
+  });
+
+  it('a fresh host is unknown whatever it offers', () => {
+    for (const k of [hostKey(), hostKey('ecdsa'), hostKey('ecdsa521')]) {
+      expect(hostKeyStatus(db, 'fresh.example.com', 22, k.keyType, k.key)).toBe('unknown');
+    }
+  });
+
+  it('a pinned host offering a type nothing is pinned for is changed, never unknown', () => {
+    const p521 = hostKey('ecdsa521');
+    expect(p521.keyType).toBe('ecdsa-sha2-nistp521');
+    for (const [host, port] of [
+      ['github.com', 22],
+      ['ssh.github.com', 443],
+      ['gitlab.com', 22],
+      ['bitbucket.org', 22],
+    ] as const) {
+      expect(hostKeyStatus(db, host, port, p521.keyType, p521.key)).toBe('changed');
+      // GitHub's own ed25519 blob named as another type is not a match either.
+      expect(hostKeyStatus(db, host, port, 'ssh-dss', GITHUB_ED25519)).toBe('changed');
+      expect(() => trustHostKey(db, { host, port, ...p521 })).toThrow(
+        expect.objectContaining({ code: 'host_key_changed' }),
+      );
+    }
+    expect(listTrustedHostKeys(db)).toEqual([]);
   });
 
   it('a changed key stays changed until the stored one is removed', () => {
