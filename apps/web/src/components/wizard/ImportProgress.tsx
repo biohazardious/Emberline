@@ -206,6 +206,16 @@ export function ImportProgress({
     (phase.kind === 'awaitingKey' && phase.sshKey !== null) ||
     keys?.choice === 'own' ||
     (keys?.key ?? null) !== null;
+  /**
+   * Whether the project holds its own key now, as last learned (its keys read, or the wait showing
+   * the key): only then does Cancel say it removes that key (Ruling 28). A choice of its own key whose
+   * key was deleted has none to remove. Kept while nothing new is known (a clone running, busy).
+   */
+  const ownKeyNow =
+    keys !== null ? keys.key !== null : phase.kind === 'awaitingKey' ? phase.sshKey !== null : null;
+  const [ownKeyKnown, setOwnKeyKnown] = useState(false);
+  if (ownKeyNow !== null && ownKeyNow !== ownKeyKnown) setOwnKeyKnown(ownKeyNow);
+  const hasOwnKey = ownKeyNow ?? ownKeyKnown;
 
   /** Removes the failed project and registers it again from the same body (a new clone). */
   const recreate = async (before: Phase) => {
@@ -262,9 +272,9 @@ export function ImportProgress({
         !leftover
           ? errorMessage(err)
           : keepProject
-            ? `The failed clone left files in the project's folder (${err.message}); Emberline never clones into them or removes them. Remove what is in the folder (from a terminal, say), then try again. Cancel removes the project with its folder${ownKey ? ' and its own key' : ''}.`
+            ? `The failed clone left files in the project's folder (${err.message}); Emberline never clones into them or removes them. Remove what is in the folder (from a terminal, say), then try again. Cancel removes the project with its folder${hasOwnKey ? ' and its own key' : ''}.`
             : ownKey
-              ? `The failed clone left files in the project's folder (${err.message}). Cancel removes the project and its key; then import it again.`
+              ? `The failed clone left files in the project's folder (${err.message}). Cancel removes the project${hasOwnKey ? ' and its own key' : ''}; then import it again.`
               : `The failed clone left files in the project's folder (${err.message}). Try again in a moment, or Cancel removes the project; then import it again.`,
       );
       setPhase(before);
@@ -506,7 +516,7 @@ export function ImportProgress({
           </button>
         </div>
       )}
-      {source === 'import_url' && ownKey && (failed || waiting || phase.kind === 'cloning') && (
+      {source === 'import_url' && hasOwnKey && (failed || waiting || phase.kind === 'cloning') && (
         <p className="muted small">
           Cancel removes the project and its own key. If you already added the key to the repository, remove
           the deploy key there too.

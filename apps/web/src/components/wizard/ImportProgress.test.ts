@@ -169,6 +169,38 @@ describe('ImportProgress: own key waits for the forge (Ruling 21)', () => {
   });
 });
 
+describe('ImportProgress: Cancel names the own key only while the project has one (Ruling 28)', () => {
+  it('a waiting project whose key was deleted: no own key on Cancel; once made again, it is named', async () => {
+    statuses = [{ status: 'awaiting_key', exitCode: null, terminalId: null, tail: '', sshKey: null }];
+    keyState = { choice: 'own', key: null, shared: null };
+    await mount({ createBody: { ...sshBody, sshKeyChoice: 'own' } });
+    await waitFor(() => expect(text()).toContain("This project's key was deleted"));
+    expect(text()).not.toContain('its own key');
+    await click(getButton("Create this project's key"));
+    await waitFor(() => expect(text()).toContain('ssh-ed25519 AAAAown emberline-own'));
+    expect(text()).toContain('Cancel removes the project and its own key.');
+  });
+
+  it('keeps naming the key while the clone of a waiting project runs', async () => {
+    statuses = [
+      {
+        status: 'awaiting_key',
+        exitCode: null,
+        terminalId: null,
+        tail: '',
+        sshKey: { publicKey: 'ssh-ed25519 AAAAown x', fingerprint: 'SHA256:own' },
+      },
+      { status: 'cloning', exitCode: null, terminalId: 't2', tail: 'Cloning…' },
+      { status: 'cloning', exitCode: null, terminalId: 't2', tail: 'Cloning…' },
+    ];
+    await mount({ createBody: { ...sshBody, sshKeyChoice: 'own' } });
+    await waitFor(() => expect(queryButton('Clone now')).not.toBeNull());
+    await click(getButton('Clone now'));
+    await waitFor(() => expect(text()).toContain('Cloning the repository…'));
+    expect(text()).toContain('Cancel removes the project and its own key.');
+  });
+});
+
 describe('ImportProgress: ssh clone failures', () => {
   it('host_key_unknown: trust after comparing, then clone again keeping the project', async () => {
     statuses = [failed({ code: 'host_key_unknown', hostKey, reason: 'git.example.com is not known.' })];
@@ -309,6 +341,10 @@ describe('ImportProgress: a failed clone left files in the folder (directory_exi
     await waitFor(() => expect(text()).toContain("left files in the project's folder"));
     expect(calls).toEqual(['import-clone']);
     expect(handlers.onRecreated).not.toHaveBeenCalled();
+    // Its key is gone: Cancel removes no key (Ruling 28).
+    expect(text()).toContain('Cancel removes the project; then import it again.');
+    expect(text()).not.toContain('its own key');
+    expect(text()).not.toContain('and its key');
   });
 
   it('keepProject (Project settings): never removes the project, says what to do about the folder', async () => {
@@ -327,6 +363,32 @@ describe('ImportProgress: a failed clone left files in the folder (directory_exi
     expect(text()).toContain('then try again');
     expect(calls).toEqual(['import-clone']);
     expect(handlers.onRecreated).not.toHaveBeenCalled();
+  });
+
+  it('keepProject: the folder note names the own key only when the project has one (Ruling 28)', async () => {
+    statuses = [failed({ code: 'ssh_key_missing', reason: MISSING_KEY_TEXT })];
+    keyState = { choice: 'own', key: null, shared: k('shared') };
+    withRoutes({
+      'POST /api/projects/p1/import-clone': () => {
+        calls.push('import-clone');
+        leftover();
+      },
+    });
+    await mount({ keepProject: true, createBody: { ...sshBody, sshKeyChoice: 'own' } });
+    await waitFor(() => expect(queryButton("Create this project's key")).not.toBeNull());
+    await click(getButton('Try again'));
+    await waitFor(() => expect(text()).toContain("left files in the project's folder"));
+    expect(text()).toContain('Cancel removes the project with its folder.');
+    expect(text()).not.toContain('its own key');
+    await cleanup();
+
+    statuses = [failed({ code: 'auth_refused', reason: 'refused' })];
+    keyState = { choice: 'own', key: k('own'), shared: k('shared') };
+    await mount({ keepProject: true, createBody: { ...sshBody, sshKeyChoice: 'own' } });
+    await waitFor(() => expect(text()).toContain('ssh-ed25519 AAAAown emberline-own'));
+    await click(getButton('Try again'));
+    await waitFor(() => expect(text()).toContain("left files in the project's folder"));
+    expect(text()).toContain('Cancel removes the project with its folder and its own key.');
   });
 
   it('confirmCancel: Cancel asks first; no removes nothing', async () => {

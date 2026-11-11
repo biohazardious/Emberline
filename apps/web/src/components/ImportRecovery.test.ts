@@ -92,6 +92,45 @@ describe('ImportRecovery (Project settings → Repository)', () => {
     }
   });
 
+  it('names the own SSH key in the question only when the project has one (Ruling 28)', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      // Choice own, its key deleted: nothing to remove from the deploy keys.
+      await renderDom(createElement(ImportRecovery, { project }), { path: '/projects/p1/settings' });
+      await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith('/api/projects/p1/ssh-key'));
+      await settle(30);
+      await click(getButton('Cancel and remove the project'));
+      expect(confirm.mock.calls[0]?.[0]).toBe('Remove Shop? Its folder goes too.');
+      await cleanup();
+
+      const base = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async (path: string, method = 'GET', body?: unknown) => {
+        if (path === '/api/projects/p1/ssh-key')
+          return {
+            choice: 'own',
+            key: {
+              publicKey: 'ssh-ed25519 AAAAown emberline-shop',
+              fingerprint: 'SHA256:own',
+              createdAt: '2026-11-10T09:00:00.000Z',
+              algorithm: 'ed25519',
+            },
+            shared: null,
+          } as never;
+        return base(path, method, body) as never;
+      });
+      await renderDom(createElement(ImportRecovery, { project }), { path: '/projects/p1/settings' });
+      await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith('/api/projects/p1/ssh-key'));
+      await settle(30);
+      await click(getButton('Cancel and remove the project'));
+      expect(confirm.mock.calls[1]?.[0]).toContain(
+        "with its own SSH key (remove it from the repository's deploy keys too)",
+      );
+      expect(text()).toContain('Cancel removes the project and its own key.');
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
   it('a failed clone that left files: the project stays, and the folder is explained', async () => {
     status = { status: 'failed', exitCode: 128, terminalId: 't1', tail: 'fatal' };
     const base = vi.mocked(api).getMockImplementation()!;

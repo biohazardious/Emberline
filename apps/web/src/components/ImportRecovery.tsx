@@ -79,9 +79,8 @@ export function ImportRecovery({ project }: { project: Project }) {
         }}
         keepProject
         confirmCancel={`Remove ${project.name}? Its folder goes too${
-          keys.data?.choice === 'own' || keys.data?.key
-            ? ", with its own SSH key (remove it from the repository's deploy keys too)"
-            : ''
+          // Only a key the project holds (read, and there) is named (Ruling 28).
+          keys.data?.key ? ", with its own SSH key (remove it from the repository's deploy keys too)" : ''
         }.`}
         onDetected={() => {
           setDone(true);
