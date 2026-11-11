@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, createPrivateKey, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { utils } from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import { projects, sshKeys } from '../db/schema.js';
 import { installedSecretsKey, installSecretsKey, SecretsKeyError } from '../secrets/box.js';
 import {
   deleteKey,
+  ed25519KeyPair,
   generateKey,
   getPublicKey,
   keyForProject,
@@ -150,6 +151,37 @@ describe('SSH keys', () => {
   it('a key for a project that does not exist is refused', () => {
     expect(() => generateKey(db, { projectId: 'nope', slug: 'nope' })).toThrow();
     expect(db.select().from(sshKeys).all()).toHaveLength(0);
+  });
+});
+
+describe('ed25519KeyPair', () => {
+  /** A seed whose public key starts with a zero byte (one in 256 does). */
+  const zeroLeadingSeed = () => {
+    for (let i = 0; ; i++) {
+      const seed = createHash('sha256').update(String(i)).digest();
+      const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]);
+      const x = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' }).export({ format: 'jwk' }).x!;
+      if (Buffer.from(x, 'base64url')[0] === 0) return seed;
+    }
+  };
+
+  it('writes the key pair OpenSSH and ssh2 read, also when the public key starts with a zero byte', () => {
+    for (const seed of [zeroLeadingSeed(), randomBytes(32)]) {
+      const pair = ed25519KeyPair('emberline', seed);
+      expect(pair.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43} emberline$/);
+      // OpenSSH derives the same public key from the private one.
+      // (Through cat: Node's stdin for a child is a socket, which ssh-keygen cannot open as a file.)
+      const derived = execFileSync('sh', ['-c', 'cat | ssh-keygen -y -f /dev/stdin'], {
+        input: pair.privateKey,
+        encoding: 'utf8',
+      }).trim();
+      expect(derived).toBe(pair.publicKey);
+      const parsed = utils.parseKey(pair.privateKey);
+      if (parsed instanceof Error) throw parsed;
+      expect(parsed.getPublicSSH().toString('base64')).toBe(pair.publicKey.split(' ')[1]);
+      const data = randomBytes(64);
+      expect(parsed.verify(data, parsed.sign(data))).toBe(true);
+    }
   });
 });
 
