@@ -32,6 +32,7 @@ import { registerDockerRoutes } from './routes/docker.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerForgeRoutes } from './routes/forge.js';
 import { registerForgeAccountRoutes } from './routes/forge-accounts.js';
+import { registerSshKeyRoutes } from './routes/ssh-keys.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
@@ -281,6 +282,7 @@ export async function buildServer(
   registerNotificationRoutes(app, notifications);
   registerForgeRoutes(app, forge);
   registerForgeAccountRoutes(app, forge.accounts, deps.db);
+  registerSshKeyRoutes(app, deps.db);
   registerRepositoryRoutes(app, repository);
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
