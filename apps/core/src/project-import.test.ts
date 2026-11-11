@@ -1131,27 +1131,23 @@ describe('GET /api/projects/:id/import-status', () => {
     expect(readFileSync(path.join(left.project.path, 'f'), 'utf8')).toBe('x\n');
   });
 
-  it('a host key that is not the one the runner knows fails with what to check', async () => {
-    // ssh's words when the key in known_hosts differs (strict checking, no prompt).
+  it("ssh's own host key words get no advice about the runner's known_hosts (ssh goes through the gateway)", async () => {
+    // A clone git ran straight to an ssh server no longer exists: no reason sends anyone to edit the
+    // runner's known_hosts; the failure shows git's own tail, as any other.
     const { project } = await importUrl('Changed Key', () => ({
       file: 'sh',
       args: [
         '-c',
-        'echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" >&2; ' +
-          'echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2; ' +
-          'echo "Host key for github.com has changed and you have requested strict checking." >&2; ' +
+        'echo "Host key for github.com has changed and you have requested strict checking." >&2; ' +
           'echo "Host key verification failed." >&2; exit 128',
       ],
     }));
     await vi.waitFor(async () => expect((await status(project.id)).status).toBe('failed'), {
       timeout: 10_000,
     });
-    expect((await status(project.id)).reason).toBe(
-      'The SSH host key of github.com is not the one the runner knows, so it did not connect: ' +
-        'the host changed its key, or something between is pretending to be it. ' +
-        'Check the fingerprint your Git host publishes; if the key really changed, replace it in the ' +
-        "runner's known_hosts (for GitHub, GitLab or Bitbucket, update Emberline), then try again.",
-    );
+    const failed = await status(project.id);
+    expect(failed.reason).toBeUndefined();
+    expect(JSON.stringify(failed)).not.toContain("runner's known_hosts");
   });
 
   it("once cloned, the default branch is the clone's checked-out branch (runs merge into it)", async () => {
