@@ -286,7 +286,8 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       logic, and the scheduler keeps its queue and quota pauses in SQLite (§3.3). `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
       Event retention (`runs/event-retention.ts`, `EMBERLINE_EVENT_RETENTION_DAYS`, default 90, `0` off) compacts old `done`
       runs to their state changes, summary, handoff note and usage totals (`run_event_compactions`); `event-indexes.test.ts`
-      holds the inbox and board under 50 ms on a seeded 100k-event database and pins the hot query plans.
+      holds the inbox and board to a fixed number of statements, none scanning `run_events`, on a seeded 100k-event
+      database and pins the hot query plans.
 - [x] **M3 — Board, runs and review in the browser:**
       The board (create, drag between columns, dependencies, start/prompt runs, review, accept/merge, export) and its bulk actions
       (`ticket-bulk-route.test.ts`, `boardBulkBar.test.ts`, `boardSelection.test.ts`) are covered end to end through the REST API
