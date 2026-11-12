@@ -5,12 +5,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import {
-  isPermissionNotification,
-  type AgentState,
-  type RateLimitInfo,
-  stateAfterExit,
-} from '@emberline/adapter-sdk';
+import { isPermissionNotification, type RateLimitInfo } from '@emberline/adapter-sdk';
 import { CONTINUE_PROMPT, PERSONA_CATALOG, personaBrief } from '@emberline/adapter-claude';
 import {
   type AgentId,
@@ -83,7 +78,6 @@ import {
   lt,
   ne,
   notInArray,
-  or,
   sql,
 } from 'drizzle-orm';
 import type { CoreConfig } from '../config.js';
@@ -145,7 +139,6 @@ import { stripControlChars } from '../text/control-chars.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { BuildOutputArchive } from '../outputs/archive.js';
 import { openFileUnder, realDirUnder, streamOpenedFile } from '../outputs/safe-fs.js';
-import { mainWorkspaceBranch } from '../factory/merge.js';
 import { browserFilesFor, ensureRunnerBrowserDaemon, RUNNER_BROWSER_DIR } from '../factory/browser-daemon.js';
 import {
   BROWSER_AGENT_WINDOW_MS,
@@ -162,7 +155,32 @@ import {
   resolveRunRoutes,
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
-import { auditWorktreeSlop } from '../factory/slop-guard.js';
+import { assertCommitSecretFree } from './gates.js';
+import {
+  applyRunEvent,
+  atPrompt,
+  AUTO_RETRY_DELAYS_MS,
+  exitTransition,
+  hookTransition,
+  minutesOf,
+  openRunStep,
+  type RunEventInput,
+  STALL_WATCHDOG_MS,
+  STARTING_WATCHDOG_MS,
+  stopTransition,
+  WAITING_INPUT_TIMEOUT_MS,
+} from './lifecycle.js';
+import {
+  assertNothingToLose,
+  KeptWorktrees,
+  lazyMergeTarget,
+  prepareRunWorkspace,
+  pruneWithReclaim,
+  runStillActive,
+  type TeardownOwner,
+  WorktreeTeardowns,
+  worktreeSharedWith,
+} from './worktree.js';
 import { DemoTokens } from '../demo-token.js';
 import { agentDemoUrl } from '../factory/demo-target.js';
 import { AGENT_PREVIEW_COOLDOWN_MS, AGENT_PREVIEW_WAIT_MS, agentPreview } from './agent-preview.js';
@@ -180,15 +198,10 @@ import {
   readReviewSide,
   listBuildOutputs,
   listWorktreeArtifacts,
-  prepareWorkspace,
-  pruneWorktree,
   pushWorktreeBranch,
   readWorktreeArtifact,
   resolveSafeWorktreePath,
   stageWorktreeFiles,
-  worktreeHasUncommittedWork,
-  worktreeHasUnmergedCommits,
-  worktreeHeadSha,
 } from './git.js';
 import {
   buildHandoffPrompt,
@@ -202,9 +215,7 @@ import { providerAdapter } from './providers.js';
 import { detectPreviewCommand } from './preview-command.js';
 import { cancelCommand } from '../command-exec.js';
 import {
-  copyIntoWorktree,
   type CopyOutcome,
-  notIgnoredPaths,
   runWorktreeCommand,
   SETUP_TIMEOUT_MS,
   SETUP_TOTAL_MS,
@@ -396,36 +407,8 @@ interface ComposeJob {
   done: Promise<void>;
 }
 
-/** Events that never become a run's `lastEvent`. */
-const BOOKKEEPING_EVENT_TYPES = new Set([
-  'last_screen',
-  'completion_tool_ready',
-  // The issue write-back reports on the run; it is not something the run did.
-  'issue_commented',
-  'issue_comment_failed',
-  'issue_closed',
-  'issue_close_failed',
-  // A compose preview's background start ended; the run did nothing.
-  'preview_ready',
-  'preview_failed',
-  // A person stopped or removed the run's compose project on the Docker page.
-  'docker_project_stopped',
-  'docker_project_removed',
-  // The pipeline's own records: the critic ran, where a shared worktree's outputs went.
-  'critic_reviewed',
-  'build_outputs_archive_shared',
-]);
-/** How a pre-prune archive pass went (BuildOutputArchive.archiveBeforePrune). */
-type ArchiveOutcome = 'archived' | 'timeout' | 'failed';
 /** Runs pruned per pass, so the first pass on a big database cannot block the event loop for long; the rest follow on the next reconcile. */
 const PRUNE_RUNS_PER_PASS = 10;
-/**
- * An agent idling at its prompt after finishing is closed after this long. Sessions that can be
- * resumed (`claude --resume`) close soon; CLIs without a session id would lose follow-ups, so they
- * stay open much longer (B19).
- */
-const IDLE_DONE_RESUMABLE_TTL_MS = 2 * 60_000;
-const IDLE_DONE_NON_RESUMABLE_TTL_MS = 30 * 60_000;
 const AUTO_GC_KEEP_RECENT_PER_PROJECT = 10;
 /** Time all pre-prune archive passes of one auto-GC pass may take together. */
 export const AUTO_GC_ARCHIVE_BUDGET_MS = 60_000;
@@ -439,33 +422,10 @@ const AUTO_GC_MIN_ARCHIVE_MS = 5_000;
  */
 export const MANUAL_GC_ARCHIVE_BUDGET_MS = 60_000;
 
-type KeptWorktreeReason = GarbageCollectRunsResponse['keptWorktrees'][number]['reason'];
-/** Auto-GC re-runs git on a kept worktree whose HEAD has not moved at most this often. */
-const KEPT_WORKTREE_RECHECK_MS = 10 * 60_000;
-/** A run still `starting` without a terminal after this long lost its spawn (e.g. core restarted). */
-const STARTING_WATCHDOG_MS = 3 * 60_000;
-/**
- * An unattended run waiting this long on a permission prompt, or since it was found stalled, is
- * stopped as failed (R6).
- */
-export const WAITING_INPUT_TIMEOUT_MS = 30 * 60_000;
-/**
- * A `working` run, or a `starting` one with a terminal (e.g. a live resume whose CONTINUE produced no
- * hook), with no hook and an unchanged screen this long is taken as stalled (a missed hook, a hung
- * CLI): it becomes `waiting_input`, which frees its slot and pages the user (R7).
- */
-export const STALL_WATCHDOG_MS = 20 * 60_000;
-/** Whole minutes of a duration, for user-facing copy. */
-export const minutesOf = (ms: number) => Math.round(ms / 60_000);
 /** How often the stall watchdog looks at a working run's screen. */
 const STALL_SCREEN_SAMPLE_MS = 60_000;
 /** Screen lines hashed by the stall watchdog. */
 const STALL_SCREEN_LINES = 50;
-/**
- * States in which the CLI sits at its prompt, so text typed by Emberline itself (CONTINUE, nudges,
- * gate follow-ups) is read as the next turn. A rate-limited turn has ended on its limit.
- */
-const IDLE_STATES: ReadonlySet<string> = new Set<RunState>(['waiting_input', 'done', 'rate_limited']);
 /** 409 `session_closing`: a one-shot CLI is in its turn or exiting after it; a prompt respawns it once gone. */
 const SESSION_CLOSING = 'The agent is finishing its turn; try again in a moment.';
 const MAX_EVENTS_IN_DETAIL = 200;
@@ -492,11 +452,7 @@ const TOOL_INPUT_SUMMARY_MAX = 2_000;
 const LAST_SCREEN_LINES = 200;
 const LAST_SCREEN_MAX = 64 * 1024;
 
-/**
- * Waits before each automatic retry of a turn that died on a temporary provider error (503,
- * overloaded, network). After the last one the run is left for the user as before.
- */
-export const AUTO_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+export { AUTO_RETRY_DELAYS_MS, minutesOf, STALL_WATCHDOG_MS, WAITING_INPUT_TIMEOUT_MS } from './lifecycle.js';
 
 const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
@@ -582,8 +538,6 @@ function summarizePayload(payload: Record<string, unknown>): Record<string, unkn
 }
 
 /** A run that is live, or parked on a quota limit and still going to resume (not cancelled). */
-const runStillActive = () =>
-  or(isNull(runs.endedAt), and(eq(runs.state, 'rate_limited'), isNull(runs.cancelledAt)));
 
 /** The pipeline's own stop of a finished factory step: the only cancel a successor may continue. */
 export const FINISHED_STEP_STOP = 'factory_step_finished';
@@ -629,11 +583,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private reconcilePass: Promise<void> | null = null;
   private lastAutoGcAt = 0;
   private lastEventPruneAt = 0;
-  /** Auto-GC's last verdict on a kept worktree, by run id: the HEAD it saw and when. */
-  private readonly keptWorktreeChecks = new Map<
-    string,
-    { head: string | null; reason: KeptWorktreeReason; checkedAt: number }
-  >();
+  /** Garbage collection's verdicts on worktrees it must keep. */
+  private readonly keptWorktrees: KeptWorktrees;
+  /** Auto-GC's last verdict on a kept worktree, by run id (the keptWorktrees' cache). */
+  private readonly keptWorktreeChecks: KeptWorktrees['checks'];
   private readonly handoffLock = new KeyedMutex();
   /** Per run: typing a prompt into its session (and recording it) and closing the session never interleave. */
   private readonly sessionLock = new KeyedMutex();
@@ -649,19 +602,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   private readonly settingUp = new Set<string>();
   /** Runs whose completion pipeline (settle wait, checks, merge) is going; counted, passes can overlap. */
   private readonly pipelineBusyRuns = new Map<string, number>();
-  /** Runs whose worktree auto-GC is tearing down in the background before it prunes it. */
-  private readonly tearingDown = new Set<string>();
+  /** Background teardown-then-prune jobs by worktree, and the prune lock (see WorktreeTeardowns). */
+  private readonly teardowns = new WorktreeTeardowns({
+    teardown: (row, project) => this.teardownWorktree(row, project),
+    downComposeProjects: (row) => this.downWorktreeComposeProjects(row),
+    prune: (projectPath, worktreePath) => this.pruneRunWorktree(projectPath, worktreePath),
+  });
+  /** Runs whose worktree is being torn down before it is pruned (the teardowns' set). */
+  private readonly tearingDown = this.teardowns.tearingDown;
   /** How long a request waits for worktree.yml teardowns (overridable in tests). */
   readonly teardownBudgets = {
     request: REQUEST_TEARDOWN_BUDGET_MS,
     projectDelete: PROJECT_DELETE_TEARDOWN_BUDGET_MS,
   };
-  /** Background teardown-then-prune jobs by worktree path, so a project delete can wait for them. */
-  private readonly teardownJobs = new Map<string, Promise<void>>();
-  /** The run each of those jobs was started for, and how archiving the worktree's outputs went first. */
-  private readonly teardownJobRuns = new Map<string, { runId: string; archive?: ArchiveOutcome }>();
-  /** A prune's archive and the start of its teardown, one per worktree at a time (GC skips a locked one). */
-  private readonly pruneLock = new KeyedMutex();
   private log?: RunServiceLogger;
   /**
    * The Docker engine sidecar (on unless `EMBERLINE_DOCKER_ENGINE=0`); runs and worktree.yml commands use it while
@@ -723,6 +676,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       db,
     });
     this.demoTokens = new DemoTokens(db);
+    this.keptWorktrees = new KeptWorktrees(db);
+    this.keptWorktreeChecks = this.keptWorktrees.checks;
     this.mainPreviews = new MainPreviews({
       db,
       config,
@@ -1215,40 +1170,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const id = randomUUID();
     const short = id.slice(0, 8);
-    const workspace =
-      origin?.worktree ??
-      (await prepareWorkspace(
-        project.path,
-        path.join(this.config.workspacesDir, '.worktrees', project.slug, short),
-        origin?.branch ?? `emberline/run-${short}`,
-      ));
-    // A fresh worktree (not in place, not a shared one) gets the approved worktree.yml's lifecycle:
-    // `copy` now, before the run exists for the scheduler; `setup` at launch (spawnAgent).
-    const lifecycle =
-      !origin?.worktree && workspace.path !== project.path
-        ? loadApprovedWorktreeConfig(this.db, project.id)
-        : null;
-    const copied =
-      lifecycle && lifecycle.config.copy.length > 0
-        ? await copyIntoWorktree(
-            { trustedBase: this.config.workspacesDir, mainPath: project.path, worktreePath: workspace.path },
-            lifecycle.config.copy,
-          ).catch((error: unknown): CopyOutcome[] =>
-            lifecycle.config.copy.map((entry) => ({
-              path: entry.path,
-              mode: entry.mode,
-              status: 'skipped' as const,
-              reason: `copy failed: ${(error as Error).message.slice(0, 200)}`,
-            })),
-          )
-        : null;
-    // Copied files git would not ignore could be committed by the agent (a copied `.env`, say).
-    const notIgnored = copied
-      ? await notIgnoredPaths(
-          workspace.path,
-          copied.filter((c) => c.status !== 'skipped').flatMap((c) => [c.path, ...(c.secrets ?? [])]),
-        ).catch(() => null)
-      : null;
+    const { workspace, lifecycle, copied, notIgnored } = await prepareRunWorkspace({
+      db: this.db,
+      workspacesDir: this.config.workspacesDir,
+      project,
+      runShort: short,
+      ...(origin?.branch ? { branch: origin.branch } : {}),
+      ...(origin?.worktree ? { shared: origin.worktree } : {}),
+    });
 
     const now = new Date();
     this.db
@@ -1392,8 +1321,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     row = await this.afterOneShotExit(row);
     if (row.ptydSessionId && !row.endedAt) {
       // Typed into a CLI that is starting or mid-turn, it would be taken as part of that turn (R9).
-      if (!IDLE_STATES.has(row.state))
-        throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
+      if (!atPrompt(row.state)) throw conflict(`the agent is ${row.state}; continue it once it is waiting`);
       if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
       const live = await this.sessionLock.run(id, async () => {
         const current = this.row(id);
@@ -2116,26 +2044,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
     const provider = providerAdapter(row.agent);
     const limits = { model: runModel(row), timeZone: this.config.timeZone };
-    let next = live
-      ? provider.nextState(row.state as AgentState, envelope.event, envelope.payload, limits)
-      : undefined;
-    // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
-    // scheduler retry the turn, a few times with growing delays.
-    const transient = live
-      ? provider.transientErrorFromHook(envelope.event, envelope.payload, limits)
-      : undefined;
-    let retry: { attempt: number; at: Date } | undefined;
-    if (transient && row.autoRetryCount < AUTO_RETRY_DELAYS_MS.length) {
-      const attempt = row.autoRetryCount + 1;
-      retry = { attempt, at: new Date(Date.now() + (AUTO_RETRY_DELAYS_MS[attempt - 1] ?? 0)) };
-      next = row.state === 'rate_limited' ? undefined : 'rate_limited';
-      patch.autoRetryCount = attempt;
-      patch.autoRetryAt = retry.at;
-    } else if (envelope.event === 'Stop' && (row.autoRetryCount > 0 || row.autoRetryAt)) {
-      // The turn finished: later errors get their full set of retries again.
-      patch.autoRetryCount = 0;
-      patch.autoRetryAt = null;
-    }
+    const step = hookTransition(row, envelope, provider, limits, live);
+    Object.assign(patch, step.patch);
     const summary = summarizePayload(payload);
     // Claude's open question picker raises a permission prompt: the Notification carries the picker's
     // questions, so attention shows it as the agent's question rather than a permission.
@@ -2146,30 +2056,31 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const run = this.record(row.id, {
       source: 'hook',
       type: envelope.event,
-      state: next,
+      state: step.next,
       payload: summary,
       patch,
     });
-    if (retry && transient) {
+    const { retry } = step;
+    if (retry.kind === 'scheduled') {
       const max = AUTO_RETRY_DELAYS_MS.length;
       const minutes = Math.round((retry.at.getTime() - Date.now()) / 60_000);
       this.note(row.id, 'retry_scheduled', {
         attempt: retry.attempt,
         max,
         retryAt: retry.at.toISOString(),
-        reason: transient.message,
-        message: `Temporary provider error; retrying in ${minutes} min (attempt ${retry.attempt}/${max}): ${transient.message}`,
+        reason: retry.reason,
+        message: `Temporary provider error; retrying in ${minutes} min (attempt ${retry.attempt}/${max}): ${retry.reason}`,
       });
       return this.getRun(row.id);
     }
-    if (transient) {
+    if (retry.kind === 'gave_up') {
       this.note(row.id, 'retry_gave_up', {
-        attempts: row.autoRetryCount,
-        reason: transient.message,
-        message: `Gave up after ${row.autoRetryCount} automatic retries: ${transient.message}`,
+        attempts: retry.attempts,
+        reason: retry.reason,
+        message: `Gave up after ${retry.attempts} automatic retries: ${retry.reason}`,
       });
     }
-    if (next === 'rate_limited') {
+    if (step.next === 'rate_limited') {
       this.emit('rateLimited', run, provider.rateLimitFromHook(envelope.event, envelope.payload, limits));
     }
     return run;
@@ -2185,8 +2096,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const reasonPayload = opts.reason ? { reason: opts.reason } : undefined;
     const row = this.row(id);
     const cancelledAt = row.cancelledAt ?? new Date();
-    const live = Boolean(row.ptydSessionId && !row.endedAt);
-    if (row.state === 'queued' || (!live && row.state === 'rate_limited')) {
+    const transition = stopTransition(row, this.settingUp.has(id));
+    if (transition.kind === 'cancel') {
       return this.record(id, {
         source,
         type: 'cancelled',
@@ -2195,8 +2106,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         patch: { endedAt: row.endedAt ?? new Date(), cancelledAt },
       });
     }
-    if (row.endedAt) return this.withAttention([toRun(row)])[0] as Run;
-    if (this.settingUp.has(id) && !row.ptydSessionId) {
+    if (transition.kind === 'ended') return this.withAttention([toRun(row)])[0] as Run;
+    if (transition.kind === 'cancel_setup') {
       // Still in worktree setup: no agent to stop yet. The running setup command is killed (on a
       // runner older than ptyd protocol 3 it runs out); the setup then ends without spawning.
       const stopped = this.record(id, {
@@ -2216,7 +2127,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       payload: reasonPayload,
       patch: { cancelledAt },
     });
-    const sessionId = row.ptydSessionId;
+    const { sessionId } = transition;
     if (sessionId) {
       await this.ptyd
         .get()
@@ -2412,7 +2323,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       if (this.exitsAfterTurn(row)) throw conflict(SESSION_CLOSING, 'session_closing');
       if (row.state === 'starting')
         throw conflict('the agent is still starting; send your prompt once it is ready');
-      if (opts.automatic && !IDLE_STATES.has(row.state))
+      if (opts.automatic && !atPrompt(row.state))
         throw conflict(`the agent is ${row.state}; not interrupting it`);
       const stateBefore = this.latestStateEventId(id);
       await this.typePrompt(row.ptydSessionId, text);
@@ -2555,22 +2466,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
   async commit(id: string, body: GitCommitBody): Promise<GitCommitResponse> {
     const row = this.row(id);
-    const fSettings = effectiveFactorySettings(this.db, row.projectId);
-    if (fSettings.secretGuardGate && row.worktreePath) {
-      const report = await auditWorktreeSlop({
-        runId: id,
-        workspacePath: row.worktreePath,
-      }).catch(() => null);
-      if (report && !report.secretGuardPassed) {
-        const secretIssues = report.issues.filter((i) => i.category === 'secret_leak');
-        const first = secretIssues[0];
-        throw conflict(
-          `Pre-Commit Secret Guard blocked commit (${report.secretLeakCount} secret leak(s) detected)${
-            first ? ` — ${first.file}:${first.line}: ${first.message}` : ''
-          }`,
-        );
-      }
-    }
+    await assertCommitSecretFree(effectiveFactorySettings(this.db, row.projectId), id, row.worktreePath);
     const res = await commitWorktree(row.worktreePath, row.branch, body);
     this.record(id, {
       source: 'user',
@@ -2678,15 +2574,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Another run (e.g. a handoff successor) working in the same worktree. */
-  private worktreeSharedWith(row: RunRow, opts: { stillRunning?: boolean } = {}): RunRow | undefined {
-    const sharing = and(eq(runs.worktreePath, row.worktreePath), ne(runs.id, row.id));
-    return this.db
-      .select()
-      .from(runs)
-      .where(opts.stillRunning ? and(sharing, runStillActive()) : sharing)
-      .get();
-  }
-
   /**
    * Prunes the linked git worktree (`/workspaces/.worktrees/...`) for an ended run, keeping
    * the run record and git branch intact. Active runs must be stopped first.
@@ -2712,23 +2599,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       throw conflict('this run is waiting for its quota and will resume in this worktree; stop it first');
     }
     // Only a sharer that is still active blocks a manual prune; two ended runs must not lock each other out.
-    const shared = this.worktreeSharedWith(row, { stillRunning: true });
+    const shared = worktreeSharedWith(this.db, row, { stillRunning: true });
     if (shared) throw conflict(`run ${shared.id.slice(0, 8)} still works in this worktree`);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
-    if (!force && row.worktreePath !== project.path) {
-      const found = await this.worktreeWorkReason(row.worktreePath, project);
-      if (found) {
-        const { reason, branch } = found;
-        throw new HttpError(
-          409,
-          'worktree_has_work',
-          reason === 'uncommitted_changes'
-            ? 'This worktree has uncommitted changes that pruning would delete.'
-            : `This worktree has commits that are not in ${branch ?? 'the main branch'} yet. Merge the branch first, or prune anyway.`,
-        );
-      }
-    }
+    if (!force && row.worktreePath !== project.path) await assertNothingToLose(row.worktreePath, project);
     const recordPruned = (removed: boolean) => {
       if (removed) {
         this.record(id, {
@@ -2755,8 +2630,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // One prune of a worktree at a time until its teardown job runs: a second one (the same run, or one
     // sharing the worktree after a handoff) waits, then follows that job, so no archive copy races a
     // teardown or a prune.
-    const started = await this.pruneLock.run(row.worktreePath, async () => {
-      const running = this.teardownJobRuns.get(row.worktreePath);
+    const started = await this.teardowns.pruneLock.run(row.worktreePath, async () => {
+      const running = this.teardowns.ownerOf(row.worktreePath);
       // Its teardown runs already without a job to follow (a project delete).
       if (!running && this.tearingDown.has(id)) return 'pending' as const;
       if (running) {
@@ -2770,10 +2645,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         const archive = await this.outputs.archiveBeforePrune(id);
         // Wrapped: the lock is held until the job has started, not until it ends.
         if (this.needsTeardown(project.id, row.worktreePath)) {
-          return { job: this.teardownThenPrune(row, project, after, archive) };
+          return { job: this.teardowns.teardownThenPrune(row, project, after, archive) };
         }
       }
-      if (running) return { job: this.teardownThenPrune(row, project, after) };
+      if (running) return { job: this.teardowns.teardownThenPrune(row, project, after) };
       removed = await this.pruneRunWorktree(project.path, row.worktreePath);
       recordPruned(removed);
       return 'done' as const;
@@ -2788,17 +2663,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return { runId: id, worktreePath: row.worktreePath, removed: removed || !existsSync(row.worktreePath) };
   }
 
-  /**
-   * `fn` under the worktree's prune lock for garbage collection: null at once, without waiting, while
-   * a manual prune (or another clean-up) holds it, so the worktree is left for the next pass.
-   */
-  private unlessPruning<T>(worktreePath: string, fn: () => Promise<T>): Promise<T | null> {
-    if (this.pruneLock.isLocked(worktreePath)) return Promise.resolve(null);
-    return this.pruneLock.run(worktreePath, fn);
-  }
-
   /** Notes on `id` that the worktree it shares is being removed for another run, and how that run's archive went. */
-  private noteSharedArchive(id: string, owner: { runId: string; archive?: ArchiveOutcome }): void {
+  private noteSharedArchive(id: string, owner: TeardownOwner): void {
     const other = owner.runId.slice(0, 8);
     const archived = owner.archive === 'archived';
     this.note(id, 'build_outputs_archive_shared', {
@@ -2808,55 +2674,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         ? `This worktree's build outputs were archived for run ${other}, which is removing it.`
         : `Run ${other} is removing this worktree; its build outputs could not all be archived first (that run's timeline says why).`,
     });
-  }
-
-  /**
-   * Teardown, then the worktree's compose projects, then prune, then `after`, as one background job:
-   * guarded by `tearingDown` so no other path starts it again, and listed in `teardownJobs` so a
-   * project delete can wait for it. Never rejects. One job per worktree: while another run's job for
-   * the same worktree (a handoff) runs, this run follows it and gets `after` once it ended.
-   */
-  private teardownThenPrune(
-    row: RunRow,
-    project: { id: string; path: string },
-    after: (removed: boolean) => unknown,
-    /** How archiving the worktree's outputs went before this job, for a run that follows it. */
-    archive?: ArchiveOutcome,
-  ): Promise<void> {
-    const running = this.teardownJobs.get(row.worktreePath);
-    if (running) {
-      // Its own job (two requests that both got past their checks): `after` runs once, in that job.
-      if (this.tearingDown.has(row.id)) return running;
-      this.tearingDown.add(row.id);
-      return running
-        .then(async () => {
-          await after(!existsSync(row.worktreePath));
-        })
-        .catch(() => undefined)
-        .finally(() => this.tearingDown.delete(row.id));
-    }
-    this.tearingDown.add(row.id);
-    const job: Promise<void> = this.teardownWorktree(row, project)
-      // Best effort: a teardown that throws must not leave the worktree behind.
-      .catch(() => undefined)
-      .then(() => this.downWorktreeComposeProjects(row))
-      .catch(() => undefined)
-      .then(() => this.pruneRunWorktree(project.path, row.worktreePath))
-      .catch(() => false)
-      .then(async (removed) => {
-        await after(removed);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        this.tearingDown.delete(row.id);
-        if (this.teardownJobs.get(row.worktreePath) === job) {
-          this.teardownJobs.delete(row.worktreePath);
-          this.teardownJobRuns.delete(row.worktreePath);
-        }
-      });
-    this.teardownJobs.set(row.worktreePath, job);
-    this.teardownJobRuns.set(row.worktreePath, { runId: row.id, archive });
-    return job;
   }
 
   /**
@@ -3016,14 +2833,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * are handed back through the engine and the removal runs once more.
    */
   private async pruneRunWorktree(projectPath: string, worktreePath: string): Promise<boolean> {
-    try {
-      return await pruneWorktree(projectPath, worktreePath);
-    } catch (error) {
-      const inWorktrees = path.resolve(worktreePath).includes(`${path.sep}.worktrees${path.sep}`);
-      if (!inWorktrees || path.resolve(worktreePath) === path.resolve(projectPath)) throw error;
-      if (!(await this.reclaimEngineFiles(worktreePath))) throw error;
-      return pruneWorktree(projectPath, worktreePath);
-    }
+    return pruneWithReclaim(projectPath, worktreePath, (dir) => this.reclaimEngineFiles(dir));
   }
 
   /** Hands the files under `dir` back to the runner user through the engine; false when Docker is off or that failed. */
@@ -3372,7 +3182,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .where(eq(runs.projectId, projectId))
       .orderBy(desc(runs.createdAt))
       .all();
-    const inFlight = [...new Set(rows.flatMap((row) => this.teardownJobs.get(row.worktreePath) ?? []))];
+    const inFlight = [...new Set(rows.flatMap((row) => this.teardowns.jobFor(row.worktreePath) ?? []))];
     const own = (async () => {
       if (this.hasTeardown(projectId)) {
         const seen = new Set<string>();
@@ -3380,10 +3190,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           // A background job is tearing that one down already.
           if (seen.has(row.worktreePath) || this.tearingDown.has(row.id)) continue;
           seen.add(row.worktreePath);
-          this.tearingDown.add(row.id);
-          await this.teardownWorktree(row, project)
-            .catch(() => undefined)
-            .finally(() => this.tearingDown.delete(row.id));
+          await this.teardowns
+            .marked(row.id, () => this.teardownWorktree(row, project))
+            .catch(() => undefined);
         }
       }
       // Then every compose project the project's runs and its main workspace had.
@@ -3676,7 +3485,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return this.previewRunLock.run(id, async () => {
       // Checked once the start has the lock: a teardown may have begun while it waited. Also while
       // the teardown of another run in the same worktree (a handoff) runs.
-      if (this.tearingDown.has(id) || this.teardownJobs.has(row.worktreePath))
+      if (this.teardowns.removing(id, row.worktreePath))
         throw conflict("this run's worktree is being removed; it cannot start a preview");
       const generation = (this.previewGenerations.get(id) ?? 0) + 1;
       this.previewGenerations.set(id, generation);
@@ -4213,13 +4022,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     for (const [projId, list] of byProject.entries()) {
       const toRemove = list.slice(body.keepRecent);
       const proj = projectMap.get(projId);
-      const branch = proj ? this.lazyMergeTarget(proj) : undefined;
+      const branch = proj ? lazyMergeTarget(proj) : undefined;
       // A handoff predecessor and its successor share one worktree: report it once, as the newest run.
       const reportedPaths = new Set<string>();
       for (const row of toRemove) {
         // Auto-GC is tearing it down and prunes it itself.
         if (this.tearingDown.has(row.id)) continue;
-        const keep = await this.mustKeepForReview(row, proj, { branch });
+        const keep = await this.keptWorktrees.reason(row, proj, { branch });
         if (keep) {
           const shared = row.worktreePath && row.worktreePath !== proj?.path ? row.worktreePath : null;
           if (!shared || !reportedPaths.has(shared)) keptWorktrees.push({ runId: row.id, reason: keep });
@@ -4230,10 +4039,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           const worktreePath = row.worktreePath;
           let removedWt = false;
           // The archive and the prune (or the start of its teardown) under the worktree's prune lock.
-          const step = await this.unlessPruning(worktreePath, async () => {
+          const step = await this.teardowns.unlessPruning(worktreePath, async () => {
             // A prune of another run sharing it started its teardown: like a held lock, left for the
             // next clean-up (archiving now would race that teardown).
-            if (this.teardownJobs.has(worktreePath)) return null;
+            if (this.teardowns.jobFor(worktreePath)) return null;
             // The run row goes away with or without its worktree: archive first, or its outputs become
             // unreachable. Within one time budget per request; a run it cannot archive in time is kept.
             const budgetLeft = archiveDeadline - Date.now();
@@ -4242,10 +4051,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 ? await this.outputs.archiveBeforePrune(row.id, budgetLeft, { keepOnTimeout: true })
                 : 'timeout';
             if (archived === 'timeout') return 'archive_pending' as const;
-            if (!body.pruneWorktrees || this.worktreeSharedWith(row)) return 'remove' as const;
+            if (!body.pruneWorktrees || worktreeSharedWith(this.db, row)) return 'remove' as const;
             if (this.needsTeardown(proj.id, worktreePath)) {
               // Wrapped: the lock is held until the job has started, not until it ends.
-              const job = this.teardownThenPrune(row, proj, async (r) => {
+              const job = this.teardowns.teardownThenPrune(row, proj, async (r) => {
                 removedWt = r;
                 await this.remove(row.id).catch(() => undefined);
               });
@@ -4442,85 +4251,76 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const watched = new Set<string>();
 
       for (const row of open) {
-        if (!row.ptydSessionId) {
-          if (row.state === 'done' || row.state === 'failed') {
-            const updated = this.db
-              .update(runs)
-              .set({ endedAt: new Date() })
-              .where(eq(runs.id, row.id))
-              .returning()
-              .get();
-            if (updated) this.emit('run', toRun(updated), false);
-          }
-          continue; // still spawning or queued
-        }
-        const session = byId.get(row.ptydSessionId);
-        if (session?.status === 'running') {
-          if (row.state === 'working' || row.state === 'starting') {
-            watched.add(row.id);
-            if (await this.stalled(row, nowMs)) this.markStalled(row.id);
-            continue;
-          }
-          const waitingOn =
-            row.state === 'waiting_input' && nowMs - row.stateChangedAt.getTime() > WAITING_INPUT_TIMEOUT_MS
-              ? this.waitingReason(row.id)
-              : undefined;
-          if (waitingOn && this.unattendedOrigin(row.id)) {
-            // Nobody will answer this prompt: free the slot instead of holding it forever.
-            await this.saveLastScreen(row.id, row.ptydSessionId);
-            await this.ptyd
-              .get()
-              .remove(row.ptydSessionId)
-              .catch(() => undefined);
-            byId.delete(row.ptydSessionId);
-            this.record(row.id, {
-              source: 'system',
-              type: 'waiting_input_timeout',
-              state: 'failed',
-              payload: {
-                message:
-                  waitingOn === 'stall_detected'
-                    ? `An unattended run stalled and nobody looked at it for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes; it was stopped`
-                    : `An unattended run waited on a permission prompt for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes and was stopped`,
-              },
-              patch: { endedAt: new Date(), ptydSessionId: null, autoRetryAt: null },
-            });
-            continue;
-          }
-          // If an interactive CLI finished its turn (`state === 'done'`) and has been sitting idle
-          // for over its idle TTL without any follow-up prompt, close & dispose its PTY
-          // so it never lingers as a zombie process in Fleet Multiplexer.
-          const idleTtl = row.agentSessionId ? IDLE_DONE_RESUMABLE_TTL_MS : IDLE_DONE_NON_RESUMABLE_TTL_MS;
-          if (
-            row.state === 'done' &&
-            nowMs - row.stateChangedAt.getTime() > idleTtl &&
-            !this.pipelineBusyRuns.has(row.id)
-          ) {
-            const sessionId = row.ptydSessionId;
-            // Re-read under the session lock: a prompt typed meanwhile (its hook not here yet) restarts
-            // the idle time.
-            const closed = await this.sessionLock.run(row.id, async () => {
-              const current = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
-              if (
-                !current ||
-                current.endedAt ||
-                current.ptydSessionId !== sessionId ||
-                current.state !== 'done'
-              ) {
-                return false;
-              }
-              const prompted = this.promptSentSince(row.id, latestDoneEventId(this.db, row.id));
-              const idleSince = Math.max(current.stateChangedAt.getTime(), prompted?.getTime() ?? 0);
-              if (nowMs - idleSince <= idleTtl) return false;
-              await this.closeIdleSession(row.id, sessionId);
-              return true;
-            });
-            if (closed) byId.delete(sessionId);
-          }
+        const sessionId = row.ptydSessionId;
+        const session = sessionId ? byId.get(sessionId) : undefined;
+        const step = openRunStep(row, session, nowMs, {
+          waitingReason: () => this.waitingReason(row.id),
+          unattended: () => Boolean(this.unattendedOrigin(row.id)),
+          pipelineBusy: this.pipelineBusyRuns.has(row.id),
+        });
+        if (step.kind === 'close') {
+          const updated = this.db
+            .update(runs)
+            .set({ endedAt: new Date() })
+            .where(eq(runs.id, row.id))
+            .returning()
+            .get();
+          if (updated) this.emit('run', toRun(updated), false);
           continue;
         }
-        await this.recordSessionEnd(row.id, row.ptydSessionId, session);
-        byId.delete(row.ptydSessionId);
+        if (step.kind === 'spawning' || step.kind === 'keep' || !sessionId) continue;
+        if (step.kind === 'watch') {
+          watched.add(row.id);
+          if (await this.stalled(row, nowMs)) this.markStalled(row.id);
+          continue;
+        }
+        if (step.kind === 'waiting_timeout') {
+          // Nobody will answer this prompt: free the slot instead of holding it forever.
+          await this.saveLastScreen(row.id, sessionId);
+          await this.ptyd
+            .get()
+            .remove(sessionId)
+            .catch(() => undefined);
+          byId.delete(sessionId);
+          this.record(row.id, {
+            source: 'system',
+            type: 'waiting_input_timeout',
+            state: 'failed',
+            payload: {
+              message:
+                step.reason === 'stall_detected'
+                  ? `An unattended run stalled and nobody looked at it for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes; it was stopped`
+                  : `An unattended run waited on a permission prompt for ${minutesOf(WAITING_INPUT_TIMEOUT_MS)} minutes and was stopped`,
+            },
+            patch: { endedAt: new Date(), ptydSessionId: null, autoRetryAt: null },
+          });
+          continue;
+        }
+        if (step.kind === 'idle') {
+          // An interactive CLI that finished its turn and sat idle past its TTL without a follow-up
+          // prompt: its PTY is closed so it never lingers as a zombie process. Re-read under the
+          // session lock: a prompt typed meanwhile (its hook not here yet) restarts the idle time.
+          const closed = await this.sessionLock.run(row.id, async () => {
+            const current = this.db.select().from(runs).where(eq(runs.id, row.id)).get();
+            if (
+              !current ||
+              current.endedAt ||
+              current.ptydSessionId !== sessionId ||
+              current.state !== 'done'
+            ) {
+              return false;
+            }
+            const prompted = this.promptSentSince(row.id, latestDoneEventId(this.db, row.id));
+            const idleSince = Math.max(current.stateChangedAt.getTime(), prompted?.getTime() ?? 0);
+            if (nowMs - idleSince <= step.ttlMs) return false;
+            await this.closeIdleSession(row.id, sessionId);
+            return true;
+          });
+          if (closed) byId.delete(sessionId);
+          continue;
+        }
+        await this.recordSessionEnd(row.id, sessionId, session);
+        byId.delete(sessionId);
       }
       for (const runId of this.stallWatch.keys()) {
         if (!watched.has(runId)) this.stallWatch.delete(runId);
@@ -4581,17 +4381,17 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           if (arr.length <= AUTO_GC_KEEP_RECENT_PER_PROJECT) continue;
           const proj = projectMap.get(projId);
           // Asked of git only when a kept worktree needs a fresh check, not every minute.
-          const branch = proj ? this.lazyMergeTarget(proj) : undefined;
+          const branch = proj ? lazyMergeTarget(proj) : undefined;
           for (const stale of arr.slice(AUTO_GC_KEEP_RECENT_PER_PROJECT)) {
             seen.add(stale.id);
             // Archived already; its teardown runs, and the prune follows it.
             if (this.tearingDown.has(stale.id)) continue;
-            if (await this.mustKeepForReview(stale, proj, { branch, cached: true })) continue;
+            if (await this.keptWorktrees.reason(stale, proj, { branch, cached: true })) continue;
             if (
               proj &&
               stale.worktreePath &&
               stale.worktreePath !== proj.path &&
-              !this.worktreeSharedWith(stale)
+              !worktreeSharedWith(this.db, stale)
             ) {
               const budgetLeft = archiveDeadline - Date.now();
               if (budgetLeft < AUTO_GC_MIN_ARCHIVE_MS) {
@@ -4602,7 +4402,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                 break autoGc;
               }
               const worktreePath = stale.worktreePath;
-              const pruned = await this.unlessPruning(worktreePath, async () => {
+              const pruned = await this.teardowns.unlessPruning(worktreePath, async () => {
                 // Nobody waits for auto-GC: a run whose outputs are not safely archived keeps its
                 // worktree (and row) and is tried again on the next pass. A copy that keeps failing
                 // (a worktree reached through a link, unreadable files) holds it for 24 h at most.
@@ -4619,7 +4419,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
                   // Teardown commands (and compose downs) may take minutes: they run beside reconcile, and this worktree is
                   // pruned (and its run removed) only once they finished. The guard keeps a later
                   // pass from starting them again meanwhile.
-                  void this.teardownThenPrune(stale, proj, () => this.remove(stale.id));
+                  void this.teardowns.teardownThenPrune(stale, proj, () => this.remove(stale.id));
                   return false;
                 }
                 await this.pruneRunWorktree(proj.path, worktreePath).catch(() => undefined);
@@ -4638,9 +4438,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
             'auto-GC: the archive time budget is used up; the runs left wait for the next pass',
           );
         }
-        for (const id of this.keptWorktreeChecks.keys()) {
-          if (!seen.has(id)) this.keptWorktreeChecks.delete(id);
-        }
+        this.keptWorktrees.retainOnly(seen);
       }
     } catch {
       // ptyd went away mid-call; next tick retries.
@@ -4664,14 +4462,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     await this.sessionLock.run(runId, async () => {
       const row = this.db.select().from(runs).where(eq(runs.id, runId)).get();
       if (!row || row.endedAt || row.ptydSessionId !== sessionId) return;
-      const exitCode = session ? session.exitCode : null;
-      const nextAfterExit: AgentState = row.cancelledAt
-        ? row.state === 'done'
-          ? 'done'
-          : 'failed'
-        : stateAfterExit(row.state as AgentState, exitCode);
+      const exit = exitTransition(row, session);
       let exitMessage: string | undefined;
-      if (session && nextAfterExit === 'failed' && !row.cancelledAt) {
+      if (exit.explain) {
         try {
           const snap = await this.ptyd.get().snapshot(sessionId, 40);
           const cleaned = stripVTControlCharacters(snap.data ?? '')
@@ -4697,11 +4490,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
       this.record(runId, {
         source: 'system',
-        type: row.cancelledAt ? 'cancelled' : session ? 'process_exited' : 'session_lost',
-        state: nextAfterExit,
+        type: exit.event,
+        state: exit.state,
         payload: session
           ? {
-              exitCode,
+              exitCode: exit.exitCode,
               signal: session.signal,
               ...(exitMessage ? { message: exitMessage } : {}),
             }
@@ -4711,77 +4504,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     });
   }
 
-  /**
-   * Garbage collection never deletes work a human still has to look at: runs of tickets that are
-   * not `done` yet (e.g. in Review after a refused merge), worktrees with uncommitted changes, and
-   * worktrees whose branch has commits the default branch does not contain. Returns why, or null.
-   */
-  private async mustKeepForReview(
-    row: RunRow,
-    project: { path: string; defaultBranch: string } | undefined,
-    /**
-     * `branch`: the merge target, resolved at most once per pass and only when a check needs it.
-     * `cached`: reuse the last verdict on a kept worktree whose HEAD has not moved for up to
-     * KEPT_WORKTREE_RECHECK_MS (auto-GC runs every minute).
-     */
-    opts: { branch?: () => Promise<string>; cached?: boolean } = {},
-  ): Promise<KeptWorktreeReason | null> {
-    if (row.ticketId) {
-      const ticket = this.db
-        .select({ status: tickets.status })
-        .from(tickets)
-        .where(eq(tickets.id, row.ticketId))
-        .get();
-      if (ticket && ticket.status !== 'done') return 'in_review';
-    }
-    if (row.worktreePath && row.worktreePath !== project?.path) {
-      // Without a project the target branch is unknown, so nothing can be proven merged.
-      if (!project) return 'unmerged_commits';
-      if (!opts.cached) {
-        return (
-          (await this.worktreeWorkReason(row.worktreePath, project, await opts.branch?.()))?.reason ?? null
-        );
-      }
-      const head = await worktreeHeadSha(row.worktreePath, project.path);
-      const last = this.keptWorktreeChecks.get(row.id);
-      if (last && last.head === head && Date.now() - last.checkedAt < KEPT_WORKTREE_RECHECK_MS) {
-        return last.reason;
-      }
-      const reason =
-        (await this.worktreeWorkReason(row.worktreePath, project, await opts.branch?.()))?.reason ?? null;
-      if (reason) this.keptWorktreeChecks.set(row.id, { head, reason, checkedAt: Date.now() });
-      else this.keptWorktreeChecks.delete(row.id);
-      return reason;
-    }
-    return null;
-  }
-
-  /** The branch runs merge into: the main workspace's current branch, else the project's `defaultBranch`. */
-  private async mergeTarget(project: { path: string; defaultBranch: string }): Promise<string> {
-    return (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
-  }
-
-  /** {@link mergeTarget}, asked of git on the first call only (one GC pass over one project). */
-  private lazyMergeTarget(project: { path: string; defaultBranch: string }): () => Promise<string> {
-    let branch: Promise<string> | undefined;
-    return () => (branch ??= this.mergeTarget(project));
-  }
-
-  /**
-   * Runs merge into the main workspace's current branch (the project's `defaultBranch` column is
-   * only the fallback), so that is what "merged" is measured against. `branch` names it.
-   */
-  private async worktreeWorkReason(
-    worktreePath: string,
-    project: { path: string; defaultBranch: string },
-    knownBranch?: string,
-  ): Promise<{ reason: Exclude<KeptWorktreeReason, 'in_review'>; branch: string } | null> {
-    const branch = knownBranch ?? (await this.mergeTarget(project));
-    if (await worktreeHasUncommittedWork(worktreePath)) return { reason: 'uncommitted_changes', branch };
-    if (await worktreeHasUnmergedCommits(worktreePath, branch)) return { reason: 'unmerged_commits', branch };
-    return null;
-  }
-
   private row(id: string): RunRow {
     const row = this.db.select().from(runs).where(eq(runs.id, id)).get();
     if (!row) throw notFound('no such run');
@@ -4789,41 +4511,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   /** Appends an event, applies the state change + patch atomically, and broadcasts the run. */
-  private record(
-    id: string,
-    event: {
-      source: EventSource;
-      type: string;
-      state?: AgentState;
-      payload?: unknown;
-      patch?: Partial<RunRow>;
-    },
-  ): Run {
-    const now = new Date();
-    let changed = false;
-    const updated = this.db.transaction((tx) => {
-      const current = tx.select().from(runs).where(eq(runs.id, id)).get();
-      if (!current) throw notFound('no such run');
-      changed = event.state !== undefined && event.state !== current.state;
-      tx.insert(runEvents)
-        .values({
-          runId: id,
-          ts: now,
-          source: event.source,
-          type: event.type,
-          state: changed ? event.state : null,
-          payload: event.payload ?? null,
-        })
-        .run();
-      // Bookkeeping (a saved screen, the tool check-in) is not something the run did: it does not
-      // become its last event (a waiting run's `SessionStart` must stay its last event, for example).
-      const set: Partial<RunRow> = {
-        ...event.patch,
-        lastEvent: BOOKKEEPING_EVENT_TYPES.has(event.type) ? current.lastEvent : event.type,
-      };
-      if (changed) Object.assign(set, { state: event.state, stateChangedAt: now });
-      return tx.update(runs).set(set).where(eq(runs.id, id)).returning().get();
-    });
+  private record(id: string, event: RunEventInput): Run {
+    const { row: updated, changed } = applyRunEvent(this.db, id, event);
     const run = toRun(updated);
     this.emit('run', run, changed);
     return run;

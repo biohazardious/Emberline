@@ -153,6 +153,15 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   (`queued | starting | working | waiting_input | rate_limited | done | failed`) → `RunEvent`
   (source `hook | transcript | screen | user | system`). Types: `packages/protocol/src/api/{projects,tickets,runs}.ts`
   and `packages/adapter-sdk/src/index.ts`. Tables: `apps/core/src/db/schema.ts`.
+- **Run & ticket engine modules:** `RunService` (`runs/service.ts`) and `TicketService` (`tickets/service.ts`) keep their public
+  signatures and delegate to focused modules. `runs/lifecycle.ts` holds the run state machine as discriminated unions
+  (`hookTransition`, `stopTransition`, `exitTransition`, reconcile's `openRunStep`) and `applyRunEvent`, the one atomic event+state write.
+  `runs/worktree.ts` creates run workspaces, merges a run's branch into main (`mergeRunBranch`), answers garbage collection's
+  keep verdicts (`KeptWorktrees`) and runs teardown-then-prune jobs under the prune lock (`WorktreeTeardowns`).
+  `runs/gates.ts` holds the pipeline gates over a `GatePass` (worktree.yml, worktree commands, build/lint/test, secret and
+  anti-slop guard, cross-provider critic, blocking review) returning a `GateOutcome` (`pass | merge_blocked | halt`), plus the
+  pre-commit secret guard. `tickets/dependencies.ts` resolves `dependsOn` and finds unblocked tickets; `tickets/columns.ts`
+  maps run states to board columns and positions.
 - **Scheduling:** `QuotaWindow` and scheduled jobs live in SQLite, so restarts keep every timer (`api/scheduler.ts`, `api/usage.ts`).
   `quota_windows` is the pause table: lane (provider), `resets_at`, `resume_at`, reason and the run that hit the limit; open pauses
   are served by `quota_windows_open_idx` (migration 0029). The scheduler keeps no queue, slot or pause state in memory: after every

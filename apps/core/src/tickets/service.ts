@@ -31,29 +31,16 @@ import {
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
-  WORKTREE_YML_INVALID,
-  worktreeCheckOf,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, max } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import type { AgentFileRejection } from '../factory/agent-files.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
-import {
-  issueTombstones,
-  projects,
-  runEvents,
-  runs,
-  settings,
-  ticketDependencies,
-  tickets,
-} from '../db/schema.js';
+import { issueTombstones, projects, runEvents, runs, settings, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
-  auditWorktreeSlop,
   buildFactoryOrchestratorPrompt,
-  buildWorkspaceDemo,
   conflictResolutionPrompt,
-  hasVerifiableBuildTarget,
   factoryTicketTitle,
   effectiveFactorySettings,
   getFactorySettings,
@@ -62,25 +49,27 @@ import {
   mainWorkspaceBranch,
   persistFactoryAttachments,
   runBranchBase,
-  runCrossProviderCritic,
   runProducedChanges,
-  syncWorktreeToMainWorkspace,
   type TicketsFileHooks,
 } from '../factory/service.js';
 import { applyBulkTicketAction } from './bulk.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
+import { columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
 import {
-  type Edge,
+  type CreatedDraft,
+  dependentIds,
+  loadDependencies,
   normalizeTicketTitle,
-  resolveBatchDependencies,
-  wouldCreateCycle,
+  replaceDependencies,
+  storeDraftDependencies,
+  type TicketDependencies,
+  unblockedSince,
 } from './dependencies.js';
 import { clipCodeUnits, clipText } from '../text/control-chars.js';
 import { DEPENDENCY_SECTION_MAX, dependencyContextSection } from './dependency-context.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { slugify } from '../routes/projects.js';
-import { openBlockingCount } from '../review/blocking.js';
 import {
   branchMergedBefore,
   continuesHeldWork,
@@ -92,11 +81,20 @@ import {
   stillHeld,
 } from '../runs/hold-outcome.js';
 import { HOLD_EVENTS } from '../runs/hold-events.js';
-import { WORKTREE_COMMANDS_PROMPT, worktreeYmlFixPrompt } from '../runs/recovery.js';
+import {
+  buildGateRequest,
+  buildGate,
+  criticGate,
+  fixCheckOf,
+  type GatePass,
+  reviewGate,
+  slopGate,
+  worktreeCommandsGate,
+  worktreeYmlGate,
+} from '../runs/gates.js';
+import { mergeRunBranch } from '../runs/worktree.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
-import { approvedChecks, approvedSetup, setupFinishedIn } from '../worktree-config/load.js';
-import { runWorktreeYmlProblems, worktreeCommandsMissing } from '../worktree-config/trust.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -110,18 +108,6 @@ interface TicketServiceEvents {
   /** Something about a project the user should hear, e.g. an agent file core ignored. */
   notice: [notice: ProjectNotice];
 }
-
-/** Gap between neighbours so most moves need a single row update. */
-const POSITION_STEP = 1024;
-
-/** Run states that occupy one of a project's parallel ticket slots. */
-const ACTIVE_RUN_STATES = new Set<Run['state']>([
-  'queued',
-  'starting',
-  'working',
-  'waiting_input',
-  'rate_limited',
-]);
 
 type Blocker = Ticket['blockedBy'][number];
 
@@ -257,20 +243,7 @@ export function ticketPrompt(ticket: Pick<Ticket, 'key' | 'title' | 'body'>): st
   return body ? `${ticket.key}: ${ticket.title}\n\n${body}` : `${ticket.key}: ${ticket.title}`;
 }
 
-/** Where a ticket belongs while its run is in `state`; null leaves it where it is. */
-export function statusForRunState(state: Run['state']): TicketStatus | null {
-  if (state === 'done') return 'review';
-  if (
-    state === 'queued' ||
-    state === 'starting' ||
-    state === 'working' ||
-    state === 'waiting_input' ||
-    state === 'rate_limited'
-  ) {
-    return 'in_progress';
-  }
-  return null; // failed: stays put and shows the failed run
-}
+export { statusForRunState } from './columns.js';
 
 /**
  * Board tickets. Starting a ticket creates a run on its own branch; afterwards the ticket's
@@ -293,10 +266,6 @@ export const COMPLETION_NUDGE =
 /** Automatic conflict-resolution requests one run gets; each needs main to have moved since the last. */
 export const CONFLICT_ATTEMPT_CAP = 3;
 
-/** Hold payload text kept for the recovery prompts: at most this many characters. */
-const HOLD_PAYLOAD_MAX = 4_000;
-const holdText = (text: string): string => text.slice(0, HOLD_PAYLOAD_MAX);
-
 /** Holds a gate notes with an automatic request for the agent's fix (`autoFix: true`, the request in `request`). */
 const FIX_REQUEST_HOLDS: readonly string[] = [
   'build_gate_failed',
@@ -304,9 +273,6 @@ const FIX_REQUEST_HOLDS: readonly string[] = [
   'slop_guard_blocked',
   'critic_blocked',
 ];
-
-/** Refuses a pass's merge once the agent worked again (a newer turn's pass decides). */
-class TurnMoved extends Error {}
 
 /** A fix request kept with its hold: at most this many characters (about 64 KB), marked when cut. */
 const FIX_REQUEST_MAX = 64 * 1024;
@@ -327,14 +293,6 @@ interface PendingFixRequest {
   note: Record<string, unknown>;
   request: string;
 }
-
-/** What the build gate asks the agent when the checks failed (`excerpt`: the end of their output). */
-const buildFixPrompt = (excerpt: string): string =>
-  `[Self-Healing Build, Lint & Test Gate] Automated verification (build / lint / unit tests) failed:\n\n\`\`\`\n${excerpt}\n\`\`\`\n\nPlease fix the compiler, linter, or unit test failures above and verify all checks pass cleanly before finishing.`;
-
-/** Which check a `build_gate_failed` note is about: a worktree config check (worktreeCheckOf), else the build gate's. */
-const fixCheckOf = (payload: unknown): 'worktree_yml' | 'worktree_commands' | 'build' =>
-  worktreeCheckOf('build_gate_failed', payload) ?? 'build';
 
 export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Projects whose factory chain is on; a cache of {@link ACTIVE_CHAINS_KEY}, written through. */
@@ -364,17 +322,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * otherwise.
    */
   private readonly upgradeCandidates: UpgradeCandidate[];
-
-  /** Event types of a run, oldest first (to tell whether its worktree setup finished). */
-  private runEventTypes(runId: string): string[] {
-    return this.db
-      .select({ type: runEvents.type })
-      .from(runEvents)
-      .where(eq(runEvents.runId, runId))
-      .orderBy(asc(runEvents.id))
-      .all()
-      .map((e) => e.type);
-  }
 
   constructor(
     private readonly db: Db,
@@ -930,15 +877,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * build gate's note names no check; neither did the worktree.yml and worktree-commands ones before
    * 0.5.0, so those are told apart by their text (worktreeCheckOf).
    */
-  private askedToFix(runId: string, check: 'worktree_yml' | 'worktree_commands' | 'build'): boolean {
-    return this.db
-      .select({ payload: runEvents.payload })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'build_gate_failed')))
-      .all()
-      .some(({ payload }) => isAutoFixHold(payload) && fixCheckOf(payload) === check);
-  }
-
   /**
    * The PO nudge noted in the run's current turn (after its latest switch to `done`), and whether a
    * prompt reached the agent after it; null when this turn has none.
@@ -1022,14 +960,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return text === null ? null : `${text}${this.completionReminder(run, '\n\n')}`;
     }
     if (type !== 'build_gate_failed') return null;
-    const output = field('output') ?? '';
-    const check = fixCheckOf(note);
-    const text =
-      check === 'worktree_yml'
-        ? worktreeYmlFixPrompt(output.slice(WORKTREE_YML_INVALID.length).replace(/^\n/, ''))
-        : check === 'worktree_commands'
-          ? WORKTREE_COMMANDS_PROMPT
-          : buildFixPrompt(output);
+    const text = buildGateRequest(fixCheckOf(note), field('output') ?? '');
     return `${text}${this.completionReminder(run, ' ')}`;
   }
 
@@ -1082,48 +1013,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     ) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     }
-  }
-
-  /**
-   * Whether the critic reviews this pass: the run has no review yet, or the latest one held the run
-   * (changes asked of the agent, or a hold for a person). Like a failed build, a hold is checked again
-   * on the agent's next stop: a passing review lets the merge go on, changes still needed keep it held.
-   */
-  private criticDue(runId: string): boolean {
-    const events = this.db
-      .select({ id: runEvents.id, type: runEvents.type, payload: runEvents.payload })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), inArray(runEvents.type, ['critic_reviewed', 'critic_blocked'])))
-      .orderBy(asc(runEvents.id))
-      .all();
-    const review = events.findLast((e) => e.type === 'critic_reviewed');
-    if (!review) return true;
-    return events.some((e) => e.id > review.id && e.type === 'critic_blocked');
-  }
-
-  /** Whether the run was already asked to fix the critic's findings (the autoFix note survives restarts). */
-  private criticFixRequested(runId: string): boolean {
-    return this.db
-      .select({ payload: runEvents.payload })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'critic_blocked')))
-      .all()
-      .some(({ payload }) => isAutoFixHold(payload));
-  }
-
-  /** Whether the run was already asked to clean up a secret or slop finding (the autoFix note survives restarts). */
-  private slopFixRequested(runId: string): boolean {
-    return this.db
-      .select({ payload: runEvents.payload })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, runId),
-          inArray(runEvents.type, ['secret_guard_blocked', 'slop_guard_blocked']),
-        ),
-      )
-      .all()
-      .some(({ payload }) => (payload as { autoFix?: boolean } | null)?.autoFix === true);
   }
 
   /**
@@ -1269,21 +1158,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     void this.dispatchNextReadyTicket(projectId, opts).catch(() => undefined);
   }
 
-  /** Of `ids`, those blocked in `before` that nothing blocks any more. */
-  private nowUnblocked(ids: string[], before: Map<string, { blockedBy: Ticket['blockedBy'] }>): string[] {
-    const after = this.dependenciesOf(ids);
-    return ids.filter(
-      (id) => (before.get(id)?.blockedBy.length ?? 0) > 0 && after.get(id)?.blockedBy.length === 0,
-    );
-  }
-
   /** Active runs working on one of the project's tickets; ticket-less runs never count. */
   private busyTicketRuns(projectId: string): number {
     return this.runs
       .list()
-      .filter(
-        (r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && ACTIVE_RUN_STATES.has(r.state),
-      ).length;
+      .filter((r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && occupiesTicketSlot(r.state))
+      .length;
   }
 
   private async dispatchNextReadyTicketUnlocked(
@@ -1697,222 +1577,44 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       return;
     }
 
-    // 1d. The run's `.emberline/worktree.yml` must stay usable on main: one it added or changed that
-    //     does not parse would be ignored there (only a person sees the banner), so it fails the gate
-    //     before the merge, whatever the self-healing setting and whether a build target exists. The
-    //     agent is asked once to fix it (with the self-healing gate on and a run that can take a
-    //     prompt); after that, or otherwise, the hold is a person's, closed like other holds.
-    //     Build gate, critic and merge wait for the next pass, exactly like a failed build gate.
-    if (run.worktreePath && run.worktreePath !== projectRow.path) {
-      let problems: string[] | null;
-      try {
-        problems = await runWorktreeYmlProblems(run.worktreePath, projectRow.path);
-      } catch (error) {
-        if (stale()) return;
-        // B17, like the build gate: a check that could not run is not a pass; left for a person.
-        const message = `.emberline/worktree.yml could not be checked: ${(error as Error).message ?? ''}`;
-        this.runs.note(run.id, 'build_gate_error', { message: message.slice(0, 500) });
-        return;
-      }
-      if (problems) {
-        if (stale()) return;
-        const errorText = problems.join('\n').slice(0, 2_400);
-        const gateNote = {
-          check: 'worktree_yml',
-          output: holdText(`${WORKTREE_YML_INVALID}\n${errorText}`),
-        };
-        const autoFix =
-          fSettings.selfHealingBuildGate &&
-          !this.askedToFix(run.id, 'worktree_yml') &&
-          (!run.endedAt || run.resumable);
-        const asked =
-          autoFix &&
-          (await this.requestFix(
-            run,
-            'build_gate_failed',
-            gateNote,
-            `${worktreeYmlFixPrompt(errorText)}${this.completionReminder(run, ' ')}`,
-          ));
-        if (!asked) {
-          if (!autoFix) this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
-          await this.closeAndGoOn(run);
-        }
-        return;
-      }
-    }
-
-    // 1e. An Auto Bootstrap (the wizard left the stack to the agent and generated no commands) must
-    //     write its worktree commands; without them the build gate would fall back to detection.
-    const roles = readWizardTickets(this.db, run.projectId);
-    if (ticketRow && roles?.bootstrapWritesWorktree && ticketRow.id === roles.bootstrap) {
-      const missing = await worktreeCommandsMissing(run.worktreePath || projectRow.path).catch(() => null);
-      if (missing) {
-        if (stale()) return;
-        const gateNote = { check: 'worktree_commands', output: holdText(missing) };
-        const autoFix =
-          fSettings.selfHealingBuildGate &&
-          !this.askedToFix(run.id, 'worktree_commands') &&
-          (!run.endedAt || run.resumable);
-        const asked =
-          autoFix &&
-          (await this.requestFix(
-            run,
-            'build_gate_failed',
-            gateNote,
-            `${WORKTREE_COMMANDS_PROMPT}${this.completionReminder(run, ' ')}`,
-          ));
-        if (!asked) {
-          if (!autoFix) this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
-          await this.closeAndGoOn(run);
-        }
-        return; // build gate, critic and merge wait for the next pass
-      }
-    }
-
-    // 2. Polyglot Self-Healing Build, Lint & Unit Test Gate: if enabled and the workspace has a
-    //    verifiable build, lint, or test target (Node/TS, Python, Go, Rust, PlatformIO, or Makefile),
-    //    verify it before syncing or moving to Done. If verification fails, resume the agent with the error log.
-    //    An approved worktree.yml with `checks` replaces the detected steps (and is always verifiable).
-    //    Every pass builds its own turn's tree. The agent is asked once to fix a failure; when its
-    //    fix turn (or a later one) still fails, the hold is a person's, closed like other holds.
-    const checks = approvedChecks(this.db, run.projectId);
-    const verifiable =
-      Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
-    if (fSettings.selfHealingBuildGate && (!run.endedAt || run.resumable) && verifiable) {
-      const buildRes = await buildWorkspaceDemo({
-        db: this.db,
-        projectId: run.projectId,
-        targetId: run.id,
-        workspacePath: run.worktreePath,
-        checks,
-        // A worktree whose own setup finished is not set up twice; a skipped or failed one is.
-        setup: setupFinishedIn(this.runEventTypes(run.id)) ? [] : approvedSetup(this.db, run.projectId),
-        env: await this.runs.dockerEnvFor(run),
-      }).catch((error: unknown) => error as Error);
-      // B17: a gate that could not run is not a pass; leave the ticket for a person.
-      if (buildRes instanceof Error) {
-        if (stale()) return;
-        this.runs.note(run.id, 'build_gate_error', { message: buildRes.message?.slice(0, 500) });
-        return;
-      }
-      if (!buildRes.ok) {
-        if (stale()) return;
-        const errorExcerpt = buildRes.output.slice(-2_400);
-        const gateNote = { output: holdText(errorExcerpt) };
-        if (this.askedToFix(run.id, 'build')) {
-          this.runs.note(run.id, 'build_gate_failed', { autoFix: false, ...gateNote });
-          await this.closeAndGoOn(run);
-          return;
-        }
-        // Held for the agent's fix: its next stop runs the pipeline again (see HOLD_EVENTS). Not
-        // for a person while the agent works on it (autoFix); noted again for one if the request fails.
-        await this.requestFix(
-          run,
-          'build_gate_failed',
-          gateNote,
-          `${buildFixPrompt(errorExcerpt)}${this.completionReminder(run, ' ')}`,
-        );
-        return;
-      }
-    }
-
-    // 2b. Layer 2 — Deterministic Anti-AI-Slop & Pre-Commit Secret Guard Gate:
-    //     Scans git diff for leaked API keys/tokens/.env files, type evasion (`: any`, `@ts-ignore`),
-    //     unfinished TODO/FIXME stubs, skipped tests, debug leftovers, and vibe-coding UI clichés.
-    let secretGuardBlockedMerge = false;
-    if (run.worktreePath && !isFactoryOrchestratorTicket) {
-      const slopReport = await auditWorktreeSlop({
-        runId: run.id,
-        workspacePath: run.worktreePath,
-      }).catch(() => null);
-
-      const hasSecretViolation = Boolean(
-        fSettings.secretGuardGate && slopReport && !slopReport.secretGuardPassed,
-      );
-      const hasSlopViolation = Boolean(
-        fSettings.antiSlopGate && slopReport && slopReport.addedLinesAudited > 0 && !slopReport.passed,
-      );
-
-      const autoFix = Boolean(
-        (hasSecretViolation || hasSlopViolation) &&
-        slopReport?.autoFixPrompt &&
-        !this.slopFixRequested(run.id) &&
-        (!run.endedAt || run.resumable),
-      );
-      const secretNote = {
-        secretLeakCount: slopReport?.secretLeakCount ?? 0,
-        ...(slopReport?.autoFixPrompt ? { autoFixPrompt: holdText(slopReport.autoFixPrompt) } : {}),
-      };
-      const slopNote = slopReport?.autoFixPrompt ? { autoFixPrompt: holdText(slopReport.autoFixPrompt) } : {};
-      if ((hasSecretViolation || autoFix) && stale()) return;
-      // Held first, also while the agent is asked to clean up: should the request not arrive, a
-      // later dispatch must not merge the leak. The agent's next stop lifts the hold.
-      if (autoFix && slopReport?.autoFixPrompt) {
-        const request = `${slopReport.autoFixPrompt}${this.completionReminder(run, '\n\n')}`;
-        if (hasSecretViolation) await this.requestFix(run, 'secret_guard_blocked', secretNote, request);
-        else await this.requestFix(run, 'slop_guard_blocked', slopNote, request);
-        return;
-      }
-
-      if (hasSecretViolation) {
-        this.runs.note(run.id, 'secret_guard_blocked', { ...secretNote, autoFix: false });
-        secretGuardBlockedMerge = true;
-      }
-    }
-
-    // 2c. Layer 3 — Cross-Provider AI Critic (e.g. Claude codes -> Antigravity critiques, or vice versa):
-    //     Once per run, and again for the turn after its request for changes: the agent's fix is
-    //     reviewed too. Asked once; changes asked for again are a person's to look at.
-    if (
-      fSettings.crossProviderCritic &&
-      run.worktreePath &&
-      !isFactoryOrchestratorTicket &&
-      this.criticDue(run.id)
-    ) {
-      const criticRes = await runCrossProviderCritic({
-        run,
-        ticketTitle: ticketRow?.title ?? run.title,
-        ticketBody: ticketRow?.body ?? null,
-        workspacePath: run.worktreePath,
-        settings: fSettings,
-      }).catch(() => null);
-      // The agent worked again meanwhile: the pass of its newer turn asks the critic about that tree.
-      if (stale()) return;
-      // Noted once its verdict is in, so a pass a restart cut off while the critic ran asks it again
-      // instead of merging without one.
-      this.runs.note(run.id, 'critic_reviewed', { verdict: criticRes?.verdict ?? null });
-
-      if (criticRes && criticRes.verdict === 'NEEDS_FIX' && criticRes.followUpPrompt) {
-        const criticNote = { followUpPrompt: holdText(criticRes.followUpPrompt) };
-        if (this.criticFixRequested(run.id) || (run.endedAt && !run.resumable)) {
-          this.runs.note(run.id, 'critic_blocked', { autoFix: false, ...criticNote });
-          await this.closeAndGoOn(run);
-          return;
-        }
-        await this.requestFix(
-          run,
-          'critic_blocked',
-          criticNote,
-          `${criticRes.followUpPrompt}${this.completionReminder(run, '\n\n')}`,
-        );
-        return;
-      }
+    // 1d–2d. The gates, in order: the run's worktree.yml must stay usable on main, an Auto Bootstrap
+    //     must write its worktree commands, then the build/lint/test gate, the secret and anti-slop
+    //     guard, the cross-provider critic and open blocking review feedback (runs/gates.ts). A gate
+    //     that asked the agent for a fix or handed the hold to a person ends this pass: the agent's
+    //     next stop runs the pipeline again (see HOLD_EVENTS). The secret guard and review feedback
+    //     only block the merge; the rest of the pass (and the queue) goes on.
+    const gatePass: GatePass = {
+      db: this.db,
+      run,
+      projectPath: projectRow.path,
+      settings: fSettings,
+      ticket: ticketRow,
+      orchestrator: isFactoryOrchestratorTicket,
+      stale,
+      note: (type, payload) => this.runs.note(run.id, type, payload),
+      requestFix: (type, note, request) => this.requestFix(run, type, note, request),
+      closeAndGoOn: () => this.closeAndGoOn(run),
+      completionReminder: (separator) => this.completionReminder(run, separator),
+      dockerEnv: () => this.runs.dockerEnvFor(run),
+    };
+    const blockedBy = new Set<'secret_guard' | 'review'>();
+    for (const gate of [worktreeYmlGate, worktreeCommandsGate, buildGate, slopGate, criticGate]) {
+      const outcome = await gate(gatePass);
+      if (outcome.kind === 'halt') return;
+      if (outcome.kind === 'merge_blocked') blockedBy.add(outcome.by);
     }
 
     // The agent worked again while this pass ran its checks: they looked at an older tree, so the
     // pass of its newer turn decides (one merge, after that turn's own checks).
     if (stale()) return;
 
-    // 2d. Open blocking review feedback keeps the merge gate closed: the ticket stays in Review and the
-    //     person decides (resolve it, or merge anyway); the agent is not prompted. Like the secret
-    //     guard, the rest of the queue goes on.
-    const blocking = openBlockingCount(this.db, run.id);
-    const reviewBlocked = blocking > 0;
-    if (reviewBlocked) this.runs.note(run.id, 'review_blocked', { count: blocking });
+    const review = reviewGate(gatePass);
+    if (review.kind === 'merge_blocked') blockedBy.add(review.by);
+    const reviewBlocked = blockedBy.has('review');
 
     // 3. Auto-merge the worktree into the main workspace so subsequent specialist personas branch off
     //    the updated codebase and Live Demo stays current — UNLESS Secret Guard blocked a credential leak!
-    let mergeBlocked = secretGuardBlockedMerge || reviewBlocked;
+    let mergeBlocked = blockedBy.size > 0;
     if (
       !mergeBlocked &&
       fSettings.autoSyncToMain &&
@@ -1977,7 +1679,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (this.autoChainProjects.has(run.projectId) && fSettings.autoPickupReady) {
       await this.dispatchNextReadyTicket(run.projectId).catch(() => undefined);
     } else if (movedToDone && run.ticketId) {
-      this.dispatchUnblocked(run.projectId, this.dependentIds(run.ticketId));
+      this.dispatchUnblocked(run.projectId, dependentIds(this.db, run.ticketId));
     }
   }
 
@@ -2045,31 +1747,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     autoFix: boolean;
     mainHead: string | null;
   } | null> {
-    const res = await syncWorktreeToMainWorkspace({
-      worktreePath: run.worktreePath,
-      mainWorkspacePath,
-      ticketKey,
-      runId: run.id,
-      branch: run.branch,
-      // Checked once the run's output commit is built and its tip read, right before that tip (not a
-      // later one) is merged: an agent that worked again since leaves it, and its branch, worktree and
-      // index as they were, to its newer turn's pass.
-      beforeMerge: () => {
-        if (stale()) throw new TurnMoved();
-      },
-    }).catch((error: unknown) => {
-      if (error instanceof TurnMoved) return null;
-      return {
-        ok: false,
-        summary: (error as Error).message,
-        conflicts: [] as string[],
-        commitSha: null,
-        commitOid: null,
-        commitUnverified: false,
-        alreadyMerged: false,
-        mainHead: null,
-      };
-    });
+    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale });
     // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
     if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
@@ -2190,32 +1868,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   }
 
   /** Dependencies of the given tickets with one query; `blockedBy` holds those not yet `done`. */
-  dependenciesOf(ids: string[]): Map<string, { dependsOn: string[]; blockedBy: Ticket['blockedBy'] }> {
-    const result = new Map<string, { dependsOn: string[]; blockedBy: Ticket['blockedBy'] }>();
-    for (const id of ids) result.set(id, { dependsOn: [], blockedBy: [] });
-    if (ids.length === 0) return result;
-    const rows = this.db
-      .select({
-        ticketId: ticketDependencies.ticketId,
-        id: tickets.id,
-        key: tickets.key,
-        title: tickets.title,
-        status: tickets.status,
-      })
-      .from(ticketDependencies)
-      .innerJoin(tickets, eq(tickets.id, ticketDependencies.dependsOnId))
-      .where(inArray(ticketDependencies.ticketId, ids))
-      .orderBy(asc(ticketDependencies.createdAt), asc(tickets.number))
-      .all();
-    for (const r of rows) {
-      const entry = result.get(r.ticketId);
-      if (!entry) continue;
-      entry.dependsOn.push(r.id);
-      if (r.status !== 'done') {
-        entry.blockedBy.push({ id: r.id, key: r.key, title: r.title, status: r.status as TicketStatus });
-      }
-    }
-    return result;
+  dependenciesOf(ids: string[]): Map<string, TicketDependencies> {
+    return loadDependencies(this.db, ids);
   }
 
   private withDependencies(rows: TicketRow[]): Ticket[] {
@@ -2223,62 +1877,18 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     return rows.map((row) => toTicket(row, deps.get(row.id)));
   }
 
-  private allEdges(projectId: string): Edge[] {
-    return this.db
-      .select({ ticketId: ticketDependencies.ticketId, dependsOnId: ticketDependencies.dependsOnId })
-      .from(ticketDependencies)
-      .innerJoin(tickets, eq(tickets.id, ticketDependencies.ticketId))
-      .where(eq(tickets.projectId, projectId))
-      .all();
-  }
-
   /** Resolves the batch's refs/keys (or the default tiers), stores the edges and notes the outcome on the run (if any). */
   private applyDraftDependencies(
     runId: string | null,
     projectId: string,
-    created: { draft: { ref?: string; dependsOn?: string[] }; ticket: Ticket }[],
+    created: (CreatedDraft & { ticket: Ticket })[],
   ): void {
     if (created.length === 0) return;
     const note = (type: string, payload: Record<string, unknown>) => {
       if (runId) this.runs.note(runId, type, payload);
     };
     try {
-      // Includes the batch's own tickets: a skipped draft's dependents point at an earlier draft's key.
-      const projectKeys = new Map<string, string>();
-      for (const r of this.db
-        .select({ id: tickets.id, key: tickets.key })
-        .from(tickets)
-        .where(eq(tickets.projectId, projectId))
-        .all()) {
-        projectKeys.set(r.key.toUpperCase(), r.id);
-      }
-      const { edges, dropped } = resolveBatchDependencies(
-        created.map(({ draft, ticket }) => ({
-          id: ticket.id,
-          key: ticket.key,
-          persona: ticket.persona,
-          ...(draft.ref ? { ref: draft.ref } : {}),
-          ...(draft.dependsOn ? { dependsOn: draft.dependsOn } : {}),
-        })),
-        projectKeys,
-        this.allEdges(projectId),
-      );
-      const now = new Date();
-      if (edges.length > 0) {
-        this.db
-          .insert(ticketDependencies)
-          .values(edges.map((e) => ({ ticketId: e.ticketId, dependsOnId: e.dependsOnId, createdAt: now })))
-          .onConflictDoNothing()
-          .run();
-      }
-      const keyById = new Map<string, string>(created.map((c) => [c.ticket.id, c.ticket.key]));
-      for (const r of this.db
-        .select({ id: tickets.id, key: tickets.key })
-        .from(tickets)
-        .where(eq(tickets.projectId, projectId))
-        .all()) {
-        keyById.set(r.id, r.key);
-      }
+      const { edges, dropped, keyById } = storeDraftDependencies(this.db, projectId, created);
       for (const d of dropped) {
         note('dependency_dropped', {
           ticket: keyById.get(d.ticketId) ?? d.ticketId,
@@ -2365,7 +1975,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           status: body.status,
           priority: body.priority,
           persona: body.persona,
-          position: this.edgePosition(projectId, body.status, 'bottom'),
+          position: edgePosition(this.db, projectId, body.status, 'bottom'),
           depth,
           ...(external
             ? {
@@ -2529,7 +2139,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const current = this.row(id);
     const { dependsOn, ...patch } = UpdateTicketBodySchema.parse(input);
     const blockedBefore = dependsOn ? this.dependenciesOf([id]) : undefined;
-    if (dependsOn) this.replaceDependencies(current, dependsOn);
+    if (dependsOn) replaceDependencies(this.db, current, dependsOn);
     const set: Partial<TicketRow> = { ...patch, updatedAt: new Date() };
     const reorderOnly =
       dependsOn === undefined &&
@@ -2539,7 +2149,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (byPerson && current.externalTriage && !reorderOnly) set.externalTriage = false;
     // Moved to another column without an explicit slot: append at the bottom.
     if (patch.status && patch.status !== current.status && patch.position === undefined) {
-      set.position = this.edgePosition(current.projectId, patch.status, 'bottom');
+      set.position = edgePosition(this.db, current.projectId, patch.status, 'bottom');
     }
     const ticket = this.publish(this.db.update(tickets).set(set).where(eq(tickets.id, id)).returning().get());
     if ((patch.status && patch.status !== current.status) || (patch.title && patch.title !== current.title)) {
@@ -2551,9 +2161,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     // when the factory already chains this project); a plain board move starts nothing else.
     if (patch.status === 'done' && current.status !== 'done') {
       this.failedInARow.delete(current.projectId);
-      this.dispatchUnblocked(current.projectId, this.dependentIds(id));
+      this.dispatchUnblocked(current.projectId, dependentIds(this.db, id));
     } else if (blockedBefore && ticket.status !== 'done') {
-      const freed = this.nowUnblocked([id], blockedBefore);
+      const freed = unblockedSince(this.db, [id], blockedBefore);
       if (freed.length > 0) this.dispatchUnblocked(current.projectId, freed);
     }
     return ticket;
@@ -2561,16 +2171,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /** `blockedBy` of the tickets waiting for `id` shows its status and title: republish them. */
   private publishDependents(id: string): void {
-    this.publishTickets(this.dependentIds(id));
-  }
-
-  private dependentIds(id: string): string[] {
-    return this.db
-      .select({ ticketId: ticketDependencies.ticketId })
-      .from(ticketDependencies)
-      .where(eq(ticketDependencies.dependsOnId, id))
-      .all()
-      .map((r) => r.ticketId);
+    this.publishTickets(dependentIds(this.db, id));
   }
 
   private publishTickets(ids: string[]): void {
@@ -2579,43 +2180,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     for (const ticket of this.withDependencies(rows)) this.emit('ticket', ticket);
   }
 
-  /** Replaces the ticket's dependency set; validates everything before writing anything. */
-  private replaceDependencies(current: TicketRow, refs: string[]): void {
-    const siblings = this.db.select().from(tickets).where(eq(tickets.projectId, current.projectId)).all();
-    const ids = new Set<string>();
-    for (const ref of refs) {
-      const hit =
-        siblings.find((t) => t.id === ref) ?? siblings.find((t) => t.key.toUpperCase() === ref.toUpperCase());
-      if (!hit) throw new HttpError(400, 'unknown_dependency', `no ticket "${ref}" in this project`);
-      ids.add(hit.id);
-    }
-    const others = this.allEdges(current.projectId).filter((e) => e.ticketId !== current.id);
-    const accepted: Edge[] = [];
-    for (const dependsOnId of ids) {
-      const edge = { ticketId: current.id, dependsOnId };
-      if (wouldCreateCycle([...others, ...accepted], edge)) {
-        throw new HttpError(
-          409,
-          'dependency_cycle',
-          'a ticket cannot depend on itself, directly or through other tickets',
-        );
-      }
-      accepted.push(edge);
-    }
-    const now = new Date();
-    this.db.transaction((tx) => {
-      tx.delete(ticketDependencies).where(eq(ticketDependencies.ticketId, current.id)).run();
-      if (accepted.length > 0) {
-        tx.insert(ticketDependencies)
-          .values(accepted.map((e) => ({ ...e, createdAt: now })))
-          .run();
-      }
-    });
-  }
-
   remove(id: string): void {
     const row = this.row(id);
-    const waiting = this.dependentIds(id);
+    const waiting = dependentIds(this.db, id);
     const blockedBefore = this.dependenciesOf(waiting);
     // Its runs outlive it (ticketId goes null); a hold they had is nobody's to answer any more.
     for (const run of this.db.select({ id: runs.id }).from(runs).where(eq(runs.ticketId, id)).all()) {
@@ -2639,7 +2206,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.emit('removed', { id, projectId: row.projectId });
     // Their edge to it went with it (ON DELETE CASCADE).
     this.publishTickets(waiting);
-    const freed = this.nowUnblocked(waiting, blockedBefore);
+    const freed = unblockedSince(this.db, waiting, blockedBefore);
     if (freed.length > 0) this.dispatchUnblocked(row.projectId, freed);
   }
 
@@ -2797,14 +2364,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   private followRun(ticketId: string, state: Run['state']): void {
     const row = this.db.select().from(tickets).where(eq(tickets.id, ticketId)).get();
-    if (!row || row.status === 'done') return;
-    const target = statusForRunState(state);
-    if (target && target !== row.status) this.moveToTop(ticketId, target);
+    const target = row ? columnForRun(row.status as TicketStatus, state) : null;
+    if (target) this.moveToTop(ticketId, target);
   }
 
   private moveToTop(id: string, status: TicketStatus): Ticket {
     const row = this.row(id);
-    const position = this.edgePosition(row.projectId, status, 'top');
+    const position = edgePosition(this.db, row.projectId, status, 'top');
     const ticket = this.publish(
       this.db
         .update(tickets)
@@ -2817,24 +2383,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (status === 'done') this.failedInARow.delete(row.projectId);
     if (status !== row.status) this.emit('moved', ticket, row.status as TicketStatus);
     return ticket;
-  }
-
-  private edgePosition(projectId: string, status: TicketStatus, edge: 'top' | 'bottom'): number {
-    const where = and(eq(tickets.projectId, projectId), eq(tickets.status, status));
-    if (edge === 'top') {
-      const first = this.db
-        .select({ p: min(tickets.position) })
-        .from(tickets)
-        .where(where)
-        .get();
-      return first?.p == null ? POSITION_STEP : first.p - POSITION_STEP;
-    }
-    const last = this.db
-      .select({ p: max(tickets.position) })
-      .from(tickets)
-      .where(where)
-      .get();
-    return last?.p == null ? POSITION_STEP : last.p + POSITION_STEP;
   }
 
   private publish(row: TicketRow): Ticket {
