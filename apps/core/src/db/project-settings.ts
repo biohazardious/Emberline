@@ -1,4 +1,12 @@
-import { CommitIdentity, IssueSyncSettings, MainPushTarget, ProjectImportSource } from '@emberline/protocol';
+import {
+  CommitIdentity,
+  GitSync,
+  IssueSyncSettings,
+  MainPushTarget,
+  ProjectImportSource,
+  ReleaseDraft,
+  ReleaseJob,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from './index.js';
@@ -148,6 +156,16 @@ export interface RepositorySettings {
   pendingMainPush: PendingMainPush | null;
   /** null: the factory's commit identity. */
   commitIdentity: CommitIdentity | null;
+  /** The branch the Git page treats as the working branch. Absent: the project's default branch. */
+  workingBranch?: string;
+  /** Whether core pulls the working branch from origin by itself. On unless switched off. */
+  autoPull: boolean;
+  /** The outcome of the last pull; null before the first one. */
+  sync: GitSync | null;
+  /** Commits that arrived by a pull, so the history can mark them as from origin. */
+  pulledOids: string[];
+  releaseDraft: ReleaseDraft | null;
+  releaseJob: ReleaseJob | null;
 }
 const RemoteCheckSchema = z.object({
   url: z.string(),
@@ -165,7 +183,17 @@ const RepositorySettingsSchema = z.object({
   lastRemoteCheck: RemoteCheckSchema.nullable().catch(null).default(null),
   pendingMainPush: PendingMainPushSchema.nullable().catch(null).default(null),
   commitIdentity: CommitIdentity.nullable().catch(null).default(null),
+  workingBranch: z.string().optional().catch(undefined),
+  autoPull: z.boolean().catch(true).default(true),
+  sync: GitSync.nullable().catch(null).default(null),
+  pulledOids: z.array(z.string()).max(500).catch([]).default([]),
+  releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
+  releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });
+/** The branch the Git page works on: the stored choice, else the project's default branch. */
+export function workingBranchOf(settings: RepositorySettings, defaultBranch: string): string {
+  return settings.workingBranch ?? defaultBranch;
+}
 /**
  * Where Keep main pushed pushes: the stored choice; without one, a project that already pushes
  * automatically (switched on before 0.8.0) keeps pushing its default branch, and one that opts in
