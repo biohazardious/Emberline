@@ -70,6 +70,13 @@ export interface ClaudeHookSettings {
   skillOverrides: { 'auto-mode-setup': 'off' };
   modelProposedGoals: 'disabled';
   /**
+   * No `Co-Authored-By` trailer or "Generated with" line in the agent's commits and PRs: they are made
+   * as the project's commit identity (GIT_AUTHOR_* in the session).
+   */
+  attribution: { commit: ''; pr: '' };
+  /** The pre-`attribution` setting, for Claude Code versions that only know it. */
+  includeCoAuthoredBy: false;
+  /**
    * The CLI pipes its status (with subscription `rate_limits`) to this runner script, which keeps the
    * latest limits for Emberline's usage view; Emberline never reads or sends the login token itself.
    */
@@ -120,6 +127,8 @@ export function buildHookSettings(
     switchModelsOnFlag: true,
     skillOverrides: { 'auto-mode-setup': 'off' },
     modelProposedGoals: 'disabled',
+    attribution: { commit: '', pr: '' },
+    includeCoAuthoredBy: false,
     statusLine: { type: 'command', command: 'claude-statusline.mjs', padding: 0 },
   } as const;
   if (autonomous) {

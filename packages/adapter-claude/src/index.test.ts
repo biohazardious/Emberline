@@ -38,6 +38,14 @@ describe('run settings', () => {
     expect(buildHookSettings('emberline-hook', 5, true)).toMatchObject({ statusLine });
   });
 
+  it('turns off commit and PR attribution in every mode', () => {
+    const off = { attribution: { commit: '', pr: '' }, includeCoAuthoredBy: false };
+    expect(buildHookSettings('emberline-hook')).toMatchObject(off);
+    expect(buildHookSettings('emberline-hook', 5, true)).toMatchObject(off);
+    const spec = buildLaunchSpec({ runId: 'r1', hookToken: 't', coreUrl: 'http://core:7420' });
+    expect(JSON.parse(spec.args[1] ?? '{}')).toMatchObject(off);
+  });
+
   it('pins the classic renderer and keeps prompts and promos out of the PTY', () => {
     const settings = buildHookSettings('emberline-hook');
     // Any tui value also stops the mid-turn "Try the new fullscreen renderer?" dialog.
@@ -324,6 +332,7 @@ describe('secondary CLIs start without first-run questions', () => {
     expect(script(spec)).toContain('claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome');
     const settings = JSON.parse(spec.env.EMBERLINE_CLAUDE_SETTINGS ?? '{}');
     expect(settings).toMatchObject({ tui: 'default', skipDangerousModePermissionPrompt: true });
+    expect(settings).toMatchObject({ attribution: { commit: '', pr: '' }, includeCoAuthoredBy: false });
     expect(settings).not.toHaveProperty('hooks');
     expect(spec.env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY).toBe('1');
   });
