@@ -1,4 +1,12 @@
-import type { BulkTicketResult, Run, SyncWorktreeResponse, Ticket, TicketStatus } from '@emberline/protocol';
+import type {
+  BulkTicketResult,
+  Run,
+  RunDetail,
+  SyncWorktreeResponse,
+  Ticket,
+  TicketStatus,
+} from '@emberline/protocol';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
 import {
@@ -30,6 +38,12 @@ import {
   reviewBlockedCount,
   worktreeMissing,
 } from '../reviewComments';
+import {
+  findResolverRunId,
+  type ManualConflictState,
+  type SyncResolvingNotice,
+  syncWorktreeOutcome,
+} from '../syncResolution';
 import { dropIntoInProgress } from '../ticketDeps';
 import { toastError, toastInfo } from '../toast';
 
@@ -48,7 +62,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
     patchLocal,
     refresh: refreshTickets,
   } = useTickets(projectId);
-  const { runs } = useRuns();
+  const queryClient = useQueryClient();
+  const { runs, refresh: refreshRuns } = useRuns();
 
   // The open ticket lives in the address, so coming back from its terminal or review reopens it.
   const [openParam] = useQueryParam('ticket');
@@ -69,6 +84,20 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string>();
   const [blockedDrop, setBlockedDrop] = useState<{ ticket: Ticket; target: DropTarget; count: number }>();
   const [missingDrop, setMissingDrop] = useState<{ ticket: Ticket; target: DropTarget }>();
+  const [resolvingNotice, setResolvingNotice] = useState<SyncResolvingNotice>();
+  const [manualConflict, setManualConflict] = useState<ManualConflictState>();
+
+  useEffect(() => {
+    if (!tickets) return;
+    if (resolvingNotice) {
+      const target = tickets.find((t) => t.id === resolvingNotice.ticketId);
+      if (target?.status === 'done') setResolvingNotice(undefined);
+    }
+    if (manualConflict) {
+      const target = tickets.find((t) => t.id === manualConflict.ticketId);
+      if (target && target.status !== 'review') setManualConflict(undefined);
+    }
+  }, [tickets, resolvingNotice, manualConflict]);
 
   const [filter, setFilter] = useState<BoardFilter>(() => {
     try {
@@ -156,6 +185,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
     setError(undefined);
     setBlockedDrop(undefined);
     setMissingDrop(undefined);
+    setResolvingNotice(undefined);
+    setManualConflict(undefined);
 
     if (dropAction === 'confirm') {
       setArmedStart((prev) => ({ id: ticket.id, nonce: (prev?.nonce ?? 0) + 1 }));
@@ -184,12 +215,48 @@ export function BoardPage({ projectId }: { projectId: string }) {
         setError(`Not merged: ${errorMessage(e)}`);
         return;
       }
-      if (!sync.ok) {
-        if (inDrawer) throw new DrawerMergeError(sync.summary, null);
-        setError(sync.summary);
+
+      let resolverRunId: string | null = null;
+      if (!sync.ok && sync.resolution === 'resolver_started') {
+        resolverRunId = findResolverRunId(runs, null, sync.runId);
+        if (!resolverRunId) {
+          const detail = await api<RunDetail>(`/api/runs/${sync.runId}`).catch(() => null);
+          resolverRunId = findResolverRunId(runs, detail, sync.runId);
+        }
+        void refreshRuns();
+      } else if (!sync.ok && sync.resolution === 'agent_resolving') {
+        void refreshRuns();
+      }
+
+      const outcome = syncWorktreeOutcome(sync, { resolverRunId });
+      if (outcome.kind === 'resolving') {
+        void queryClient.invalidateQueries({ queryKey: ['run-recovery', currentRun.id] });
+        setResolvingNotice({
+          ticketId: ticket.id,
+          resolution: outcome.resolution,
+          text: outcome.text,
+          runId: outcome.runId,
+          href: outcome.href,
+          linkLabel: outcome.linkLabel,
+        });
         return;
       }
-      toastInfo(sync.summary);
+      if (outcome.kind === 'manual_conflict') {
+        void queryClient.invalidateQueries({ queryKey: ['run-recovery', currentRun.id] });
+        setManualConflict({
+          ticketId: ticket.id,
+          runId: currentRun.id,
+          conflicts: outcome.conflicts,
+        });
+        if (!inDrawer) setOpenId(ticket.id);
+        return;
+      }
+      if (outcome.kind === 'error') {
+        if (inDrawer) throw new DrawerMergeError(outcome.text, null);
+        setError(outcome.text);
+        return;
+      }
+      toastInfo(outcome.toast);
     }
 
     patchLocal({ ...ticket, status: target.status, position });
@@ -242,8 +309,10 @@ export function BoardPage({ projectId }: { projectId: string }) {
     setErr: setError,
     blocked: blockedDrop,
     missing: missingDrop,
+    resolving: openId === resolvingNotice?.ticketId ? undefined : resolvingNotice,
     clrBlocked: () => setBlockedDrop(undefined),
     clrMissing: () => setMissingDrop(undefined),
+    clrResolving: () => setResolvingNotice(undefined),
     move: (t, d, opts) => move(t, d, opts),
     open: (id) => setOpenId(id),
   };
@@ -273,6 +342,17 @@ export function BoardPage({ projectId }: { projectId: string }) {
           ticket={open}
           allTickets={tickets ?? []}
           run={latestRun.get(open.id)}
+          resolvingNotice={open.id === resolvingNotice?.ticketId ? resolvingNotice : null}
+          onDismissResolving={() => setResolvingNotice(undefined)}
+          conflictFallback={
+            manualConflict?.ticketId === open.id && manualConflict.runId === latestRun.get(open.id)?.id
+              ? {
+                  conflicts: manualConflict.conflicts,
+                  mainBranch: project?.defaultBranch,
+                  ticketKey: open.key,
+                }
+              : null
+          }
           onClose={() => {
             setArmedStart(undefined);
             setOpenId(undefined);

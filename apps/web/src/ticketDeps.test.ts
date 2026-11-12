@@ -2,8 +2,11 @@ import type { Ticket } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   dependencyCandidates,
-  startableCount,
   dropIntoInProgress,
+  overlapWaitingFor,
+  overlapWaitingLabel,
+  overlapWaitingTitle,
+  startableCount,
   waitingLabel,
   waitingTitle,
 } from './ticketDeps';
@@ -20,6 +23,36 @@ describe('waitingLabel', () => {
     expect(waitingLabel([blocker('A'), blocker('B')])).toBe('⏳ waiting for 2 tickets'));
   it('lists key, title and status', () =>
     expect(waitingTitle([blocker('A', 'in_progress')])).toBe('A title A (in progress)'));
+});
+
+describe('overlapWaiting', () => {
+  const wait = {
+    ticketId: 't-12',
+    key: 'EMB-12',
+    paths: ['Makefile', '.github/workflows/ci.yml'],
+  };
+
+  it('applies only to ready tickets with waitingOn set', () => {
+    expect(overlapWaitingFor({ status: 'ready', waitingOn: wait })).toEqual(wait);
+    expect(overlapWaitingFor({ status: 'ready', waitingOn: null })).toBeNull();
+    expect(overlapWaitingFor({ status: 'backlog', waitingOn: wait })).toBeNull();
+    expect(overlapWaitingFor({ status: 'in_progress', waitingOn: wait })).toBeNull();
+    expect(overlapWaitingFor({ status: 'review', waitingOn: wait })).toBeNull();
+    expect(overlapWaitingFor({ status: 'done', waitingOn: wait })).toBeNull();
+  });
+
+  it('formats single and multi-path compact card labels', () => {
+    expect(overlapWaitingLabel({ ticketId: 't-12', key: 'EMB-12', paths: ['Makefile'] })).toBe(
+      'Waits for EMB-12 · Makefile',
+    );
+    expect(overlapWaitingLabel(wait)).toBe('Waits for EMB-12 · Makefile +1');
+    expect(overlapWaitingLabel({ ticketId: 't-12', key: 'EMB-12', paths: [] })).toBe('Waits for EMB-12');
+  });
+
+  it('lists all overlapping paths in the tooltip title', () => {
+    expect(overlapWaitingTitle(wait)).toBe('Waits for EMB-12:\nMakefile\n.github/workflows/ci.yml');
+    expect(overlapWaitingTitle({ ticketId: 't-12', key: 'EMB-12', paths: [] })).toBe('Waits for EMB-12');
+  });
 });
 
 describe('dependencyCandidates', () => {

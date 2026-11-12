@@ -7,13 +7,17 @@ import { refreshAfterAnswer } from '../answerDialog';
 import { copyText } from '../clipboard';
 import { AnswerDialog } from './AnswerDialog';
 import {
+  buildManualConflictRecovery,
+  type ConflictHoldFallback,
   discardConfirm,
   initialAnswerText,
   recoverErrorText,
   recoveryApplies,
   recoveryHeading,
   visibleSuggestions,
+  waitSuggestionHref,
 } from '../holdRecovery';
+import type { SyncResolvingNotice } from '../syncResolution';
 
 interface Props {
   run: Run;
@@ -24,6 +28,31 @@ interface Props {
   /** Without these the suggestion is not offered; the ticket link takes their place. */
   onDiscard?: () => Promise<void> | void;
   onMerge?: () => Promise<void> | void;
+  /** Manual conflict fallback when a person's merge failed on an unheld run. */
+  conflictFallback?: ConflictHoldFallback | null;
+}
+
+/** Info banner shown when a person's accept/merge escalates to the agent or a resolver run. */
+export function SyncResolutionBanner({
+  notice,
+  onDismiss,
+}: {
+  notice: Pick<SyncResolvingNotice, 'text' | 'href' | 'linkLabel'>;
+  onDismiss?: () => void;
+}) {
+  return (
+    <div className="banner banner-info sync-resolution-banner" role="status">
+      <span>{notice.text}</span>
+      <Link href={notice.href} className="btn btn-sm">
+        {notice.linkLabel}
+      </Link>
+      {onDismiss && (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
+          Dismiss
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** The held run's recovery (`GET /api/runs/:id/recovery`), shared by the hold block and the Inbox's Answer. */
@@ -59,13 +88,17 @@ export function useHoldAnswer(run: Run): { open: (initialText: string) => void; 
 }
 
 /** Why a finished run is held and the ways out of it (`GET /api/runs/:id/recovery`). Key it by run id. */
-export function HoldRecovery({ onAnswer, ...props }: Props) {
+export function HoldRecovery({ onAnswer, conflictFallback, ...props }: Props) {
   const { run } = props;
   // Without onAnswer the block opens its own dialog. It sits beside the block, not in it: a refetch
   // that ends the hold (any run event) hides the block, and the dialog stays.
   const answer = useHoldAnswer(run);
   const query = useRunRecovery(run);
-  const rec = recoveryApplies(run) ? query.data : null;
+  const rec =
+    (recoveryApplies(run) ? query.data : null) ??
+    (conflictFallback && conflictFallback.conflicts.length > 0
+      ? buildManualConflictRecovery(run, conflictFallback)
+      : null);
 
   return (
     <>
@@ -82,11 +115,18 @@ function HoldRecoveryBlock({
   hideLabel = false,
   onDiscard,
   onMerge,
-}: Omit<Props, 'onAnswer'> & { rec: RunRecovery; onAnswer: (initialText: string) => void }) {
+}: Omit<Props, 'onAnswer' | 'conflictFallback'> & {
+  rec: RunRecovery;
+  onAnswer: (initialText: string) => void;
+}) {
+  const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState<string>();
+
+  const cachedRuns = client.getQueryData<Run[]>(['runs']);
+  const resolverRunId = run.handedOffTo ?? cachedRuns?.find((r) => r.predecessorRunId === run.id)?.id ?? null;
 
   const ticketHref = run.ticketId ? `/projects/${run.projectId}/board?ticket=${run.ticketId}` : null;
   const suggestions = visibleSuggestions(rec, { onDiscard, onMerge, ticket: !!ticketHref });
@@ -183,26 +223,41 @@ function HoldRecoveryBlock({
                 {s.label}
               </Link>
             )}
-            {s.kind === 'manual' && (
-              <div className="hold-recovery-manual">
-                <span className="small">{s.label}</span>
-                {s.files.length > 0 && (
-                  <ul className="hold-recovery-files mono small">
-                    {s.files.map((f) => (
-                      <li key={f}>{f}</li>
+            {s.kind === 'manual' &&
+              (() => {
+                const waitHref = waitSuggestionHref(s, run, resolverRunId);
+                if (waitHref) {
+                  return (
+                    <Link href={waitHref} className={btn(s)}>
+                      {s.label}
+                    </Link>
+                  );
+                }
+                return (
+                  <div className="hold-recovery-manual">
+                    <span className="small">{s.label}</span>
+                    {s.files.length > 0 && (
+                      <ul className="hold-recovery-files mono small">
+                        {s.files.map((f) => (
+                          <li key={f}>{f}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {s.commands.map((c) => (
+                      <div key={c} className="hold-recovery-command">
+                        <code className="mono small">{c}</code>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          onClick={() => void copy(c, c)}
+                        >
+                          {copied === c ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
                     ))}
-                  </ul>
-                )}
-                {s.commands.map((c) => (
-                  <div key={c} className="hold-recovery-command">
-                    <code className="mono small">{c}</code>
-                    <button type="button" className="btn btn-xs btn-ghost" onClick={() => void copy(c, c)}>
-                      {copied === c ? 'Copied' : 'Copy'}
-                    </button>
                   </div>
-                ))}
-              </div>
-            )}
+                );
+              })()}
             {s.detail && <span className="muted small hold-recovery-detail">{s.detail}</span>}
           </li>
         ))}

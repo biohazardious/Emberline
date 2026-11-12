@@ -2,6 +2,7 @@ import type { AgentPersona, PermissionMode, Run, Ticket, TicketStatus } from '@e
 import { X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../../api';
+import type { ConflictHoldFallback } from '../../holdRecovery';
 import { useQueryParam } from '../../hooks/navigation';
 import {
   drawerFailure,
@@ -9,8 +10,10 @@ import {
   mergeStepRetired,
   type PendingMergeStep,
 } from '../../reviewComments';
+import type { SyncResolvingNotice } from '../../syncResolution';
 import { timeAgo } from '../../time';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { SyncResolutionBanner } from '../HoldRecovery';
 import { PersonaBadge } from '../PersonaBadge';
 import { RunEventTimeline, RunFailureBanner } from '../RunInspector';
 import { RunStatePill } from '../RunStatePill';
@@ -26,6 +29,9 @@ export function TicketDrawer({
   ticket,
   allTickets,
   run,
+  resolvingNotice,
+  onDismissResolving,
+  conflictFallback,
   onClose,
   onChanged,
   armStart,
@@ -36,6 +42,9 @@ export function TicketDrawer({
   ticket: Ticket;
   allTickets: Ticket[];
   run: Run | undefined;
+  resolvingNotice?: SyncResolvingNotice | null;
+  onDismissResolving?: () => void;
+  conflictFallback?: ConflictHoldFallback | null;
   onClose: () => void;
   onChanged: (ticket: Ticket) => void;
   /** Changes (non-zero) when a drop asks this drawer to confirm starting a blocked ticket. */
@@ -179,6 +188,7 @@ export function TicketDrawer({
     t: ticket,
     all: allTickets,
     run,
+    conflictFallback: conflictFallback ?? null,
     title,
     setTitle,
     body,
@@ -316,6 +326,8 @@ export function TicketDrawer({
         {viewTab === 'details' && <DrawerDetailsSection ctx={ctx} />}
 
         <DrawerAgentSection ctx={ctx} />
+
+        {resolvingNotice && <SyncResolutionBanner notice={resolvingNotice} onDismiss={onDismissResolving} />}
 
         {error && (
           <p className="form-error" role="alert">

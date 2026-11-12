@@ -1447,6 +1447,24 @@ a {
   color: var(--muted);
 }
 
+.sync-resolution-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  border-color: color-mix(in hsl, var(--info) 45%, var(--border));
+  background: color-mix(in hsl, var(--info) 10%, var(--surface));
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-resolution-banner > span:first-child {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .banner-ok {
   border: 1px solid color-mix(in hsl, var(--ok) 45%, var(--border));
   background: color-mix(in hsl, var(--ok) 12%, var(--surface));
@@ -2492,6 +2510,28 @@ a {
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.conflict-event-detail {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.conflict-event-files {
+  margin: 0;
+  padding-left: 1.15em;
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.conflict-event-file code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text);
 }
 
 /* --- roadmap item filter ---------------------------------------------------- */
@@ -4017,6 +4057,24 @@ dialog.cmd-dialog::backdrop {
   color: var(--muted);
   border: 1px dashed var(--border);
   padding: 1px 6px;
+}
+
+.card-overlap-wait {
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: var(--radius-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-overlap-wait:focus-visible {
+  outline: 2px solid var(--ember-1);
+  outline-offset: 1px;
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 .dep-editor {

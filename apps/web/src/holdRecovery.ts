@@ -93,3 +93,87 @@ export function discardConfirm(s: Pick<RecoverySuggestion, 'label'>): { question
   const label = s.label.trim();
   return { question: `${label}?`, confirm: `Yes, ${label.charAt(0).toLowerCase()}${label.slice(1)}` };
 }
+
+export interface ConflictHoldFallback {
+  conflicts: string[];
+  mainBranch?: string;
+  ticketKey?: string | null;
+}
+
+function shellWord(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function shortFileList(files: readonly string[]): string {
+  return files.length > 3 ? `${files.slice(0, 3).join(', ')} and ${files.length - 3} more` : files.join(', ');
+}
+
+/** Link target for core's in-flight `wait_for_agent` / `wait_for_resolver` recovery items, or null. */
+export function waitSuggestionHref(
+  s: Pick<RecoverySuggestion, 'id'>,
+  run: Pick<Run, 'id' | 'handedOffTo'>,
+  resolverRunId?: string | null,
+): string | null {
+  if (s.id === 'wait_for_agent') return `/runs/${run.id}/review`;
+  if (s.id === 'wait_for_resolver') {
+    const target = resolverRunId?.trim() || run.handedOffTo?.trim() || null;
+    return target ? `/runs/${target}/review` : null;
+  }
+  return null;
+}
+
+/** Client-side Hold Recovery suggestions when a person-initiated merge hits a manual conflict on an unheld run. */
+export function buildManualConflictRecovery(
+  run: Pick<Run, 'endedAt' | 'cancelled' | 'resumable' | 'worktreePath'>,
+  fallback: ConflictHoldFallback,
+): RunRecovery {
+  const mainBranch = fallback.mainBranch?.trim() || 'main';
+  const files = fallback.conflicts;
+  const canDeliver = Boolean(run.worktreePath && ((!run.endedAt && !run.cancelled) || run.resumable));
+  const count = files.length;
+  const plural = `${count} ${count === 1 ? 'conflict' : 'conflicts'}`;
+  const main = shellWord(mainBranch);
+  const commands = run.worktreePath
+    ? [
+        `git -C ${shellWord(run.worktreePath)} merge ${main}`,
+        `git -C ${shellWord(run.worktreePath)} add -A`,
+        `git -C ${shellWord(run.worktreePath)} commit --no-edit`,
+      ]
+    : [];
+
+  return {
+    hold: 'merge_failed',
+    label: 'Merge failed',
+    why: `the merge into ${mainBranch} conflicted: ${shortFileList(files)}`,
+    delivery: canDeliver ? 'session' : 'none',
+    suggestions: [
+      {
+        id: 'resolve_conflicts',
+        kind: 'prompt',
+        label: 'Resolve conflicts',
+        detail: `Ask the agent to merge ${mainBranch} and resolve ${plural}.`,
+        prompt: `Merge ${mainBranch} into your branch (git merge ${mainBranch}), resolve the conflicts in: ${files.join(', ')} keeping the intent of both changes, run the project's checks, commit, and finish.`,
+        files,
+        commands: [],
+      },
+      {
+        id: 'discard',
+        kind: 'discard',
+        label: 'Discard this work',
+        detail: `Move ${fallback.ticketKey ?? 'the ticket'} to Done without merging; the branch is kept until the next cleanup.`,
+        prompt: null,
+        files: [],
+        commands: [],
+      },
+      {
+        id: 'resolve_by_hand',
+        kind: 'manual',
+        label: 'Resolve by hand',
+        detail: `Merge ${mainBranch} into the run's branch in its worktree, fix the conflicts, then commit.`,
+        prompt: null,
+        files,
+        commands,
+      },
+    ],
+  };
+}

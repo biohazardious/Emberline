@@ -1,4 +1,4 @@
-import type { Ticket } from '@emberline/protocol';
+import type { Ticket, TicketOverlapWait } from '@emberline/protocol';
 
 type Blocker = Ticket['blockedBy'][number];
 
@@ -14,6 +14,25 @@ export function waitingLabel(blockedBy: readonly Blocker[]): string | undefined 
 /** Hover text listing each blocker with its title and status. */
 export function waitingTitle(blockedBy: readonly Blocker[]): string {
   return blockedBy.map((b) => `${b.key} ${b.title} (${b.status.replace('_', ' ')})`).join('\n');
+}
+
+/** Overlap wait shown on a Ready card while a busy run edits overlapping files. */
+export function overlapWaitingFor(ticket: Pick<Ticket, 'status' | 'waitingOn'>): TicketOverlapWait | null {
+  return ticket.status === 'ready' && ticket.waitingOn ? ticket.waitingOn : null;
+}
+
+/** Compact single-line summary for a Ready card's file-overlap wait, e.g. "Waits for EMB-12 · Makefile". */
+export function overlapWaitingLabel(waitingOn: TicketOverlapWait): string {
+  const [first, ...rest] = waitingOn.paths;
+  if (!first) return `Waits for ${waitingOn.key}`;
+  const extra = rest.length > 0 ? ` +${rest.length}` : '';
+  return `Waits for ${waitingOn.key} · ${first}${extra}`;
+}
+
+/** Full tooltip text listing the busy ticket key and every overlapping path. */
+export function overlapWaitingTitle(waitingOn: TicketOverlapWait): string {
+  if (waitingOn.paths.length === 0) return `Waits for ${waitingOn.key}`;
+  return `Waits for ${waitingOn.key}:\n${waitingOn.paths.join('\n')}`;
 }
 
 /**

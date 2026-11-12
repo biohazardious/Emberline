@@ -8,7 +8,9 @@ import type {
   TicketStatus,
 } from '@emberline/protocol';
 import type { BoardFilter } from '../../boardFilter';
+import type { ConflictHoldFallback } from '../../holdRecovery';
 import type { BoardSelectionState } from '../../hooks/useBoardSelection';
+import type { SyncResolvingNotice } from '../../syncResolution';
 
 export const POSITION_STEP = 1024;
 
@@ -60,8 +62,10 @@ export interface BoardCtx {
   setErr: (m: string | undefined) => void;
   blocked: { ticket: Ticket; target: DropTarget; count: number } | undefined;
   missing: { ticket: Ticket; target: DropTarget } | undefined;
+  resolving?: SyncResolvingNotice | undefined;
   clrBlocked: () => void;
   clrMissing: () => void;
+  clrResolving?: () => void;
   move: (t: Ticket, d: DropTarget, opts?: { force?: boolean; skipMerge?: boolean }) => Promise<void>;
   open: (id: string) => void;
 }
@@ -70,6 +74,7 @@ export interface DrawerCtx {
   t: Ticket;
   all: Ticket[];
   run: Run | undefined;
+  conflictFallback?: ConflictHoldFallback | null;
   title: string;
   setTitle: (v: string) => void;
   body: string;

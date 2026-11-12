@@ -8,7 +8,14 @@ import { timeAgo } from '../time';
 import { EVENT_LABEL } from '../runEventLabels';
 import { HoldRecovery, useHoldAnswer } from './HoldRecovery';
 import { HandoffMenu } from './QuotaLanes';
-import { BuildOutputsList, ExpandableText, FinalAnswer, LastScreen } from './RunOutcome';
+import {
+  BuildOutputsList,
+  ConflictEventDetail,
+  conflictEventInfo,
+  ExpandableText,
+  FinalAnswer,
+  LastScreen,
+} from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
 
 const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
@@ -241,12 +248,18 @@ export function RunFailureBanner({ run }: { run: Run }) {
   );
 }
 
-/** The other run of a handoff, for `handed_off` (successor) and `handoff_from` (predecessor) events. */
-function handoffTarget(ev: RunEvent): string | undefined {
-  const payload = ev.payload as { toRunId?: unknown; fromRunId?: unknown } | null;
+/** The other run of a handoff or conflict resolver escalation (`handed_off`, `handoff_from`, `conflict_resolver_started`). */
+export function handoffTarget(ev: RunEvent): string | undefined {
+  const payload = ev.payload as { toRunId?: unknown; fromRunId?: unknown; runId?: unknown } | null;
   const id =
-    ev.type === 'handed_off' ? payload?.toRunId : ev.type === 'handoff_from' ? payload?.fromRunId : undefined;
-  return typeof id === 'string' ? id : undefined;
+    ev.type === 'handed_off'
+      ? payload?.toRunId
+      : ev.type === 'handoff_from'
+        ? payload?.fromRunId
+        : ev.type === 'conflict_resolver_started'
+          ? payload?.runId
+          : undefined;
+  return typeof id === 'string' && id.trim() ? id.trim() : undefined;
 }
 
 /** The text after the label of a `dependency_dropped` event: "<ticket> → <ref> (<reason>)". */
@@ -299,6 +312,7 @@ export function RunEventTimeline({ run }: { run: Run }) {
         {[...events].reverse().map((ev) => {
           const summary = payloadSummary(ev.payload);
           const tool = summary.tool;
+          const conflict = conflictEventInfo(ev.type, ev.payload);
           const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
           const text = dropped ?? completionEventText(ev.type, ev.payload) ?? summary.detail;
           return (
@@ -315,7 +329,7 @@ export function RunEventTimeline({ run }: { run: Run }) {
                 {ev.state && <RunStatePill state={ev.state} />}
                 <span className="event-time mono">{timeAgo(ev.ts)}</span>
               </div>
-              {text && <ExpandableText text={text} />}
+              {conflict ? <ConflictEventDetail info={conflict} /> : text && <ExpandableText text={text} />}
             </li>
           );
         })}

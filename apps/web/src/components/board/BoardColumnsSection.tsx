@@ -5,6 +5,7 @@ import { BoardBulkBar } from '../BoardBulkBar';
 import { BOARD_COLUMNS, TicketCard } from '../BoardCard';
 import { BoardFilterBar, MobileColumnNav } from '../BoardFilterBar';
 import { ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
+import { SyncResolutionBanner } from '../HoldRecovery';
 import type { BoardCtx, DropTarget } from './boardMeta';
 
 export function BoardColumnsSection({
@@ -40,8 +41,10 @@ export function BoardColumnsSection({
     err: error,
     blocked: blockedDrop,
     missing: missingDrop,
+    resolving: resolvingNotice,
     clrBlocked,
     clrMissing,
+    clrResolving,
     move,
     open,
   } = ctx;
@@ -74,6 +77,7 @@ export function BoardColumnsSection({
           {error}
         </div>
       )}
+      {resolvingNotice && <SyncResolutionBanner notice={resolvingNotice} onDismiss={clrResolving} />}
       {blockedDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
           <span>
