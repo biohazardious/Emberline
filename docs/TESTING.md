@@ -4,15 +4,15 @@ Emberline is verified by Vitest unit and integration tests in every package, plu
 
 ## Running
 
-| Command                                         | Scope                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------- |
-| `pnpm test`                                     | Every `{apps,packages}/*/src/**/*.test.ts` (about 2 minutes)  |
-| `pnpm vitest run apps/core/src/tickets.test.ts` | One file                                                      |
-| `pnpm vitest run -t "scheduler"`                | Tests whose name matches                                      |
-| `pnpm lint && pnpm typecheck && pnpm build`     | The rest of the build gate (`.emberline/worktree.yml`)        |
-| `pnpm format:check`                             | Prettier                                                      |
-| `make check`                                    | All of the above in the dev toolbox container                 |
-| `make e2e`                                      | `e2e/smoke.mjs` against an isolated core + runner + ops stack |
+| Command                                         | Scope                                                                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pnpm test`                                     | Every `{apps,packages}/*/src/**/*.test.ts` (about 2 minutes)                                          |
+| `pnpm vitest run apps/core/src/tickets.test.ts` | One file                                                                                              |
+| `pnpm vitest run -t "scheduler"`                | Tests whose name matches                                                                              |
+| `pnpm lint && pnpm typecheck && pnpm build`     | The rest of the build gate (`.emberline/worktree.yml`)                                                |
+| `pnpm format:check`                             | Prettier                                                                                              |
+| `make check`                                    | All of the above in the dev toolbox container                                                         |
+| `make e2e`                                      | `e2e/smoke.mjs`, then the Playwright suite `e2e/ui/run.mjs`, on an isolated core + runner + ops stack |
 
 Tests are hermetic: `apps/core/src/test-setup.ts` strips host Docker, run and provider variables, so results
 are the same in an Emberline runner and in CI. Some tests are skipped when a host capability (such as a Docker

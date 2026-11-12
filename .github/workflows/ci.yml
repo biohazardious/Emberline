@@ -1,4 +1,4 @@
-# Lint, typecheck, test, secret scan and an end-to-end smoke test on every push and pull request.
+# Lint, typecheck, test, secret scan and the end-to-end tests (smoke + Playwright) on every push and pull request.
 # Pushes to main publish the images as `edge`; a version tag (v0.1.0) publishes them as `0.1.0`,
 # `0.1` and `latest` and creates a GitHub release from that version's CHANGELOG section.
 #
@@ -92,8 +92,19 @@ jobs:
           if [ "$source" != "ppa" ]; then
             echo "::warning::The runner image's Chromium came from '$source', not the PPA (a cached fallback build?)"
           fi
-      - name: End-to-end smoke test
+      # The smoke test, then the Playwright ticket-to-merge suite (e2e/ui). Required: a failure fails the
+      # job, and the job gates the image push below.
+      - name: End-to-end tests
+        timeout-minutes: 10
         run: make e2e E2E_PREBUILT=1
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-traces
+          path: e2e-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Log in to the GitHub Container Registry
         if: env.PUSH == 'true'

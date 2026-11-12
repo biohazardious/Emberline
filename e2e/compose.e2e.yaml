@@ -10,10 +10,14 @@ services:
       EMBERLINE_METRICS_TOKEN: e2e-metrics-token
       # No engine in e2e (no privileged dind on CI runners), whatever .env says.
       EMBERLINE_DOCKER_ENGINE: '0'
+      # The agent of every run is the scripted stand-in the UI regression suite drives (e2e/ui/run.mjs).
+      EMBERLINE_CLAUDE_COMMAND: /e2e/fake-claude.mjs
   runner:
     image: emberline/runner:e2e
     # Preview ports stay unpublished: a running Emberline already holds them.
     ports: !reset []
+    volumes:
+      - ./e2e:/e2e:ro
   ops:
     image: emberline/runner:e2e
   docker:
