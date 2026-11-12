@@ -4,13 +4,36 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-12
+
+The first release Emberline largely built on itself: its own factory planned and ran 32 tickets on this repository (conflict self-heal, Codex and Gemini adapters, bulk board actions, a keyboard-first review page, the supply-chain gate, signed images). Review of that work found bugs and process gaps, and this release also fixes those: commits get a configurable identity and their ticket's title with no AI trailers, automatic pushes can go to an integration branch instead of main, files a repository ignores are no longer committed unasked, and a project's checks can be the same as its CI. Read the upgrade notes: projects that already push automatically keep pushing their default branch.
+
 ### Added
 
+- **Conflict self-heal (M5).** Parallel tickets that edit the same files no longer end in "Could not merge … (conflicts in …)" for a person to fix. Three layers, cheapest first:
+  - **Prevent:** a ready ticket whose `## Target Files` overlap the files a busy run claims or already changed waits until that run is merged or held, and its card names the ticket it waits for. Shared files (`PROJECT.md`, `CHANGELOG.md`, `README.md`, `docs/**`, lockfiles) never make a ticket wait. Factory setting **Don't run tickets that edit the same files at the same time** (on by default).
+  - **Heal:** when a merge into main conflicts only where both sides added lines at the same spot, core merges main into the run's branch, keeps both additions, runs the project's checks again and merges. A real edit/edit conflict, a lockfile conflict, failing checks, or no checks at all undo the heal. Factory setting **Auto-resolve additive merge conflicts** (on by default).
+  - **Escalate:** otherwise the run's own session gets the resolution prompt; when it cannot take one, a _resolver run_ starts on the same ticket and branch. The board and the ticket drawer show auto-resolved merges, resolver runs and overlap waits.
+  - A person's merge (drag to Done, **Merge now**) takes the same ladder. `POST /api/projects/:id/sync-worktree` answers with `resolution` (`auto_resolved`, `agent_resolving`, `resolver_started`, `manual`) and `resolverRunId`.
+- **Keyboard-first review page.** `j`/`k` move between files, `n`/`p` between comments, `c` comments, `b` toggles blocking, `?` shows every shortcut. A large diff gets a virtualised file tree with comment and blocking counts per folder, and one diff editor keeps the recently opened files loaded.
+- **Commit identity.** Settings → Commit identity sets the name and email on every commit Emberline makes (merges, snapshots, adopted files, `worktree.yml`, new projects) and on the agents' own commits in every CLI. The default stays `Emberline AI Factory <factory@emberline.local>`; Project settings → Repository can override it for one project.
+- **Push to an integration branch.** Project settings → Repository → Keep main pushed can push main to an integration branch (default `emberline/integration`) for you to merge on the forge, instead of to the default branch. Pushes are fast-forward only and never forced; when someone else pushed to that branch, the status says so. **Push main to origin** still pushes the default branch.
+- **Board export.** The board's Export menu downloads its tickets as JSON (with the whole board's status counts) or CSV (RFC 4180, cells that would start a formula neutralised): `GET /api/projects/:projectId/tickets/export?format=csv|json`.
+- **Dashboard and board filters.** The dashboard filters runs by state (live, working, needs attention, queued, done, failed) and the board filters tickets by persona and text. A page that fails shows the error with **Try again** and **Reload page** instead of a blank screen; the rest of Emberline keeps working.
 - **Bulk board actions.** The board's **Select** toggle turns cards into checkboxes (click, Space or Enter; shift-click picks a range; each column header offers All/None), and a toolbar moves, reprioritises, reassigns or deletes every picked ticket in one request (`POST /api/projects/:projectId/tickets/bulk`, up to 100 tickets). Tickets an agent is still working on, and tickets whose run branch would skip its merge when closed, are left as they were, stay selected and are listed with the reason. Escape leaves selection mode.
 - Compose previews run one stack per worktree with per-container caps: `EMBERLINE_PREVIEW_CPUS` (default 1) and `EMBERLINE_PREVIEW_MEMORY_MB` (default 1024, no swap). A ticket moved to Done takes its runs' preview stacks down with their volumes. `GET /api/projects/:id/container-preview/environments` lists every stack as starting, healthy, failed (with the end of its output) or stopped.
 
 ### Changed
 
+- Run commits are named after their ticket: `feat(KEY): <title>`, `test(KEY): …` for QA and `docs(KEY): …` for Product Owner, at most 72 characters. A run without a ticket uses `feat: <run title>`. Before, every one was `feat(KEY): factory run output`.
+- Agent sessions write no `Co-Authored-By` or "Generated with" lines: Claude Code's commit and PR attribution is off, and Aider runs with its author, committer, message and co-author attribution off.
+- The import and adopt wizards leave files the repository's `.gitignore` ignores unticked, with "ignored by .gitignore — committing it forces it into the repository". Ticking one still commits it. Saving `.emberline/worktree.yml` in a repository that ignores it says it was committed anyway.
+- The anti-slop gate no longer flags `: any`, `@ts-ignore`, `TODO` or `console.log` inside strings, template literals or JSX text; comments still count. Agents are told to report a false positive instead of rewording content to get past the gate.
+- Planning runs see the project's existing tickets and are told not to create duplicates and to list each ticket's files under `## Target Files`. UI/UX agents check interaction and performance claims in a real browser, not only in unit tests. No agent force-adds files the repository ignores.
+- The scheduler keeps its queue and quota pauses in SQLite and re-arms one timer for the next stored resume or retry, so a restart loses no pause or queued start.
+- Finished runs older than `EMBERLINE_EVENT_RETENTION_DAYS` (default 90, `0` keeps everything) are compacted to their state changes, summary, handoff note and usage totals. New indexes keep the Inbox and the board fast on large event logs.
+- A worktree's `setup` installs the pnpm version the project's `packageManager` names when the runner has none, instead of failing with exit 127.
+- Agent-written factory files (`.emberline/new-tickets.json`, roadmap and brainstorm output) are validated against their schemas; a malformed one is renamed `*.rejected.json` and a toast names the first problem, so nothing is half-imported.
 - `make e2e` now also runs a Playwright regression suite (`e2e/ui/run.mjs`) after the smoke test: it imports a project from a git URL through the wizard, runs tickets with a scripted agent, answers an Inbox question, checks that a blocking review comment keeps the merge gate closed until it is resolved, and waits out a usage limit until the run resumes by itself. CI runs it in the end-to-end step (10-minute limit) and uploads Playwright traces on failure.
 - `make e2e` (and CI's end-to-end step) now runs an isolation regression suite (`e2e/isolation.sh`) after the smoke test: every guarantee of SECURITY.md's "The shared runner" is a named test (SR-01 to SR-20, listed in `docs/TESTING.md`), checked from an agent terminal (ptyd's socket, user and capabilities, other sessions' terminals in sessions and commands, core's and ops' processes and environments, private SSH keys, the browser daemon) and from the other containers (session cookies replayed from ops and from a container named `docker`, the git gateway, a root scan of every runner and ops volume, who mounts what). Without the 0.7.0 fix for inherited terminals it fails. `E2E_TAG` picks the e2e images' tag, so runs on one Docker engine stay apart.
 - SECURITY.md now says that an agent can open another session's terminal device (`/dev/pts/N`, owned by `node`) and read keystrokes typed into it or write to its screen; it still cannot reach the end ptyd holds.
@@ -20,13 +43,32 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Codex runs read the reset time of a usage limit from Codex's own message ("try again at 3:42 PM", "try again at Oct 15th, 2026 9:05 AM"), and, when the output does not say, from the session's latest rate-limit record, so they resume at the reset instead of retrying every 15 minutes. "Quota exceeded. Check your plan and billing details." is a billing problem, not a limit.
 - Gemini runs read "Your quota will reset after 2h31m12s", "Please retry in 38.06s" and the interactive "Access resets at 3:45 PM GMT+3". A Gemini limit that names a model (Pro, Flash, Flash-Lite) pauses only that model's lane; a model with no quota at all on the account's tier (`limit: 0`) is no longer waited for.
 
+### Fixed
+
+- The board no longer fails to load, and dispatch no longer stalls, when a ticket's `## Target Files` names a glob such as `src/{*.ts,*.tsx}` or `src/[z-a].ts`.
+- A person's merge never auto-resolves conflicts in a worktree an agent is working in, and never throws away edits an agent made while the checks ran.
+- An auto-resolved file with an emoji or another character outside the BMP at a 30,000-character boundary is written intact (it was committed with U+FFFD).
+- Conflicts in `uv.lock`, `bun.lock`, `Gemfile.lock`, `composer.lock`, `flake.lock`, `pubspec.lock` and `npm-shrinkwrap.json` are never union-merged; like the other lockfiles they go to the agent.
+- **Open resolver run** after a manual merge opens the resolver run, never the held one.
+- The board and dispatch no longer load every run with its telemetry for overlap checks, slot counts and the daily budget.
+- Review page: scrolling the file list no longer jumps back to the selected file; moving between files keeps the diff editor instead of rebuilding it, and shows the previous diff under a loading cover instead of "Select a changed file"; going back to a file before a slower one's diff arrives no longer leaves the pane blank; `j`/`k` right after typing a filter only moves through the files it shows; a diff that fails to load says so.
+- A Codex run that fails to sign in (401, not logged in) shows that error instead of pausing the Codex lane as a usage limit. A usage limit is read only from the run's own recent session rollout with a reset still ahead, never from another run's rollout or an old one.
+
 ### Security
 
+- Every GitHub Action in CI is pinned to a commit SHA, including the SBOM and cosign steps of the job that signs and publishes images.
+- The supply-chain gate also fails on a critical advisory in a dev dependency, with the same allowlist. Vitest 4 replaces Vitest 3, whose worker pool (tinypool) had two critical advisories; no advisory is allowlisted.
+- The build-script check catches the `.npmrc` list form (`only-built-dependencies[]=…`) and other spellings of the settings that get around it.
+- The isolation suite's private-key scans catch every PEM private key header, PKCS#8 and encrypted keys included, also in a process's command line and environment.
 - **Supply-chain release gate.** A new CI job, `supply-chain`, must pass before any image is published. It fails on a high or critical `pnpm audit --prod` advisory that `scripts/supply-chain/audit-allowlist.json` does not accept (each entry needs a reason and an expiry date). It also fails when `pnpm.onlyBuiltDependencies` grows beyond `better-sqlite3`, `esbuild` and `node-pty`, or when any other dependency brings an install script that nobody reviewed. `cpu-features` and `ssh2` are reviewed and stay unbuilt (`pnpm.ignoredBuiltDependencies`), and `strictDepBuilds` makes every install fail on a new one. Run it locally with `pnpm supply-chain` or `make supply-chain`. gitleaks now runs with `.gitleaks.toml` passed explicitly.
 - **Signed images with SBOMs.** Every published linux/amd64 image is signed with cosign keyless signing (GitHub OIDC, Sigstore) and carries a signed SPDX SBOM attestation. Releases attach the SBOMs. SECURITY.md explains how to verify both.
 - Upgraded dependencies with high advisories: `drizzle-orm` 0.45 (SQL injection through improperly escaped identifiers, GHSA-gpj5-g38j-94v9), `@fastify/static` 10 (route guard bypass and path traversal, GHSA-83w8-p2f5-377r and others), `body-parser` 2.4 through `@modelcontextprotocol/sdk` (DoS, GHSA-27r3-jxmh-p828). Also upgraded: `fastify` 5.12.6, `fast-uri`, `glob` and `minimatch`. `pnpm audit --prod` now reports no known vulnerabilities.
 
 ### Upgrade notes
+
+**Integration branch and commit identity.** A project that already had Keep main pushed on keeps pushing its default branch; choose the integration branch in Project settings → Repository to stop pushing main directly. A project that turns it on from now on pushes `emberline/integration` unless you pick the default branch. Commits keep the `Emberline AI Factory` identity until you set one in Settings → Commit identity.
+
+**Self-heal needs checks.** An additive conflict is auto-resolved only when the project's checks (build, lint or test in `.emberline/worktree.yml`) ran and passed on the healed branch. With the build gate off or no checks, the conflict goes to the agent instead.
 
 **Upgrade paths checked in CI.** `make e2e-upgrade` upgrades a data volume from each of these releases to the current images, on that release's own compose file, and runs these checks. The job fails on the first that does not hold:
 
@@ -645,7 +687,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/biohazardious/emberline/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/biohazardious/emberline/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/biohazardious/emberline/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/biohazardious/emberline/compare/v0.6.0...v0.6.1
