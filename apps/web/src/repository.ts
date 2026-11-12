@@ -55,7 +55,14 @@ export function mainTipText(s: RepositoryStatus): string | null {
 }
 
 export function lastPushText(s: RepositoryStatus): string | null {
-  return s.lastMainPushError ? `Main isn't pushed: ${s.lastMainPushError}` : null;
+  return s.lastMainPushError ? `Main isn't pushed to ${s.keepPushedBranch}: ${s.lastMainPushError}` : null;
+}
+
+/** Where Keep main pushed sends main, in one line. */
+export function keepPushedText(s: RepositoryStatus): string {
+  return s.pushTarget === 'integration_branch'
+    ? `Keep main pushed pushes main to ${s.keepPushedBranch} after each merge; you merge that branch into ${s.defaultBranch} on the forge. It is Emberline's branch: pushes only fast-forward it and are never forced.`
+    : `Keep main pushed pushes main to ${s.keepPushedBranch} after each merge. It never forces a push.`;
 }
 
 /** The commit identity in `Name <email>` form. */

@@ -6,6 +6,7 @@ import {
   connectPrefill,
   createRepoEnabled,
   originCredentialsText,
+  keepPushedText,
   lastPushText,
   mainStateText,
   mainTipText,
@@ -34,6 +35,9 @@ const base: RepositoryStatus = {
   originHasCredentials: false,
   originMasked: false,
   keepMainPushed: false,
+  pushTarget: 'integration_branch',
+  integrationBranch: 'emberline/integration',
+  keepPushedBranch: 'emberline/integration',
   lastMainPushError: null,
   commitIdentity: null,
   factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
@@ -108,7 +112,23 @@ describe('pushMainBlocked and lastPushText', () => {
   it('shows the last automatic failure', () => {
     expect(lastPushText(base)).toBeNull();
     expect(lastPushText({ ...base, lastMainPushError: 'Push failed: x' })).toBe(
-      "Main isn't pushed: Push failed: x",
+      "Main isn't pushed to emberline/integration: Push failed: x",
+    );
+    expect(
+      lastPushText({
+        ...base,
+        pushTarget: 'default_branch',
+        keepPushedBranch: 'main',
+        lastMainPushError: 'Push failed: x',
+      }),
+    ).toBe("Main isn't pushed to main: Push failed: x");
+  });
+
+  it('names the branch Keep main pushed pushes to', () => {
+    expect(keepPushedText(base)).toMatch(/^Keep main pushed pushes main to emberline\/integration after/);
+    expect(keepPushedText(base)).toContain('you merge that branch into main on the forge');
+    expect(keepPushedText({ ...base, pushTarget: 'default_branch', keepPushedBranch: 'main' })).toBe(
+      'Keep main pushed pushes main to main after each merge. It never forces a push.',
     );
   });
 });

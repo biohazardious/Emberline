@@ -3,13 +3,20 @@ import path from 'node:path';
 import {
   ConnectRepositoryBody,
   CreateRepositoryBody,
+  DEFAULT_INTEGRATION_BRANCH,
   type RepositoryStatus,
   UpdateRepositoryBody,
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { isRunnerTimeout, isRunnerUnavailable } from '../command-exec.js';
-import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
+import {
+  effectivePushTarget,
+  type RemoteCheck,
+  type RepositorySettings,
+  readRepositorySettings,
+  writeRepositorySettings,
+} from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
@@ -28,6 +35,7 @@ import {
   branchTip,
   DIVERGED_MESSAGE,
   fetchBranchObjects,
+  integrationDivergedMessage,
   isAncestorCommit,
   listRemoteBranches,
   MAIN_MOVED_MESSAGE,
@@ -82,6 +90,13 @@ const originKey = (origin: string) => secretDigest('origin', origin);
  */
 const readOf = (check: RemoteCheck, origin: string, url: string) =>
   check.originKey !== undefined ? check.originKey === originKey(origin) : check.url === url;
+
+/** The remote branch Keep main pushed pushes main to: the default branch, or the integration branch. */
+function keepPushedBranch(settings: RepositorySettings, defaultBranch: string): string {
+  return effectivePushTarget(settings) === 'integration_branch'
+    ? (settings.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH)
+    : defaultBranch;
+}
 
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
 interface Snapshot {
@@ -153,6 +168,9 @@ export class RepositoryService {
       remoteError: null,
       checkedAt: null,
       keepMainPushed: settings.keepMainPushed,
+      pushTarget: effectivePushTarget(settings),
+      integrationBranch: settings.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH,
+      keepPushedBranch: keepPushedBranch(settings, row.defaultBranch),
       lastMainPushError: settings.lastMainPushError,
       commitIdentity: settings.commitIdentity,
       factoryCommitIdentity: getCommitIdentity(this.db),
@@ -279,7 +297,7 @@ export class RepositoryService {
   /** A person's click: the tip of the default branch, which must be the branch checked out. */
   async pushMain(projectId: string): Promise<RepositoryStatus> {
     const result = await this.push(projectId, { mergeOid: undefined });
-    if (result === 'rejected') throw new HttpError(409, 'main_diverged', DIVERGED_MESSAGE);
+    if (result.outcome === 'rejected') throw new HttpError(409, 'main_diverged', DIVERGED_MESSAGE);
     writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
     return this.status(projectId);
   }
@@ -296,12 +314,13 @@ export class RepositoryService {
     let reason: string;
     try {
       const result = await this.push(projectId, { mergeOid });
-      if (result === 'superseded') return { ok: true };
-      if (result === 'pushed') {
+      if (result.outcome === 'superseded') return { ok: true };
+      if (result.outcome === 'pushed') {
         writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
         return { ok: true };
       }
-      reason = DIVERGED_MESSAGE;
+      reason =
+        result.branch === result.defaultBranch ? DIVERGED_MESSAGE : integrationDivergedMessage(result.branch);
     } catch (error) {
       // Nothing was decided: the push is tried again once the runner is back.
       if (isRunnerUnavailable(error))
@@ -321,16 +340,31 @@ export class RepositoryService {
   }
 
   async update(projectId: string, raw: unknown): Promise<RepositoryStatus> {
-    this.project(projectId);
+    const row = this.project(projectId);
     const body = parse(UpdateRepositoryBody, raw);
     const current = readRepositorySettings(this.db, projectId);
     const keepMainPushed = body.keepMainPushed ?? current.keepMainPushed;
-    // Switched off, a push kept for the runner never runs: it no longer waits.
-    const waiting = !keepMainPushed && current.lastMainPushError === RUNNER_WAITING_MESSAGE;
+    // Stored once chosen: a project that pushed its default branch before keeps doing so, one that
+    // opts in now pushes the integration branch, whatever is switched later.
+    const pushTarget = body.pushTarget ?? effectivePushTarget(current);
+    const integrationBranch = body.integrationBranch ?? current.integrationBranch;
+    if (integrationBranch !== undefined && integrationBranch === row.defaultBranch) {
+      throw badRequest(
+        `The integration branch must not be ${row.defaultBranch}, the default branch; choose "the default branch" to push it.`,
+      );
+    }
+    const next = { ...current, pushTarget, integrationBranch };
+    const branchChanged =
+      keepPushedBranch(next, row.defaultBranch) !== keepPushedBranch(current, row.defaultBranch);
+    // Switched off, a push kept for the runner never runs: it no longer waits. A failure of a push
+    // to another branch says nothing about the new one.
+    const stale = branchChanged || (!keepMainPushed && current.lastMainPushError === RUNNER_WAITING_MESSAGE);
     writeRepositorySettings(this.db, projectId, {
       keepMainPushed,
+      pushTarget,
+      ...(integrationBranch !== undefined ? { integrationBranch } : {}),
       ...(body.commitIdentity !== undefined ? { commitIdentity: body.commitIdentity } : {}),
-      ...(waiting ? { lastMainPushError: null } : {}),
+      ...(stale ? { lastMainPushError: null } : {}),
     });
     return this.status(projectId);
   }
@@ -340,18 +374,25 @@ export class RepositoryService {
    * its commit and origin are read; with no lock, exactly that commit is pushed (whatever the ref
    * names by then); under the lock again, the tracking ref and the read of origin are recorded, if
    * origin is still the one pushed to. A rejected push reads origin again so status shows why.
-   * `mergeOid` undefined: a person's Push main (the tip, with the default branch checked out);
-   * otherwise Keep main pushed (the merge's commit, only while it is still the tip; `superseded`:
-   * the tip is a later Emberline merge, whose own push publishes it).
+   * `mergeOid` undefined: a person's Push main (the tip, with the default branch checked out, to the
+   * default branch); otherwise Keep main pushed (the merge's commit, only while it is still the tip;
+   * `superseded`: the tip is a later Emberline merge, whose own push publishes it), to the branch its
+   * push target names. An integration branch is Emberline's own: it is fast-forwarded like main and
+   * never forced, and a push someone made to it rejects Emberline's like a remote main that moved on.
+   * `branch` is the remote branch it went to.
    */
   private async push(
     projectId: string,
     { mergeOid }: { mergeOid: string | null | undefined },
-  ): Promise<'pushed' | 'rejected' | 'superseded'> {
+  ): Promise<{ outcome: 'pushed' | 'rejected' | 'superseded'; branch: string; defaultBranch: string }> {
     return this.remoteOps.run(projectId, async () => {
       const plan = await withMainWorkspaceLock(this.project(projectId).path, async () => {
         const ws = await this.workspace(projectId);
         const tip = await branchTip(ws.path, ws.defaultBranch);
+        const branch =
+          mergeOid === undefined
+            ? ws.defaultBranch
+            : keepPushedBranch(readRepositorySettings(this.db, projectId), ws.defaultBranch);
         if (mergeOid === undefined) {
           if (ws.branch !== ws.defaultBranch) {
             throw conflict(
@@ -368,7 +409,7 @@ export class RepositoryService {
             // A later Emberline merge on top of this one: its own push publishes both. A rewind to an
             // older merge (this one not in the tip's history) is "moved".
             if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
-              return 'superseded' as const;
+              return { superseded: true as const, branch, defaultBranch: ws.defaultBranch };
             // The merge went into the branch checked out instead (it never was on the default branch).
             if (
               ws.branch !== ws.defaultBranch &&
@@ -382,17 +423,27 @@ export class RepositoryService {
             throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
           }
         }
-        return { ...ws, oid: tip.sha, ...(await this.access(projectId, ws.path)) };
+        return {
+          superseded: false as const,
+          ...ws,
+          branch,
+          oid: tip.sha,
+          ...(await this.access(projectId, ws.path)),
+        };
       });
-      if (plan === 'superseded') return plan;
-      const result = await pushBranch(plan.path, plan.access, plan.defaultBranch, plan.oid);
+      const { branch, defaultBranch } = plan;
+      if (plan.superseded) return { outcome: 'superseded', branch, defaultBranch };
+      const result = await pushBranch(plan.path, plan.access, branch, plan.oid);
       if (result === 'rejected') {
-        await this.readRemote(projectId, plan);
-        return result;
+        // Only the default branch's read shows in status (main against origin's main).
+        if (branch === defaultBranch) await this.readRemote(projectId, plan);
+        return { outcome: result, branch, defaultBranch };
       }
       await withMainWorkspaceLock(plan.path, async () => {
         if (!(await this.originStill(projectId, plan))) return; // origin changed meanwhile: its own read counts
-        await setRemoteTracking(plan.path, plan.defaultBranch, plan.oid);
+        await setRemoteTracking(plan.path, branch, plan.oid);
+        // main's upstream and the read of origin's main are the default branch's alone.
+        if (branch !== defaultBranch) return;
         await setUpstream(plan.path, plan.defaultBranch);
         const check: RemoteCheck = {
           url: remoteUrlForDisplay(plan.origin).display,
@@ -408,7 +459,7 @@ export class RepositoryService {
           // the project was deleted meanwhile
         }
       });
-      return result;
+      return { outcome: result, branch, defaultBranch };
     });
   }
 

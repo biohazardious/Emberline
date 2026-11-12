@@ -1,6 +1,17 @@
 import { z } from 'zod';
 import { CommitIdentity } from './commit-identity.js';
+import { GitBranchName } from './common.js';
 import { ForgeProvider } from './forge.js';
+
+/**
+ * Where Keep main pushed pushes main: the default branch itself, or an integration branch that is
+ * Emberline's own (the person merges it into the default branch on the forge).
+ */
+export const MainPushTarget = z.enum(['default_branch', 'integration_branch']);
+export type MainPushTarget = z.infer<typeof MainPushTarget>;
+
+/** The integration branch a project pushes to unless it names another. */
+export const DEFAULT_INTEGRATION_BRANCH = 'emberline/integration';
 
 export const RepositoryMainState = z.enum([
   'no_remote',
@@ -57,7 +68,16 @@ export const RepositoryStatus = z.object({
   /** When origin was last read (ISO time): status itself reads no network. */
   checkedAt: z.string().nullable(),
   keepMainPushed: z.boolean(),
-  /** The last automatic push's failure (redacted); cleared by any successful push. */
+  /** Where Keep main pushed pushes main (the Push main button always pushes the default branch). */
+  pushTarget: MainPushTarget,
+  /** The integration branch's name (used when pushTarget is `integration_branch`). */
+  integrationBranch: z.string(),
+  /** The remote branch Keep main pushed pushes to: defaultBranch or integrationBranch. */
+  keepPushedBranch: z.string(),
+  /**
+   * The last automatic push's failure (redacted), a push to keepPushedBranch; cleared by any
+   * successful push and when the push target changes.
+   */
   lastMainPushError: z.string().nullable(),
   /** This project's own commit identity; null: the factory's (Settings → Factory) is used. */
   commitIdentity: CommitIdentity.nullable(),
@@ -90,6 +110,8 @@ export type CreateRepositoryBody = z.input<typeof CreateRepositoryBody>;
 export const UpdateRepositoryBody = z
   .object({
     keepMainPushed: z.boolean(),
+    pushTarget: MainPushTarget,
+    integrationBranch: GitBranchName,
     /** null: use the factory's identity again. */
     commitIdentity: CommitIdentity.nullable(),
   })

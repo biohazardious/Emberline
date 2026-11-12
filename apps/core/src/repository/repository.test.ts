@@ -921,7 +921,8 @@ describe('keep main pushed after a ticketless merge', () => {
       const synced = await send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: run.id });
       expect(synced.json()).toMatchObject({ ok: true, alreadyMerged: false });
       await t.mainPush.idle();
-      expect(git(forge.bare('alice', 'app'), 'rev-parse', 'refs/heads/main')).toBe(
+      // A new opt-in pushes the integration branch (Push main above published main itself).
+      expect(git(forge.bare('alice', 'app'), 'rev-parse', 'refs/heads/emberline/integration')).toBe(
         git(projectPath, 'rev-parse', 'HEAD'),
       );
     } finally {

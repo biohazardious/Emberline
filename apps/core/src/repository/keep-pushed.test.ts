@@ -21,6 +21,7 @@ import {
 } from '../test-utils.js';
 import {
   DIVERGED_MESSAGE,
+  integrationDivergedMessage,
   MAIN_MOVED_MESSAGE,
   MERGE_UNVERIFIED_MESSAGE,
   ORIGIN_CHANGED_MESSAGE,
@@ -571,5 +572,96 @@ describe('keep main pushed', () => {
       expect(pushes).toBe(1);
       expect(readRepositorySettings(t.db, projectId).pendingMainPush?.commitOid).toBe(m.commitOid);
     });
+  });
+});
+
+describe('keep main pushed to an integration branch', () => {
+  const INTEGRATION = 'emberline/integration';
+  /** The remote's commit for `branch`, or '' when it has none. */
+  const remoteBranch = (branch: string) => {
+    try {
+      return git(forge.bare('alice', 'app'), 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+    } catch {
+      return '';
+    }
+  };
+
+  it('a new opt-in pushes main to the integration branch, never to the default branch', async () => {
+    const status = await t.repository.update(projectId, { keepMainPushed: true });
+    expect(status).toMatchObject({
+      pushTarget: 'integration_branch',
+      integrationBranch: INTEGRATION,
+      keepPushedBranch: INTEGRATION,
+    });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    expect(remoteBranch(INTEGRATION)).toBe(git(projectPath, 'rev-parse', 'HEAD'));
+    expect(remoteBranch('main')).toBe('');
+    // Only the integration branch's tracking ref is written; main's upstream is left alone.
+    expect(git(projectPath, 'rev-parse', `refs/remotes/origin/${INTEGRATION}`)).toBe(
+      git(projectPath, 'rev-parse', 'HEAD'),
+    );
+    expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+  });
+
+  it('a later merge fast-forwards the integration branch', async () => {
+    await t.repository.update(projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    commit(projectPath, 'next.txt');
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    expect(remoteBranch(INTEGRATION)).toBe(git(projectPath, 'rev-parse', 'HEAD'));
+  });
+
+  it('someone pushed to the integration branch: nothing is forced and the failure names the branch', async () => {
+    await t.repository.update(projectId, { keepMainPushed: true });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    const elsewhere = path.join(t.dir, 'elsewhere');
+    execFileSync('git', ['clone', '-q', '-b', INTEGRATION, forge.bare('alice', 'app'), elsewhere]);
+    commit(elsewhere, 'theirs.txt');
+    git(elsewhere, 'push', '-q', 'origin', INTEGRATION);
+    const theirs = git(elsewhere, 'rev-parse', 'HEAD');
+    commit(projectPath, 'ours.txt');
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    expect(remoteBranch(INTEGRATION)).toBe(theirs);
+    const reason = integrationDivergedMessage(INTEGRATION);
+    expect(reason).toContain(INTEGRATION);
+    expect(notes('r1').map((n) => n.payload)).toEqual([{ reason }]);
+    expect((await t.repository.status(projectId)).lastMainPushError).toBe(reason);
+  });
+
+  it('pushes to the integration branch the project names', async () => {
+    await t.repository.update(projectId, { keepMainPushed: true, integrationBranch: 'factory/next' });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    expect(remoteBranch('factory/next')).toBe(git(projectPath, 'rev-parse', 'HEAD'));
+    expect(remoteBranch(INTEGRATION)).toBe('');
+  });
+
+  it('a project that pushed its default branch before 0.8.0 keeps pushing it', async () => {
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true }); // stored without a target
+    expect((await t.repository.status(projectId)).pushTarget).toBe('default_branch');
+    // Switched off and on again: still the default branch (the choice is stored on the first change).
+    await t.repository.update(projectId, { keepMainPushed: false });
+    const status = await t.repository.update(projectId, { keepMainPushed: true });
+    expect(status).toMatchObject({ pushTarget: 'default_branch', keepPushedBranch: 'main' });
+    t.runs.note('r1', 'merged_to_main', merged());
+    await t.mainPush.idle();
+    expect(remoteMain()).toBe(git(projectPath, 'rev-parse', 'HEAD'));
+    expect(remoteBranch(INTEGRATION)).toBe('');
+  });
+
+  it('refuses the default branch as the integration branch; a new target drops the old failure', async () => {
+    await expect(t.repository.update(projectId, { integrationBranch: 'main' })).rejects.toThrow(
+      /must not be main/,
+    );
+    await expect(t.repository.update(projectId, { integrationBranch: '-x' })).rejects.toThrow();
+    writeRepositorySettings(t.db, projectId, { keepMainPushed: true, lastMainPushError: DIVERGED_MESSAGE });
+    const status = await t.repository.update(projectId, { pushTarget: 'integration_branch' });
+    expect(status.lastMainPushError).toBeNull();
+    expect(status.keepPushedBranch).toBe(INTEGRATION);
   });
 });

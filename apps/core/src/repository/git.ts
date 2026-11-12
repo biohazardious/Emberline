@@ -23,6 +23,9 @@ export const ORIGIN_CHANGED_MESSAGE =
 export const RUNNER_WAITING_MESSAGE = 'Waiting for the runner; main is pushed when it answers.';
 export const DIVERGED_MESSAGE =
   "The remote's main has commits this project doesn't have. Pull them in from a terminal, then push again.";
+/** An integration branch someone else pushed to: Emberline fast-forwards its own branch and never forces it. */
+export const integrationDivergedMessage = (branch: string) =>
+  `The remote's ${branch} has commits this project's main doesn't have (someone pushed to it). Emberline never forces it: merge ${branch} into main on the forge or delete it there, then push again.`;
 const CREDENTIALS_IN_URL = 'Remove the user name and token from the URL; Emberline uses the forge account.';
 const BAD_URL =
   'Enter a repository URL such as https://github.com/you/app.git or git@github.com:you/app.git.';

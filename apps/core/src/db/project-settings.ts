@@ -1,4 +1,4 @@
-import { CommitIdentity, IssueSyncSettings, ProjectImportSource } from '@emberline/protocol';
+import { CommitIdentity, IssueSyncSettings, MainPushTarget, ProjectImportSource } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from './index.js';
@@ -131,11 +131,18 @@ const PendingMainPushSchema = z.object({
 });
 export type PendingMainPush = z.infer<typeof PendingMainPushSchema>;
 /**
- * Project settings → Repository: the opt-in automatic push, its last failure, the last read of
- * origin, and the project's own commit identity.
+ * Project settings → Repository: the opt-in automatic push (where it goes, its last failure), the
+ * last read of origin, and the project's own commit identity.
  */
 export interface RepositorySettings {
   keepMainPushed: boolean;
+  /**
+   * Where Keep main pushed pushes. Absent: stored before 0.8.0 (or never chosen); see
+   * effectivePushTarget.
+   */
+  pushTarget?: MainPushTarget;
+  /** Absent: DEFAULT_INTEGRATION_BRANCH. */
+  integrationBranch?: string;
   lastMainPushError: string | null;
   lastRemoteCheck: RemoteCheck | null;
   pendingMainPush: PendingMainPush | null;
@@ -152,11 +159,22 @@ const RemoteCheckSchema = z.object({
 });
 const RepositorySettingsSchema = z.object({
   keepMainPushed: z.boolean().catch(false).default(false),
+  pushTarget: MainPushTarget.optional().catch(undefined),
+  integrationBranch: z.string().optional().catch(undefined),
   lastMainPushError: z.string().nullable().catch(null).default(null),
   lastRemoteCheck: RemoteCheckSchema.nullable().catch(null).default(null),
   pendingMainPush: PendingMainPushSchema.nullable().catch(null).default(null),
   commitIdentity: CommitIdentity.nullable().catch(null).default(null),
 });
+/**
+ * Where Keep main pushed pushes: the stored choice; without one, a project that already pushes
+ * automatically (switched on before 0.8.0) keeps pushing its default branch, and one that opts in
+ * now gets the integration branch.
+ */
+export function effectivePushTarget(settings: RepositorySettings): MainPushTarget {
+  return settings.pushTarget ?? (settings.keepMainPushed ? 'default_branch' : 'integration_branch');
+}
+
 export function readRepositorySettings(db: Db, projectId: string): RepositorySettings {
   return RepositorySettingsSchema.parse(readProjectSettings(db, projectId).repository ?? {});
 }

@@ -30,6 +30,7 @@ import { HostKeyChangedNote, HostKeyTrust } from './HostKeyTrust';
 import { ImportRecovery } from './ImportRecovery';
 import { ProjectSshKey } from './ProjectSshKey';
 import { CommitIdentityFields } from './RepositoryCommitIdentity';
+import { PushTargetFields } from './RepositoryPushTarget';
 
 type RepoForm = 'connect' | 'create' | 'actions';
 interface RepoError {
@@ -267,10 +268,8 @@ export function RepositoryPanel({ project }: { project: Project }) {
           </div>
           {blocked !== null && <p className="muted small">{blocked}</p>}
           {blocked === null && tip && <p className="muted small">Pushes {tip}.</p>}
-          <p className="muted small">
-            Keep main pushed pushes main after each merge into it. It never forces a push. Origin is read when
-            you press Refresh, connect, create or push.
-          </p>
+          <PushTargetFields s={s} busy={busy !== null} onSave={saveSettings} />
+          <p className="muted small">Origin is read when you press Refresh, connect, create or push.</p>
           <CommitIdentityFields s={s} busy={busy !== null} onSave={saveSettings} />
           <details className="repo-form">
             <summary>Connect an existing repository</summary>
