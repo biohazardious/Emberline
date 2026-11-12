@@ -6,6 +6,8 @@ import { readRepositorySettings, writeRepositorySettings } from '../db/project-s
 import { runEvents, runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { prepareWorkspace } from '../runs/git.js';
+import { doneStarting, startingWorktrees } from '../runs/starting.js';
+import { prepareRunWorkspace } from '../runs/worktree.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   authHeaders,
@@ -319,10 +321,24 @@ describe('a working branch the factory merges into', () => {
 });
 
 describe('a run that is starting', () => {
-  it('a run worktree no run row names yet counts as live', async () => {
+  const project = () => ({ id: projectId, path: projectPath, slug: projectSlug });
+
+  it('a worktree left behind with no run row is not live: the switch goes through', async () => {
     git(projectPath, 'branch', 'develop');
-    const dir = path.join(t.config.workspacesDir, '.worktrees', projectSlug, 'abcd1234');
-    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/run-abcd1234', dir);
+    const dir = path.join(t.config.workspacesDir, '.worktrees', projectSlug, 'orphan01');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/run-orphan01', dir);
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
+
+  it('a run between its worktree and its row counts as live, and stops counting once the start ends', async () => {
+    git(projectPath, 'branch', 'develop');
+    // Prepared as enqueue prepares it, with the row not inserted yet.
+    const { workspace } = await prepareRunWorkspace({
+      db: t.db,
+      workspacesDir: t.config.workspacesDir,
+      project: project(),
+      runShort: 'abcd1234',
+    });
     const refused = await send('POST', workingUrl(), { branch: 'develop' });
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toMatchObject({
@@ -330,9 +346,20 @@ describe('a run that is starting', () => {
       runs: [{ id: 'abcd1234', title: 'A run is starting' }],
     });
     const listed = (await send('GET', branchesUrl())).json() as { name: string; liveRuns: string[] }[];
-    expect(listed.find((b) => b.name === 'emberline/run-abcd1234')?.liveRuns).toEqual(['abcd1234']);
-    // Once its row exists (a done run with nothing of its own), it is an ordinary run.
-    seedRun('abcd1234-0000', { state: 'done', branch: 'emberline/run-abcd1234', worktreePath: dir });
+    expect(listed.find((b) => b.name === workspace.branch)?.liveRuns).toEqual(['abcd1234']);
+    doneStarting(projectPath, workspace.path);
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
+
+  it('a start that fails after its worktree was added is no longer counted', async () => {
+    git(projectPath, 'branch', 'develop');
+    t.ptyd.assertCanStart = () => undefined;
+    // The row's insert fails (no such ticket): the worktree stays, the start is over.
+    await expect(
+      t.runs.enqueue({ projectId, prompt: 'x' }, { ticketId: 'no-such-ticket' }),
+    ).rejects.toThrow();
+    expect(git(projectPath, 'worktree', 'list')).toContain(path.join('.worktrees', projectSlug));
+    expect(startingWorktrees(projectPath)).toEqual([]);
     expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
   });
 
@@ -347,6 +374,7 @@ describe('a run that is starting', () => {
     await held;
     expect(await preparing).toMatchObject({ path: dir, branch: 'emberline/run-locked01' });
     expect(has(projectPath, 'refs/heads/emberline/run-locked01')).not.toBe('');
+    doneStarting(projectPath, dir);
   });
 });
 

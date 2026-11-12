@@ -176,6 +176,7 @@ import {
   KeptWorktrees,
   lazyMergeTarget,
   prepareRunWorkspace,
+  runWorktreePath,
   pruneWithReclaim,
   runStillActive,
   type TeardownOwner,
@@ -204,6 +205,7 @@ import {
   resolveSafeWorktreePath,
   stageWorktreeFiles,
 } from './git.js';
+import { doneStarting } from './starting.js';
 import {
   buildHandoffPrompt,
   type HandoffPromptInput,
@@ -1177,62 +1179,68 @@ export class RunService extends EventEmitter<RunServiceEvents> {
 
     const id = randomUUID();
     const short = id.slice(0, 8);
-    const { workspace, lifecycle, copied, notIgnored } = await prepareRunWorkspace({
-      db: this.db,
-      workspacesDir: this.config.workspacesDir,
-      project,
-      runShort: short,
-      ...(origin?.branch ? { branch: origin.branch } : {}),
-      ...(origin?.worktree ? { shared: origin.worktree } : {}),
-    });
-
-    const now = new Date();
-    this.db
-      .insert(runs)
-      .values({
-        id,
-        projectId: project.id,
-        ticketId: origin?.ticketId ?? null,
-        agent: route.agent,
-        model: route.model,
-        credential: route.credential,
-        routes,
-        routeIndex,
-        predecessorRunId: origin?.predecessor?.id ?? null,
-        handoffCount: origin?.predecessor ? origin.predecessor.handoffCount : 0,
-        persona,
-        state: 'queued',
-        prompt,
-        permissionMode: body.permissionMode,
-        branch: workspace.branch,
-        worktreePath: workspace.path,
-        title: origin?.title ?? null,
-        // Replaced with the real token's hash at launch; nothing can authenticate before that.
-        hookTokenHash: sha256(randomBytes(32).toString('base64url')),
-        stateChangedAt: now,
-        createdAt: now,
-      })
-      .run();
-    // Synchronous with the insert: no dispatch can launch the run before its setup is on record.
-    if (lifecycle && copied) {
-      this.note(id, 'worktree_copied', {
-        sha256: lifecycle.sha256,
-        entries: copied,
-        ...(notIgnored ? { notIgnored } : {}),
+    // From the worktree's creation to the row's insert the run counts as starting (runs/starting.ts);
+    // once the row exists, or the start failed, it is judged by its row alone.
+    try {
+      const { workspace, lifecycle, copied, notIgnored } = await prepareRunWorkspace({
+        db: this.db,
+        workspacesDir: this.config.workspacesDir,
+        project,
+        runShort: short,
+        ...(origin?.branch ? { branch: origin.branch } : {}),
+        ...(origin?.worktree ? { shared: origin.worktree } : {}),
       });
-      for (const entry of copied.filter(overCopyCap)) {
-        this.note(id, 'worktree_copy_skipped', { path: entry.path, reason: entry.reason });
+
+      const now = new Date();
+      this.db
+        .insert(runs)
+        .values({
+          id,
+          projectId: project.id,
+          ticketId: origin?.ticketId ?? null,
+          agent: route.agent,
+          model: route.model,
+          credential: route.credential,
+          routes,
+          routeIndex,
+          predecessorRunId: origin?.predecessor?.id ?? null,
+          handoffCount: origin?.predecessor ? origin.predecessor.handoffCount : 0,
+          persona,
+          state: 'queued',
+          prompt,
+          permissionMode: body.permissionMode,
+          branch: workspace.branch,
+          worktreePath: workspace.path,
+          title: origin?.title ?? null,
+          // Replaced with the real token's hash at launch; nothing can authenticate before that.
+          hookTokenHash: sha256(randomBytes(32).toString('base64url')),
+          stateChangedAt: now,
+          createdAt: now,
+        })
+        .run();
+      // Synchronous with the insert: no dispatch can launch the run before its setup is on record.
+      if (lifecycle && copied) {
+        this.note(id, 'worktree_copied', {
+          sha256: lifecycle.sha256,
+          entries: copied,
+          ...(notIgnored ? { notIgnored } : {}),
+        });
+        for (const entry of copied.filter(overCopyCap)) {
+          this.note(id, 'worktree_copy_skipped', { path: entry.path, reason: entry.reason });
+        }
       }
+      if (lifecycle && lifecycle.config.setup.length > 0) {
+        this.note(id, 'worktree_setup_pending', { sha256: lifecycle.sha256, setup: lifecycle.config.setup });
+      }
+      return this.record(id, {
+        source: 'system',
+        type: 'queued',
+        state: 'queued',
+        ...(origin?.unattended ? { payload: { unattended: origin.unattended } } : {}),
+      });
+    } finally {
+      doneStarting(project.path, runWorktreePath(this.config.workspacesDir, project.slug, short));
     }
-    if (lifecycle && lifecycle.config.setup.length > 0) {
-      this.note(id, 'worktree_setup_pending', { sha256: lifecycle.sha256, setup: lifecycle.config.setup });
-    }
-    return this.record(id, {
-      source: 'system',
-      type: 'queued',
-      state: 'queued',
-      ...(origin?.unattended ? { payload: { unattended: origin.unattended } } : {}),
-    });
   }
 
   /** Whether no one watches the run: started by a cron job or a factory dispatch (its `queued` event says so). */

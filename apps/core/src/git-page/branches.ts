@@ -1,4 +1,3 @@
-import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { BranchRemoteState, GitBranch, GitBranchKind, Run } from '@emberline/protocol';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
@@ -25,20 +24,18 @@ import {
 } from '../repository/git.js';
 import { keepPushedTarget, type RepositoryService } from '../repository/service.js';
 import { worktreeHasUnmergedCommits } from '../runs/git.js';
+import { startingWorktrees } from '../runs/starting.js';
 import { ACTIVE_RUN_STATES } from '../tickets/columns.js';
 import { absentWhen, isPlainRefName } from './history.js';
 
 export interface BranchProject {
   id: string;
   path: string;
-  slug: string;
   defaultBranch: string;
 }
 
 /** Every worktree of the repository (the main workspace first), with the branch it has checked out. */
-async function worktreeList(
-  mainPath: string,
-): Promise<{ path: string; branch: string | null; prunable: boolean }[]> {
+async function worktreeList(mainPath: string): Promise<{ path: string; branch: string | null }[]> {
   const out = (await execGitFile(['worktree', 'list', '--porcelain'], { cwd: mainPath })).stdout;
   return out
     .split('\n\n')
@@ -47,30 +44,9 @@ async function worktreeList(
       const dir = lines.find((l) => l.startsWith('worktree '))?.slice('worktree '.length);
       if (!dir) return [];
       const ref = lines.find((l) => l.startsWith('branch refs/heads/'));
-      return [
-        {
-          path: dir,
-          branch: ref ? ref.slice('branch refs/heads/'.length) : null,
-          // Its directory is gone: git keeps only the record until `worktree prune`.
-          prunable: lines.some((l) => l.startsWith('prunable')),
-        },
-      ];
+      return [{ path: dir, branch: ref ? ref.slice('branch refs/heads/'.length) : null }];
     });
 }
-
-/** A path as the file system has it (symlinks resolved), to compare with what git prints. */
-const canonical = (p: string) => {
-  try {
-    return realpathSync(p);
-  } catch {
-    return path.resolve(p);
-  }
-};
-
-/** A run worktree of this project: `<workspaces>/.worktrees/<slug>/<run id8>` (prepareRunWorkspace). */
-const isRunWorktreeDir = (dir: string, slug: string) =>
-  path.basename(path.dirname(dir)) === slug &&
-  path.basename(path.dirname(path.dirname(dir))) === '.worktrees';
 
 /** The factory's own branches: one per run, never made or chosen by a person. */
 const RUN_PREFIX = 'emberline/';
@@ -116,19 +92,23 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
     if (await worktreeHasUnmergedCommits(run.worktreePath, working))
       live.push({ id: run.id, title: run.title, branch: run.branch });
   }
-  // A run that is starting has its worktree before its row (prepareRunWorkspace runs first): a run
-  // worktree no row names counts as live, under the run's directory name.
-  const known = new Set(
-    db
-      .select({ worktreePath: runs.worktreePath })
-      .from(runs)
-      .where(eq(runs.projectId, project.id))
-      .all()
-      .map((r) => canonical(r.worktreePath)),
-  );
-  for (const w of await worktreeList(project.path)) {
-    if (w.prunable || !isRunWorktreeDir(w.path, project.slug) || known.has(canonical(w.path))) continue;
-    live.push({ id: path.basename(w.path), title: 'A run is starting', branch: w.branch });
+  // A run that is starting has its worktree before its row (RunService.enqueue tracks it until the
+  // insert): it counts as live, under its worktree's directory name. A worktree left behind with no
+  // row (a deleted run, a crash) is not starting, and is judged like any other branch.
+  const starting = startingWorktrees(project.path);
+  if (starting.length > 0) {
+    const known = new Set(
+      db
+        .select({ worktreePath: runs.worktreePath })
+        .from(runs)
+        .where(eq(runs.projectId, project.id))
+        .all()
+        .map((r) => path.resolve(r.worktreePath)),
+    );
+    for (const w of starting) {
+      if (!known.has(w.path))
+        live.push({ id: path.basename(w.path), title: 'A run is starting', branch: w.branch });
+    }
   }
   return live;
 }

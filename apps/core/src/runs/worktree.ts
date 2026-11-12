@@ -69,6 +69,10 @@ export interface PreparedRunWorkspace {
   notIgnored: string[] | null;
 }
 
+/** Where a new run's worktree goes: `<workspaces>/.worktrees/<project slug>/<run id8>`. */
+export const runWorktreePath = (workspacesDir: string, slug: string, runShort: string): string =>
+  path.join(workspacesDir, '.worktrees', slug, runShort);
+
 /**
  * Creates a run's worktree and branch (or takes the one it shares) and applies the approved
  * worktree.yml's `copy`; its `setup` runs at launch. Before the run exists for the scheduler.
@@ -86,7 +90,7 @@ export async function prepareRunWorkspace(params: {
     params.shared ??
     (await prepareWorkspace(
       project.path,
-      path.join(workspacesDir, '.worktrees', project.slug, runShort),
+      runWorktreePath(workspacesDir, project.slug, runShort),
       params.branch ?? `emberline/run-${runShort}`,
     ));
   const lifecycle =

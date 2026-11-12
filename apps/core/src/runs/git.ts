@@ -20,6 +20,7 @@ import {
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles, withMainWorkspaceLock } from '../factory/merge.js';
+import { doneStarting, markStarting } from './starting.js';
 import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets, redactGitText } from '../git-gateway/gateway.js';
 import { type GatewayRemote, gatewayHttpCredential, gatewayPushBranch } from '../git-gateway/remote-git.js';
@@ -79,12 +80,15 @@ export async function prepareWorkspace(
   await mkdir(path.dirname(worktreePath), { recursive: true });
   // Under the main-workspace lock: the worktree branches from what is checked out, so a switch of
   // the working branch (which checks for starting runs under the same lock) sees it or comes first.
-  // Nothing that holds this lock starts a run, so it is never re-entered here.
+  // Nothing that holds this lock starts a run, so it is never re-entered here. The start counts as
+  // live (markStarting) until the caller has inserted the run's row or given up (doneStarting).
   return withMainWorkspaceLock(projectPath, async () => {
     const unique = await uniqueBranch(projectPath, branch);
+    markStarting(projectPath, worktreePath, unique);
     try {
       await git(projectPath, ['worktree', 'add', '-b', unique, worktreePath, 'HEAD']);
     } catch (error) {
+      doneStarting(projectPath, worktreePath);
       const stderr = (error as { stderr?: string }).stderr?.trim();
       throw new HttpError(500, 'worktree_failed', `git worktree add failed${stderr ? `: ${stderr}` : ''}`);
     }
