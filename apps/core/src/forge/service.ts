@@ -253,6 +253,60 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     return { remote, token: account.token };
   }
 
+  /**
+   * Creates a release for an already pushed tag on the project's forge. The release job calls it
+   * after the push; the account is the one `projectRemote` resolves, so a missing one is a 409.
+   */
+  async createRelease(
+    projectId: string,
+    input: { tag: string; name: string; notes: string },
+  ): Promise<{ url: string }> {
+    const { remote, token } = await this.projectRemote(projectId);
+    const fail = async (label: string, res: Response): Promise<never> => {
+      const text = await res.text().catch(() => '');
+      throw new HttpError(
+        res.status,
+        'forge_error',
+        `${label} release failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    };
+
+    if (remote.provider === 'gitlab') {
+      const res = await forgeFetch(
+        this.fetch,
+        `${remote.apiBaseUrl}/projects/${encodeURIComponent(remote.repoPath)}/releases`,
+        {
+          method: 'POST',
+          headers: {
+            'PRIVATE-TOKEN': token,
+            'Content-Type': 'application/json',
+            'User-Agent': 'Emberline-Core',
+          },
+          body: JSON.stringify({ tag_name: input.tag, name: input.name, description: input.notes }),
+        },
+      );
+      if (!res.ok) return fail('GitLab', res);
+      const data = await readJson<{ _links?: { self?: string } }>(res);
+      return { url: data._links?.self ?? `${remote.repoWebUrl}/-/releases/${input.tag}` };
+    }
+
+    const github = remote.provider === 'github';
+    const res = await forgeFetch(this.fetch, `${remote.apiBaseUrl}/repos/${remote.repoPath}/releases`, {
+      method: 'POST',
+      headers: {
+        ...(github
+          ? { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }
+          : { Authorization: `token ${token}` }),
+        'Content-Type': 'application/json',
+        'User-Agent': 'Emberline-Core',
+      },
+      body: JSON.stringify({ tag_name: input.tag, name: input.name, body: input.notes }),
+    });
+    if (!res.ok) return fail(github ? 'GitHub' : 'Gitea', res);
+    const data = await readJson<{ html_url?: string }>(res);
+    return { url: data.html_url ?? `${remote.repoWebUrl}/releases/tag/${input.tag}` };
+  }
+
   private recordedPullRequest(runId: string): ForgePullRequest | null {
     const events = this.db
       .select()

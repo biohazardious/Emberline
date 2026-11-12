@@ -23,6 +23,7 @@ export interface FakeForge {
   redirectTo: string | null;
   canCreate: boolean;
   orgs: string[];
+  releases: { owner: string; repo: string; tag_name: string; name: string; body: string }[];
   bare(owner: string, name: string): string;
   close(): Promise<void>;
 }
@@ -120,6 +121,7 @@ export async function startFakeForge(
     redirectTo: null,
     canCreate: true,
     orgs: ['acme'],
+    releases: [],
     bare,
     close: async () => undefined,
   };
@@ -182,6 +184,19 @@ export async function startFakeForge(
           clone_url: `http://localhost:1/${owner}/${body.name}.git`,
           html_url: `http://localhost:1/${owner}/${body.name}`,
         });
+      }
+      const release =
+        req.method === 'POST' ? /^\/api\/v1\/repos\/([^/]+)\/([^/]+)\/releases$/.exec(url.pathname) : null;
+      if (release) {
+        let body: { tag_name: string; name: string; body: string };
+        try {
+          body = JSON.parse(await readBody(req)) as typeof body;
+        } catch {
+          return json(res, 400, { message: 'invalid JSON' });
+        }
+        const [, owner, repo] = release as unknown as [string, string, string];
+        forge.releases.push({ owner, repo, tag_name: body.tag_name, name: body.name, body: body.body });
+        return json(res, 201, { html_url: `${forge.url}/${owner}/${repo}/releases/tag/${body.tag_name}` });
       }
       json(res, 404, { message: 'not found' });
     })();
