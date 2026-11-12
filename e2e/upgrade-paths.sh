@@ -11,6 +11,7 @@
 # `upgrade-check.mjs matrix` then upgrades from every migration step of this release.
 # Needs the images emberline/core:<tag> and emberline/runner:<tag> (make e2e builds them; the tag is
 # $EMBERLINE_E2E_TAG, `e2e` by default, which `make E2E_TAG=...` sets) and the release tags.
+# Every exit, failed or not, removes the stacks, volumes and temp dirs it made.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,11 +32,20 @@ chmod 777 "$WS"
 export EMBERLINE_WORKSPACES_HOST_DIR=$WS
 project=""
 
+# Takes down a release's stack under both compose files (each declares volumes the other may not),
+# then removes every volume left with the project's prefix: the seed volume and those `docker run -v`
+# created for a compose file that does not declare them.
+teardown() { # teardown <project>
+  [ -f "$WORK/old.yaml" ] && docker compose -p "$1" --project-directory "$PWD" -f "$WORK/old.yaml" -f e2e/compose.upgrade-old.yaml down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose -p "$1" -f compose.yaml -f e2e/compose.e2e.yaml down -v --remove-orphans >/dev/null 2>&1 || true
+  docker volume ls -q --filter "name=${1}_" | grep "^${1}_" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+}
 cleanup() {
-  [ -n "$project" ] && docker compose -p "$project" -f "$WORK/old.yaml" -f e2e/compose.upgrade-old.yaml down -v --remove-orphans >/dev/null 2>&1 || true
+  [ -z "$project" ] || teardown "$project"
   rm -rf "$WORK" "$WS" 2>/dev/null || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 [ -n "$(docker images -q "$CORE")" ] || { echo "image $CORE is missing: run make e2e or build the core and runner targets as :$EMBERLINE_E2E_TAG" >&2; exit 1; }
 
@@ -96,8 +106,7 @@ for version in $VERSIONS; do
   $NEW stop core >/dev/null
   verify_run verify "$version"
 
-  $NEW down -v --remove-orphans >/dev/null
-  docker volume rm "$drizzle_vol" >/dev/null 2>&1 || true
+  teardown "$project"
   project=""
 done
 
