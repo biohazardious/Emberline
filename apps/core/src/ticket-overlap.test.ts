@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Run, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   BranchFootprints,
@@ -327,6 +327,31 @@ describe('overlap-aware dispatch (AC-5.6)', () => {
       key: busy.ticket.key,
       paths: ['src/{*.ts,*.tsx}', 'src/[z-a].ts'],
     });
+  });
+
+  it('names the newest overlapping busy ticket without loading the full run list', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 3 });
+    const project = await createProject();
+    await busyRunThatChanged(project.id, ['apps/x/a.ts']);
+    const newer = await busyRunThatChanged(project.id, ['apps/x/a.ts', 'apps/x/b.ts']);
+    const waiting = await createTicket(project.id, {
+      title: 'Edits a.ts and b.ts',
+      status: 'ready',
+      body: '## Target Files\n- `apps/x/a.ts`\n- `apps/x/b.ts`\n',
+    });
+    const list = vi.spyOn(t.runs, 'list');
+    try {
+      expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+      const board = await listTickets(project.id);
+      expect(board.find((x) => x.id === waiting.id)?.waitingOn).toEqual({
+        ticketId: newer.ticket.id,
+        key: newer.ticket.key,
+        paths: ['apps/x/a.ts', 'apps/x/b.ts'],
+      });
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      list.mockRestore();
+    }
   });
 
   it('never defers a ticket that claims only PROJECT.md', async () => {

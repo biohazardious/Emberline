@@ -33,7 +33,7 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, desc, eq, gt, inArray, max } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, max, or } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import type { AgentFileRejection } from '../factory/agent-files.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
@@ -57,7 +57,7 @@ import { applyBulkTicketAction, isLiveRun } from './bulk.js';
 import { ConflictLadder } from './conflict-ladder.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
-import { columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
+import { ACTIVE_RUN_STATES, columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
 import { BranchFootprints, type BusyFootprint, busyFootprint, claimedPaths, overlapWait } from './overlap.js';
 import {
   type CreatedDraft,
@@ -103,6 +103,9 @@ import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
 type TicketRow = typeof tickets.$inferSelect;
+
+/** A run as overlap-aware dispatch reads it (TicketService.overlapBusyRuns). */
+type OverlapRun = Pick<Run, 'id' | 'ticketId' | 'handedOffTo' | 'state' | 'worktreePath'>;
 
 interface TicketServiceEvents {
   ticket: [ticket: Ticket];
@@ -1180,10 +1183,20 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /** Active runs working on one of the project's tickets; ticket-less runs never count. */
   private busyTicketRuns(projectId: string): number {
-    return this.runs
-      .list()
-      .filter((r) => r.projectId === projectId && r.ticketId && !r.handedOffTo && occupiesTicketSlot(r.state))
-      .length;
+    return (
+      this.db
+        .select({ n: count() })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.projectId, projectId),
+            isNotNull(runs.ticketId),
+            isNull(runs.handedOffTo),
+            inArray(runs.state, [...ACTIVE_RUN_STATES]),
+          ),
+        )
+        .get()?.n ?? 0
+    );
   }
 
   private async dispatchNextReadyTicketUnlocked(
@@ -1231,6 +1244,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const started: { ticket: Ticket; run: Run }[] = [];
     const serialize = fSettings.serializeOverlappingTickets;
     if (serialize) await this.refreshBranchFootprints(projectId);
+    // Read once, and again only after a start was tried: nothing awaits between two deferrals, so
+    // the busy runs cannot change there, and a run started in this pass counts with its claims.
+    let footprints = serialize ? this.overlapFootprints(projectId) : [];
     for (const next of queue) {
       if (next.blockedBy.length > 0) continue;
       if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) break;
@@ -1241,8 +1257,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       }
       if (this.runs.activeRunForTicket(next.id) || this.startingTickets.has(next.id)) continue;
       // M5 layer 1: wait for a busy run that edits the same files; a lower-priority ticket may fill the slot.
-      // Recomputed per ticket: a run started earlier in this pass counts with its claims.
-      const wait = serialize ? overlapWait(next, this.overlapFootprints(projectId)) : null;
+      const wait = serialize ? overlapWait(next, footprints) : null;
       if (wait) {
         this.deferForOverlap(next, wait.ticketId);
         continue;
@@ -1253,8 +1268,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         );
       } catch (error) {
         // Someone started it by hand in the meantime: take the next one.
-        if (error instanceof HttpError && error.statusCode === 409) continue;
-        throw error;
+        if (!(error instanceof HttpError && error.statusCode === 409)) throw error;
+      } finally {
+        if (serialize) footprints = this.overlapFootprints(projectId);
       }
     }
     return started;
@@ -1907,13 +1923,40 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * Whether the run still counts for overlap: it holds a slot, or its finished turn is still settling
    * or going through the pipeline (its branch is not merged or held yet).
    */
-  private busyForOverlap(run: Run): boolean {
+  private busyForOverlap(run: Pick<Run, 'id' | 'ticketId' | 'handedOffTo' | 'state'>): boolean {
     if (!run.ticketId || run.handedOffTo) return false;
     return occupiesTicketSlot(run.state) || this.settlingRuns.has(run.id) || this.pipelineRuns.has(run.id);
   }
 
-  private overlapBusyRuns(projectId: string): Run[] {
-    return this.runs.list().filter((r) => r.projectId === projectId && this.busyForOverlap(r));
+  /**
+   * The project's runs that count for overlap, newest first: the run columns overlap reads, from the
+   * slot-holding states and the runs settling or in the pipeline only (no events, telemetry or
+   * attention, which a full run list loads for every run of every project).
+   */
+  private overlapBusyRuns(projectId: string): OverlapRun[] {
+    const pending = [...this.settlingRuns.keys(), ...this.pipelineRuns.keys()];
+    const busyState = inArray(runs.state, [...ACTIVE_RUN_STATES]);
+    return this.db
+      .select({
+        id: runs.id,
+        ticketId: runs.ticketId,
+        handedOffTo: runs.handedOffTo,
+        state: runs.state,
+        worktreePath: runs.worktreePath,
+      })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.projectId, projectId),
+          isNotNull(runs.ticketId),
+          isNull(runs.handedOffTo),
+          pending.length > 0 ? or(busyState, inArray(runs.id, pending)) : busyState,
+        ),
+      )
+      .orderBy(desc(runs.createdAt))
+      .all()
+      .map((row) => ({ ...row, state: row.state as Run['state'] }))
+      .filter((run) => this.busyForOverlap(run));
   }
 
   /** The busy runs' footprints: their tickets' claims ∪ the cached files their branches changed. */
@@ -2014,11 +2057,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   /** Runs created for the project in the last 24 hours. */
   runsLast24h(projectId: string): number {
-    const since = Date.now() - 24 * 60 * 60_000;
-    return this.runs
-      .list()
-      .filter((r) => r.projectId === projectId && !r.predecessorRunId && Date.parse(r.createdAt) >= since)
-      .length;
+    const since = new Date(Date.now() - 24 * 60 * 60_000);
+    return (
+      this.db
+        .select({ n: count() })
+        .from(runs)
+        .where(and(eq(runs.projectId, projectId), isNull(runs.predecessorRunId), gte(runs.createdAt, since)))
+        .get()?.n ?? 0
+    );
   }
 
   dailyBudgetExhausted(

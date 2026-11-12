@@ -7,7 +7,7 @@ import { tickets } from '../db/schema.js';
 export const POSITION_STEP = 1024;
 
 /** Run states that occupy one of a project's parallel ticket slots. */
-const ACTIVE_RUN_STATES: ReadonlySet<Run['state']> = new Set<Run['state']>([
+export const ACTIVE_RUN_STATES: ReadonlySet<Run['state']> = new Set<Run['state']>([
   'queued',
   'starting',
   'working',
