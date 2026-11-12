@@ -280,7 +280,19 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
 - [x] **M3 — Board, runs and review in the browser:**
       The board (create, drag between columns, dependencies, start/prompt runs, review, accept/merge, export) and its bulk actions
       (`ticket-bulk-route.test.ts`, `boardBulkBar.test.ts`, `boardSelection.test.ts`) are covered end to end through the REST API
-      and the React views.
+      and the React views. Acceptance criteria below; `apps/core/src/m3-workflows.test.ts` drives AC-3.1–3.6 through the REST
+      routes the web calls and parses every response with its protocol schema.
+
+      | AC     | Given / when / then                                                                                                                                                                  | Guard                                                                                   |
+      | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+      | AC-3.1 | A ticket created with a priority and persona lands in `backlog` with a project key and moves through `ready → in_progress → review → done`; a malformed body is 400 and an unknown project or ticket 404, writing nothing. | `m3-workflows.test.ts`, `tickets.test.ts`                                               |
+      | AC-3.2 | `dependsOn` by key or id fills `blockedBy`; a cycle (self included) is 409 `dependency_cycle` and leaves the stored set alone; moving the dependency to `done` empties `blockedBy`.   | `m3-workflows.test.ts`, `ticket-dependencies.test.ts`                                   |
+      | AC-3.3 | Deleting a ticket while an agent still works on it (a turn under way, or a usage-limit pause that will resume; `isLiveRun` in `tickets/bulk.ts`) is refused, 409 `run_active` from `DELETE /api/tickets/:id` and a `run_active` failure in bulk; the drawer disables Delete meanwhile. A finished turn held open for review does not block it; a deleted ticket's runs are kept (`ticketId` null). | `m3-workflows.test.ts`, `tickets.test.ts`, `ticket-bulk-route.test.ts`                  |
+      | AC-3.4 | A bulk close of a ticket with a run branch is refused (`merge_required`); the drawer's accept merges it, or "Move to Done without merging" closes it on purpose.                      | `m3-workflows.test.ts`, `ticket-bulk-route.test.ts`, `worktree-merge.test.ts`           |
+      | AC-3.5 | The board export is valid `TicketExport` JSON (or RFC 4180 CSV) with whole-board counts; an unknown format, status or query key is 400.                                              | `m3-workflows.test.ts`, `ticket-export-route.test.ts`, `boardExport.test.ts`            |
+      | AC-3.6 | Every board write is 401 without a session and 403 without the CSRF header, and changes nothing.                                                                                     | `m3-workflows.test.ts`, `auth-coverage.test.ts`                                         |
+      | AC-3.7 | Review shows a run's diff per file, takes line comments and rounds, and a blocking comment closes the merge gate until it is resolved.                                               | `review*.test.ts`, `reviewGate.test.ts`, `reviewTree.test.ts`, `e2e/ui/run.mjs`         |
+
 - [x] **M4 — Hardening: auth coverage, isolation and the end-to-end gate:**
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
       anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and

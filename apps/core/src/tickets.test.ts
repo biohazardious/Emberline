@@ -341,11 +341,20 @@ describe('tickets', () => {
     expect(seq()).toBeUndefined();
   });
 
-  it('keeps runs when their ticket is deleted', async () => {
+  it('refuses to delete a ticket with a live run, then keeps its runs once it is deleted', async () => {
     const project = await createProject();
     const ticket = await createTicket(project.id, { title: 'Temp' });
     const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
 
+    const refused = await api('DELETE', `/api/tickets/${ticket.id}`);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'run_active' });
+    expect((await api('GET', `/api/tickets/${ticket.id}`)).statusCode).toBe(200);
+
+    expect((await api('POST', `/api/runs/${run.id}/stop`)).statusCode).toBe(200);
+    await expect
+      .poll(async () => ((await api('GET', `/api/runs/${run.id}`)).json() as Run).endedAt, { timeout: 5_000 })
+      .not.toBeNull();
     expect((await api('DELETE', `/api/tickets/${ticket.id}`)).statusCode).toBe(200);
     expect((await api('GET', `/api/tickets/${ticket.id}`)).statusCode).toBe(404);
     const after: Run = (await api('GET', `/api/runs/${run.id}`)).json();

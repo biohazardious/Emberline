@@ -67,7 +67,7 @@ import {
   syncWorktreeToMainWorkspace,
   type TicketsFileHooks,
 } from '../factory/service.js';
-import { applyBulkTicketAction } from './bulk.js';
+import { applyBulkTicketAction, isLiveRun } from './bulk.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import {
@@ -2613,8 +2613,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     });
   }
 
+  /** Refused (`run_active`) while an agent is still working on the ticket, as the bulk delete refuses it. */
   remove(id: string): void {
     const row = this.row(id);
+    const live = this.db
+      .select({ state: runs.state, endedAt: runs.endedAt, cancelledAt: runs.cancelledAt })
+      .from(runs)
+      .where(eq(runs.ticketId, id))
+      .all()
+      .some(isLiveRun);
+    if (live) throw conflict(`an agent is still working on ${row.key}; stop its run first`, 'run_active');
     const waiting = this.dependentIds(id);
     const blockedBefore = this.dependenciesOf(waiting);
     // Its runs outlive it (ticketId goes null); a hold they had is nobody's to answer any more.
