@@ -81,12 +81,12 @@ flowchart LR
 Every provider builds a launch spec (command, arguments, environment, files) for one session:
 
 - **Claude Code** gets a per-run settings file through `--settings` that wires every hook to `emberline-hook <event>`. The hook posts the payload with the run id and a per-run token to core, which drives the run state. MCP servers (Playwright, user-configured) are passed with `--mcp-config` and never written into the repository.
-- **Other CLIs** run through a generic wrapper that reports start, completion and failure through the same hook endpoint.
+- **Other CLIs** run through a generic wrapper (`buildWrappedCliLaunchSpec` in the SDK) that reports start, completion and failure through the same hook endpoint. Its failure hook carries the end of the CLI's output and, for a CLI whose transcripts core cannot read (Codex's rollout files), the latest rate-limit record of the session transcript.
 - State detection prefers hooks, then the session transcript, and uses screen parsing only where unavoidable (usage-limit banners and reset times), covered by fixture tests.
 - Resume: a live PTY gets a continue prompt typed in; an ended session is restarted with the CLI's resume flag in the same worktree.
 - Provider API keys are scoped to the agent that uses them: Claude gets the Anthropic key, Codex the OpenAI key, Gemini and Antigravity the Gemini key.
 
-The adapter contract lives in `packages/adapter-sdk`, the wire schemas in `packages/protocol`. Both are Apache-2.0 so third-party adapters can use any license.
+Every CLI has one `ProviderAdapter` (`packages/adapter-sdk`): Claude Code and the wrapped CLIs with a Claude fallback in `adapter-claude`, Codex in `adapter-codex`, Gemini CLI in `adapter-gemini`. Core registers them by `AgentId` and never reads a CLI's wording itself. The adapter contract lives in `packages/adapter-sdk`, the wire schemas in `packages/protocol`. Both are Apache-2.0 so third-party adapters can use any license.
 
 ### 3.4 Tickets and runs
 
@@ -115,25 +115,26 @@ Ticket columns are `backlog`, `ready`, `in_progress`, `review` and `done`. A tic
 
 ### 3.7 Data model
 
-| Table                                  | Holds                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------- |
-| `settings`                             | Key/value settings, including provider keys and notification config          |
-| `sessions`                             | Login sessions (hashed tokens)                                               |
-| `forge_accounts`                       | One forge account per server host; the token is sealed at rest               |
-| `ssh_keys`, `ssh_host_keys`            | Global and per-project SSH keys (sealed) and host keys a person trusted      |
-| `projects`                             | Projects, default branch, workspace path                                     |
-| `project_settings`                     | Per-project settings as one JSON document (issue sync, wizard gates)         |
-| `project_worktree_config`              | The approved copy of each project's `.emberline/worktree.yml`                |
-| `tickets`                              | Tickets, column, priority, position                                          |
-| `ticket_dependencies`                  | `dependsOn` edges between tickets, removed with either end                   |
-| `issue_tombstones`                     | Imported issues whose ticket was deleted, so label sync skips them           |
-| `runs`                                 | Runs: agent, state, worktree, branch, ptyd session, agent session, routes    |
-| `run_events`                           | Hook, screen, transcript, user and system events per run                     |
-| `quota_windows`                        | Usage-limit windows: exhausted, reset and resume times, source               |
-| `scheduled_jobs`                       | Cron-style scheduled jobs                                                    |
-| `review_comments`, `review_file_views` | Line comments and per-file review state                                      |
-| `build_outputs`                        | Archived run deliverables (APKs, installers, firmware); they outlive the run |
-| `notification_log`                     | Paged attention occurrences, so none is paged twice                          |
+| Table                                  | Holds                                                                         |
+| -------------------------------------- | ----------------------------------------------------------------------------- |
+| `settings`                             | Key/value settings, including provider keys and notification config           |
+| `sessions`                             | Login sessions (hashed tokens)                                                |
+| `forge_accounts`                       | One forge account per server host; the token is sealed at rest                |
+| `ssh_keys`, `ssh_host_keys`            | Global and per-project SSH keys (sealed) and host keys a person trusted       |
+| `projects`                             | Projects, default branch, workspace path                                      |
+| `project_settings`                     | Per-project settings as one JSON document (issue sync, wizard gates)          |
+| `project_worktree_config`              | The approved copy of each project's `.emberline/worktree.yml`                 |
+| `tickets`                              | Tickets, column, priority, position                                           |
+| `ticket_dependencies`                  | `dependsOn` edges between tickets, removed with either end                    |
+| `issue_tombstones`                     | Imported issues whose ticket was deleted, so label sync skips them            |
+| `runs`                                 | Runs: agent, state, worktree, branch, ptyd session, agent session, routes     |
+| `run_events`                           | Hook, screen, transcript, user and system events per run                      |
+| `run_event_compactions`                | What event retention removed from an old `done` run: tool calls, token totals |
+| `quota_windows`                        | Usage-limit windows: exhausted, reset and resume times, source                |
+| `scheduled_jobs`                       | Cron-style scheduled jobs                                                     |
+| `review_comments`, `review_file_views` | Line comments and per-file review state                                       |
+| `build_outputs`                        | Archived run deliverables (APKs, installers, firmware); they outlive the run  |
+| `notification_log`                     | Paged attention occurrences, so none is paged twice                           |
 
 `apps/core/src/db/schema.ts` is the source of truth; migrations in `apps/core/drizzle` are generated from it
 and append-only. `apps/core/src/db-schema.test.ts` fails when the schema and the newest migration snapshot
@@ -154,8 +155,10 @@ apps/
   ptyd/            PTY host daemon
 packages/
   protocol/        zod schemas and types: ptyd RPC, hook events, REST/WebSocket API
-  adapter-sdk/     agent adapter interface
-  adapter-claude/  launch specs for Claude Code and the other CLIs, hooks, personas
+  adapter-sdk/     agent adapter interface, shared limit parsing, the generic CLI wrapper
+  adapter-claude/  Claude Code (hooks, settings, personas) and the Antigravity, Copilot and Aider wrappers
+  adapter-codex/   Codex CLI
+  adapter-gemini/  Gemini CLI
   hook/            emberline-hook and the CLI wrappers
 e2e/               end-to-end smoke test against an isolated stack
 ```
@@ -167,7 +170,7 @@ TypeScript everywhere in a pnpm monorepo on Node.js LTS. Backend: Fastify, node-
 ## 4. Open questions
 
 - **Plugins.** Agent adapters, forge providers, MCP bundles, templates and notifiers are built in behind interfaces. An out-of-process plugin host (JSON-RPC over stdio or a Unix socket, with a permission manifest) is planned but not designed in detail.
-- **Preview environments.** One compose stack per worktree with port allocation, resource limits and cleanup.
+- **Preview environments.** Decided (0.7.x): one compose stack per worktree under the run's project name (`emberline-<run8>-preview`), host ports from `EMBERLINE_PREVIEW_PORTS_DOCKER` (moved on a collision), per-container cpu/memory caps (`EMBERLINE_PREVIEW_CPUS`, `EMBERLINE_PREVIEW_MEMORY_MB`) injected by the stdin override, compose files that fix a `container_name` or a volume or network name refused before `up`, and teardown with volumes on worktree prune or ticket Done. States (starting, healthy, failed with log tail, stopped) are `ComposePreviewEnvironment` in `packages/protocol`. Still open: a UI for the environments list.
 - **Multiple users.** How several users map onto "one installation = one user", for example one runner per user.
 - **Runner isolation.** All agents share one user in the runner. Per-project isolation would need separate users or containers.
 

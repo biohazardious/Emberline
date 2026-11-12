@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@emberline/adapter-claude": "workspace:*",
+    "@emberline/adapter-codex": "workspace:*",
+    "@emberline/adapter-gemini": "workspace:*",
     "@emberline/adapter-sdk": "workspace:*",
     "@emberline/protocol": "workspace:*",
     "@emberline/ptyd": "workspace:*",

@@ -1,0 +1,98 @@
+#!/bin/bash
+#
+# `make e2e-upgrade`: the upgrade paths from 0.5, 0.6 and 0.7 data volumes to the current images.
+# For each release it seeds the data volume as that release left it (its migrations, a project, a
+# ticket, a run, a review comment and a secret), starts the current core under that release's own
+# compose file, and checks (e2e/upgrade-check.mjs):
+#   - a pre-migration snapshot exists, as the old release left the database
+#   - every migration is applied, the seeded rows survive, and the secret opens with the same key
+#   - the ops-missing banner shows for a compose file without `ops` and clears with the current one
+#   - the rollback drill: the snapshot back in place opens under the previous release's migrations
+# `upgrade-check.mjs matrix` then upgrades from every migration step of this release.
+# Needs the images emberline/core:e2e and emberline/runner:e2e (make e2e builds them) and the release tags.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VERSIONS=${UPGRADE_VERSIONS:-"0.5.2 0.6.2 0.7.0"}
+BASE=${EMBERLINE_COMPOSE_PROJECT:-emberline-upgrade}
+WORK=$(mktemp -d)
+WS=$(mktemp -d)
+chmod 777 "$WS"
+export EMBERLINE_WORKSPACES_HOST_DIR=$WS
+CORE=emberline/core:e2e
+RUNNER=emberline/runner:e2e
+project=""
+
+cleanup() {
+  [ -n "$project" ] && docker compose -p "$project" -f "$WORK/old.yaml" -f e2e/compose.upgrade-old.yaml down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$WORK" "$WS" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+[ -n "$(docker images -q "$CORE")" ] || { echo "image $CORE is missing: run make e2e or build the core and runner targets as :e2e" >&2; exit 1; }
+
+# The engine may be remote, so the helper travels on stdin, not in a bind mount.
+run_check() { # run_check <docker run options...> -- <mode> [args]
+  local opts=()
+  while [ "$1" != "--" ]; do opts+=("$1"); shift; done; shift
+  docker run --rm -i -w /app "${opts[@]}" "$CORE" node --input-type=module - "$@" < e2e/upgrade-check.mjs
+}
+api_check() { # api_check <project> <ops-missing|ops-ok>
+  run_check --network "${1}_default" -- api http://core:7420 "$2"
+}
+
+for version in $VERSIONS; do
+  echo "=== upgrade from $version ==="
+  project="${BASE}-${version//./-}"
+  tag="v$version"
+  git show "$tag:compose.yaml" > "$WORK/old.yaml"
+  mkdir -p "$WORK/$version"
+  git archive "$tag" apps/core/drizzle | tar -x -C "$WORK/$version"
+  # The engine may be remote: the old migrations travel in a volume, not a bind mount.
+  OLD="docker compose -p $project --project-directory $PWD -f $WORK/old.yaml -f e2e/compose.upgrade-old.yaml"
+  NEW="docker compose -p $project -f compose.yaml -f e2e/compose.e2e.yaml"
+  has_ops=0; grep -q '^  ops:' "$WORK/old.yaml" && has_ops=1
+
+  $OLD create >/dev/null
+  drizzle_vol="${project}_seed-drizzle"
+  docker volume create "$drizzle_vol" >/dev/null
+  tar -C "$WORK/$version/apps/core" -c drizzle | docker run --rm -i -v "$drizzle_vol:/old" "$RUNNER" tar -x -C /old --strip-components=1
+  seed_run() { run_check --user root -v "$drizzle_vol:/old:ro" -v "${project}_data:/data" -e EMBERLINE_DATA_DIR=/data -- "$@"; }
+  verify_run() { run_check --user root -v "${project}_data:/data" -e EMBERLINE_DATA_DIR=/data -- "$@"; }
+  chown_data() { docker run --rm --user root -v "${project}_data:/data" "$CORE" chown -R node:node /data; }
+
+  # The runner volumes as 0.6.x left them (older releases left the same files).
+  docker run --rm -i --user root -v "$WS:/workspaces" \
+    -v "${project}_ptyd-socket:/run/emberline" -v "${project}_runner-logs:/var/log/emberline" \
+    -v "${project}_runner-home:/home/node" -v "${project}_runner-tools:/opt/ai-tools" \
+    "$RUNNER" bash -s < e2e/seed-0.6-volumes.sh
+  seed_run seed /old "$version"
+  chown_data
+
+  echo "--- the current core under the $version compose file"
+  $OLD up -d --wait core
+  api_check "$project" "$([ $has_ops = 1 ] && echo ops-ok || echo ops-missing)"
+  $OLD stop core >/dev/null
+  verify_run verify "$version"
+
+  echo "--- the current compose file"
+  $NEW up -d --wait core runner ops
+  api_check "$project" ops-ok
+  $NEW stop core >/dev/null
+
+  echo "--- rollback drill: restore the snapshot"
+  seed_run restore /old "$version"
+  chown_data
+  $NEW up -d --wait core
+  api_check "$project" ops-ok
+  $NEW stop core >/dev/null
+  verify_run verify "$version"
+
+  $NEW down -v --remove-orphans >/dev/null
+  docker volume rm "$drizzle_vol" >/dev/null 2>&1 || true
+  project=""
+done
+
+echo "=== every migration step of this release ==="
+run_check -- matrix
+echo "upgrade paths ok: $VERSIONS"

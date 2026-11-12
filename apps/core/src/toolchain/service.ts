@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { stripAnsi } from '@emberline/adapter-claude';
+import { stripAnsi } from '@emberline/adapter-sdk';
 import {
   type AgentId,
   type CliInstallMethod,

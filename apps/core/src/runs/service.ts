@@ -5,18 +5,13 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import { isPermissionNotification, type AgentState } from '@emberline/adapter-sdk';
 import {
-  CONTINUE_PROMPT,
-  decoratePromptWithPersona,
-  headlessModeProblem,
-  nextStateFromHook,
-  PERSONA_CATALOG,
+  isPermissionNotification,
+  type AgentState,
   type RateLimitInfo,
-  rateLimitFromHook,
   stateAfterExit,
-  transientErrorFromHook,
-} from '@emberline/adapter-claude';
+} from '@emberline/adapter-sdk';
+import { CONTINUE_PROMPT, PERSONA_CATALOG, personaBrief } from '@emberline/adapter-claude';
 import {
   type AgentId,
   AgentPreviewBody,
@@ -24,6 +19,8 @@ import {
   type AgentModelId,
   type AgentPersona,
   type BrowserAgentAction,
+  type ComposePreviewEnvironment,
+  type ComposePreviewEnvironmentsResponse,
   type CreateRunBody,
   type Credential,
   CreateRunBody as CreateRunBodySchema,
@@ -114,8 +111,10 @@ import {
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
+  mainPreviewComposeProjectName,
   previewComposeProjectName,
 } from '../docker/engine.js';
+import { MAX_LISTED_ENVIRONMENTS, toComposeEnvironment } from './compose-environments.js';
 import {
   buildDockerProjects,
   composeProjectsInUse,
@@ -129,6 +128,14 @@ import { previewUrl } from './preview-url.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
+import {
+  allCompactions,
+  compactExpiredRunEvents,
+  type CompactionResult,
+  compactionOf,
+  type RunEventCompaction,
+  storedUsage,
+} from './event-retention.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { accountForGitRemote } from '../forge/account-store.js';
 import { gatewayRemoteFor } from '../ssh-keys/remote.js';
@@ -206,6 +213,7 @@ import {
   TEARDOWN_TIMEOUT_MS,
   unignoredSecretsNote,
 } from '../worktree-config/lifecycle.js';
+import { ensureSetupPackageManager, type ProvisionOutcome } from '../toolchain/package-manager.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
 import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import {
@@ -253,6 +261,8 @@ interface StopPreviewOptions {
   onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
   /** The caller takes the preview project down itself (a project delete's teardown): no `down` here. */
   skipDown?: boolean;
+  /** Who stopped it, for the `preview_stopped` event (default `user`). */
+  source?: EventSource;
 }
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
@@ -838,10 +848,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .all()
         .map((row) => [row.runId, row.n]),
     );
+    const compactions = allCompactions(this.db);
     return this.withAttention(
       rows.map((row) => ({
         ...toRun(row),
-        telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
+        telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0, compactions.get(row.id)),
       })),
     );
   }
@@ -893,7 +904,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }));
     const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
     const [withAttention] = this.withAttention([
-      { ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls) },
+      { ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls, compactionOf(this.db, id)) },
     ]);
     return {
       ...(withAttention as Run),
@@ -1023,7 +1034,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * a prompt (`-p`, `exec`, `--message`), as every respawn is. Text typed into it is lost.
    */
   private exitsAfterTurn(row: RunRow): boolean {
-    if (providerAdapter(row.agent).claudeNative) return false;
+    if (providerAdapter(row.agent).hooks === 'native') return false;
     return row.prompt.trim() !== '' || this.hasEvent(row.id, 'respawning');
   }
 
@@ -1034,7 +1045,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .from(runEvents)
       .where(and(eq(runEvents.runId, id), eq(runEvents.type, 'PreToolUse')))
       .all().length;
-    return this.computeTelemetryForRow(row, toolCalls);
+    return this.computeTelemetryForRow(row, toolCalls, compactionOf(this.db, id));
   }
 
   /**
@@ -1084,13 +1095,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return [...buckets.values()];
   }
 
-  private computeTelemetryForRow(row: RunRow, toolCalls: number): RunTelemetry {
+  /** `liveToolCalls` counts the run's `PreToolUse` events; a compaction adds the ones retention removed. */
+  private computeTelemetryForRow(
+    row: RunRow,
+    liveToolCalls: number,
+    compaction?: RunEventCompaction,
+  ): RunTelemetry {
     const endMs = row.endedAt ? row.endedAt.getTime() : Date.now();
     const durationSec = Math.max(0, Math.round((endMs - row.createdAt.getTime()) / 1000));
+    const toolCalls = liveToolCalls + (compaction?.toolCalls ?? 0);
 
-    const usage = row.transcriptPath
-      ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir)
-      : null;
+    const usage =
+      (row.transcriptPath ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir) : null) ??
+      storedUsage(compaction);
     if (usage && usage.inputTokens + usage.outputTokens > 0) {
       return {
         runId: row.id,
@@ -1153,7 +1170,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   private refuseHeadlessAsk(agent: string, mode: PermissionMode, prompt: string): void {
-    const problem = headlessModeProblem(agent, mode, prompt.length > 0);
+    const problem = providerAdapter(agent).headlessProblem(mode, prompt.length > 0);
     if (problem) throw conflict(problem, 'headless_needs_auto');
   }
 
@@ -1672,8 +1689,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // Enqueue refuses this for the first lane; a lane picked later (a fallback, a handoff) or a run
     // from before that check would deny every command that needs approval, without telling anyone.
-    const headless = headlessModeProblem(
-      row.agent,
+    const headless = providerAdapter(row.agent).headlessProblem(
       row.permissionMode as PermissionMode,
       Boolean(options.prompt),
     );
@@ -1767,6 +1783,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const dockerEnv = await this.dockerEnvFor(row);
       const startedAt = Date.now();
       const deadline = startedAt + SETUP_TOTAL_MS;
+      const provisioned = await ensureSetupPackageManager(row.worktreePath, setup, {
+        execId: setupExecId(row.id),
+        env: dockerEnv,
+      });
+      if (provisioned.status === 'cancelled' || !this.setupGoesOn(row.id)) return;
+      this.noteProvisioning(row.id, provisioned);
       for (const [index, command] of setup.entries()) {
         if (!this.setupGoesOn(row.id)) return;
         const left = deadline - Date.now();
@@ -1824,6 +1846,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
+  /** Records the package manager setup needed: installed for it, or why that failed. */
+  private noteProvisioning(runId: string, provisioned: ProvisionOutcome): void {
+    if (provisioned.status === 'installed') {
+      this.note(runId, 'worktree_toolchain_installed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: provisioned.message,
+      });
+    } else if (provisioned.status === 'failed') {
+      this.note(runId, 'worktree_toolchain_failed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: `Could not install ${provisioned.manager} ${provisioned.version} for setup`,
+        exitCode: provisioned.outcome.exitCode,
+        timedOut: provisioned.outcome.timedOut,
+        tail: provisioned.outcome.tail,
+      });
+    }
+  }
+
   /** Spawns the agent's terminal for a run already marked `starting`. */
   private async spawnTerminal(
     row: RunRow,
@@ -1837,9 +1879,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const resolvedModel = (runModel(row) ??
       resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
+    const provider = providerAdapter(row.agent);
     const dockerEnv = await this.dockerEnvFor(row);
     const personaPrompt =
-      options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+      options.type === 'spawned' && options.prompt
+        ? provider.decoratePrompt(options.prompt, personaBrief(persona))
+        : options.prompt;
     // A fresh start with a task learns about the Docker engine once; a resumed session already knows.
     const decorated =
       personaPrompt && options.type === 'spawned' && dockerEnv.DOCKER_HOST
@@ -1861,7 +1906,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // Antigravity AI credits are a setting in agy's shared settings.json; the CLI seed writes it per run.
     if (row.agent === 'antigravity')
       extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
-    const provider = providerAdapter(row.agent);
     // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
     const { playwrightEnabled, customMcpServers } = resolveMcpServersForPersona(this.db, persona);
@@ -1888,7 +1932,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       coreUrl: this.config.hookUrl,
       hookCommand: this.config.hookCommand,
       permissionMode: row.permissionMode as Run['permissionMode'],
-      model: provider.claudeNative && !isRealClaude ? 'auto' : resolvedModel,
+      model: provider.hooks === 'native' && !isRealClaude ? 'auto' : resolvedModel,
       prompt: effectivePrompt,
       resumeSessionId: options.resumeSessionId,
       extraEnv,
@@ -2070,13 +2114,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // The agent is alive: the stall watchdog starts over.
     if (live) this.stallWatch.delete(row.id);
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
-    const limitCtx = { agent: row.agent, model: runModel(row) };
+    const provider = providerAdapter(row.agent);
+    const limits = { model: runModel(row), timeZone: this.config.timeZone };
     let next = live
-      ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx)
+      ? provider.nextState(row.state as AgentState, envelope.event, envelope.payload, limits)
       : undefined;
     // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
     // scheduler retry the turn, a few times with growing delays.
-    const transient = live ? transientErrorFromHook(envelope.event, envelope.payload, limitCtx) : undefined;
+    const transient = live
+      ? provider.transientErrorFromHook(envelope.event, envelope.payload, limits)
+      : undefined;
     let retry: { attempt: number; at: Date } | undefined;
     if (transient && row.autoRetryCount < AUTO_RETRY_DELAYS_MS.length) {
       const attempt = row.autoRetryCount + 1;
@@ -2123,11 +2170,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     if (next === 'rate_limited') {
-      this.emit(
-        'rateLimited',
-        run,
-        rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone, limitCtx),
-      );
+      this.emit('rateLimited', run, provider.rateLimitFromHook(envelope.event, envelope.payload, limits));
     }
     return run;
   }
@@ -3770,6 +3813,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       hostPort,
       engineHost: engineHostName(this.config.dockerHost),
       env,
+      limits: this.config.previewLimits,
     };
     const current = () => !job.cancelled && this.composeJobs.get(row.id) === job && this.hasRun(row.id);
     const reallocate = (taken: ReadonlySet<number>) =>
@@ -3933,11 +3977,81 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     this.record(row.id, {
-      source: 'user',
+      source: opts.source ?? 'user',
       type: 'preview_stopped',
       payload: { terminalId: current.terminalId },
     });
     return { ...(await this.previewStatus(row.id, requestHost)), detectedCommand: current.detectedCommand };
+  }
+
+  /**
+   * A ticket moved to Done: the compose preview of each of its runs that is not stopped is taken
+   * down with its volumes and built images (CLEANUP_DOWN), and its port freed. Never throws; a
+   * failed `down` is recorded as `preview_failed` (stopPreviewHeld), so the port stays held.
+   */
+  async teardownTicketPreviews(ticketId: string): Promise<void> {
+    const rows = this.db.select().from(runs).where(eq(runs.ticketId, ticketId)).all();
+    for (const row of rows) {
+      await this.previewRunLock
+        .run(row.id, async () => {
+          if (!this.hasRun(row.id)) return;
+          const status = await this.previewStatus(row.id);
+          if (status.kind !== 'compose' || status.status === 'stopped') return;
+          await this.stopPreviewHeld(row, undefined, { volumes: true, source: 'system' });
+        })
+        .catch((error: unknown) =>
+          this.log?.warn(
+            { runId: row.id, ticketId, error: (error as Error).message },
+            'compose preview: teardown on ticket done failed',
+          ),
+        );
+    }
+  }
+
+  /**
+   * Every compose stack of the project: the newest runs that started a compose preview (at most
+   * MAX_LISTED_ENVIRONMENTS), then the main workspace's when it has one configured.
+   */
+  async composePreviewEnvironments(
+    projectId: string,
+    requestHost?: string,
+  ): Promise<ComposePreviewEnvironmentsResponse> {
+    const started = this.db
+      .select({ runId: runEvents.runId, payload: runEvents.payload, ticketId: runs.ticketId })
+      .from(runEvents)
+      .innerJoin(runs, eq(runs.id, runEvents.runId))
+      .where(and(eq(runs.projectId, projectId), eq(runEvents.type, 'preview_started')))
+      .orderBy(desc(runEvents.id))
+      .all();
+    const owners = new Map<string, string | null>();
+    for (const row of started) {
+      if (owners.size >= MAX_LISTED_ENVIRONMENTS) break;
+      if (owners.has(row.runId) || (row.payload as PreviewPayload | null)?.kind !== 'compose') continue;
+      owners.set(row.runId, row.ticketId);
+    }
+    const environments: ComposePreviewEnvironment[] = [];
+    for (const [runId, ticketId] of owners) {
+      const status = await this.previewStatus(runId, requestHost);
+      if (status.kind !== 'compose') continue;
+      environments.push(
+        toComposeEnvironment(status, { runId, ticketId, project: this.previewProjectOf(runId) }),
+      );
+    }
+    const main = await this.mainPreviews.status(projectId, requestHost);
+    if (!main.unavailable || main.status !== 'stopped') {
+      environments.push(
+        toComposeEnvironment(main, {
+          runId: null,
+          ticketId: null,
+          project: mainPreviewComposeProjectName(projectId),
+        }),
+      );
+    }
+    return {
+      ports: this.config.previewPorts.docker,
+      limits: this.config.previewLimits,
+      environments,
+    };
   }
 
   /**
@@ -4282,6 +4396,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return over.length > PRUNE_RUNS_PER_PASS;
   }
 
+  /**
+   * Event retention (EMBERLINE_EVENT_RETENTION_DAYS): compacts the logs of `done` runs past the
+   * limit, keeping their summary, handoff note and usage totals (runs/event-retention.ts).
+   */
+  compactExpiredEvents(now = Date.now()): CompactionResult {
+    return compactExpiredRunEvents(this.db, {
+      retentionDays: this.config.eventRetentionDays,
+      protectedTypes: PRUNE_PROTECTED_EVENT_TYPES,
+      usageOf: (run) =>
+        run.transcriptPath ? readTranscriptUsage(run.transcriptPath, this.config.transcriptsDir) : null,
+      now,
+    });
+  }
+
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
     if (this.reconcilePass || this.ptyd.status !== 'connected') return;
@@ -4292,7 +4420,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.lastEventPruneAt = Date.now();
         try {
           // More runs over the cap: come back on the next reconcile instead of waiting out the interval.
-          if (this.pruneRunEvents()) this.lastEventPruneAt = 0;
+          const pruneLeft = this.pruneRunEvents();
+          const compactLeft = this.compactExpiredEvents().more;
+          if (pruneLeft || compactLeft) this.lastEventPruneAt = 0;
         } catch {
           // Pruning is housekeeping; it must never skip the rest of the reconcile.
         }

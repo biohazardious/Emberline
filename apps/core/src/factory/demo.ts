@@ -25,6 +25,7 @@ import {
   SETUP_TIMEOUT_MS,
   SETUP_TOTAL_MS,
 } from '../worktree-config/lifecycle.js';
+import { ensureSetupPackageManager } from '../toolchain/package-manager.js';
 import { buildStartCommit, recordDemoBuild } from './demo-builds.js';
 import {
   collectWorkspaceFiles,
@@ -318,6 +319,12 @@ export async function runApprovedSetup(
   env: Record<string, string> = {},
 ): Promise<void> {
   const deadline = Date.now() + SETUP_TOTAL_MS;
+  const provisioned = await ensureSetupPackageManager(workspacePath, setup, { env });
+  if (provisioned.status === 'installed') logs.push(provisioned.message);
+  if (provisioned.status === 'failed')
+    logs.push(
+      `Could not install ${provisioned.manager} ${provisioned.version} for setup:\n${provisioned.outcome.tail}`,
+    );
   for (const command of setup) {
     const left = deadline - Date.now();
     if (left <= 0)

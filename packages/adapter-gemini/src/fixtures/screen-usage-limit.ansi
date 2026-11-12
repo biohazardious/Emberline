@@ -1,0 +1,14 @@
+[2J[H[36m > [0mrefactor the scheduler lanes
+
+[32m✦[0m I will read the scheduler service first.
+
+[31m✕ Usage limit reached for gemini-2.5-pro.
+  Access resets at 3:45 PM GMT+3.
+  /stats model for usage details
+  /model to switch models.
+  /auth to switch to API key.[0m
+
+[2m╭──────────────────────────────────────────────────╮[0m
+[2m│[0m >   Type your message or @path/to/file           [2m│[0m
+[2m╰──────────────────────────────────────────────────╯[0m
+~/workspaces/demo (emberline/emb-7-lanes*)   no sandbox   gemini-2.5-pro (98% context left)

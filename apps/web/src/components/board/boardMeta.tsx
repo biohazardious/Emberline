@@ -1,19 +1,14 @@
-import type { AgentPersona, PermissionMode, Project, Run, Ticket, TicketStatus } from '@emberline/protocol';
-import { issueHref } from '../../issueImport';
-
-export const COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
-  { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
-  { status: 'ready', label: 'Ready', hint: 'Specified and ready to hand to an agent' },
-  {
-    status: 'in_progress',
-    label: 'In progress',
-    hint: 'Drop here to dispatch agent (or monitor active run)',
-  },
-  { status: 'review', label: 'Review', hint: 'Agent finished its turn; review or send a follow-up' },
-  { status: 'done', label: 'Done', hint: 'Accepted; runs never move tickets out of here' },
-];
-
-export const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent'] as const;
+import type {
+  AgentPersona,
+  BulkTicketResult,
+  PermissionMode,
+  Project,
+  Run,
+  Ticket,
+  TicketStatus,
+} from '@emberline/protocol';
+import type { BoardFilter } from '../../boardFilter';
+import type { BoardSelectionState } from '../../hooks/useBoardSelection';
 
 export const POSITION_STEP = 1024;
 
@@ -42,12 +37,21 @@ export interface BoardCtx {
   pid: string;
   proj: Project | undefined;
   tickets: Ticket[] | undefined;
-  cols: Map<TicketStatus, Ticket[]>;
+  allCols: Map<TicketStatus, Ticket[]>;
+  visCols: Map<TicketStatus, Ticket[]>;
+  colCounts: Map<TicketStatus, number>;
   runs: Map<string, Run>;
   auto: boolean;
   flipAuto: () => void;
   demo: boolean;
   flipDemo: () => void;
+  canSeed: boolean;
+  bulk: BoardSelectionState;
+  onBulkApplied: (result: BulkTicketResult) => void;
+  filter: BoardFilter;
+  filterActive: boolean;
+  filteredShown: number;
+  updateFilter: (next: BoardFilter) => void;
   openBp: () => void;
   openImp: () => void;
   back: () => void;
@@ -92,43 +96,4 @@ export interface DrawerCtx {
   move: (s: TicketStatus) => void;
   discard: () => Promise<void>;
   accept: (opts?: { force?: boolean }) => Promise<void>;
-}
-
-/** The issue a ticket was imported from: `#123` linking to it, its labels, whether it is closed or needs triage. */
-export function IssueChips({ external }: { external: Ticket['external'] }) {
-  if (!external) return null;
-  const href = issueHref(external.url);
-  return (
-    <div className="card-issue">
-      {href ? (
-        <a
-          className="badge badge-soft mono issue-chip"
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Open the issue"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          #{external.number}
-        </a>
-      ) : (
-        <span className="badge badge-soft mono">#{external.number}</span>
-      )}
-      {external.triage && (
-        <span
-          className="badge badge-warn"
-          title="Label sync imported this from an author who is not in Trusted authors. Automatic dispatch skips it until you move or edit it."
-        >
-          needs triage
-        </span>
-      )}
-      {external.state === 'closed' && <span className="badge badge-soft">closed</span>}
-      {external.labels.map((l) => (
-        <span key={l} className="badge badge-soft card-issue-label">
-          {l}
-        </span>
-      ))}
-    </div>
-  );
 }

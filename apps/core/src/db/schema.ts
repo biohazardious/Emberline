@@ -211,6 +211,8 @@ export const tickets = sqliteTable(
   },
   (t) => [
     uniqueIndex('tickets_project_number_idx').on(t.projectId, t.number),
+    // The board lists a project's tickets in position order without a sort step.
+    index('tickets_project_position_idx').on(t.projectId, t.position),
     // One ticket per issue: the guard that makes imports idempotent, also under concurrent imports.
     uniqueIndex('tickets_external_idx').on(t.projectId, t.externalSource, t.externalId),
   ],
@@ -267,7 +269,14 @@ export const runs = sqliteTable(
     /** Automatic handoffs so far in this ticket attempt (copied +1 to a successor). */
     handoffCount: integer('handoff_count').notNull().default(0),
   },
-  (t) => [index('runs_project_idx').on(t.projectId)],
+  (t) => [
+    // A project's runs by age (usage by day); its prefix serves every project_id lookup.
+    index('runs_project_created_idx').on(t.projectId, t.createdAt),
+    // A ticket's latest or active run: the board card and the review-ready check.
+    index('runs_ticket_created_idx').on(t.ticketId, t.createdAt),
+    // Scheduler sweeps by state, /metrics counts per state, and event retention's age cut-off.
+    index('runs_state_changed_idx').on(t.state, t.stateChangedAt),
+  ],
 );
 
 export const runEvents = sqliteTable(
@@ -295,28 +304,56 @@ export const runEvents = sqliteTable(
 );
 
 /**
+ * What event retention (runs/event-retention.ts) removed from a finished run, so its usage totals
+ * survive the rows: tool calls counted from the deleted `PreToolUse` events and the transcript's token
+ * totals when it was readable (null: telemetry estimates from the tool calls). `throughEventId` is the
+ * newest event the last pass covered; a run resumed after it is compacted again once it ages out.
+ */
+export const runEventCompactions = sqliteTable('run_event_compactions', {
+  runId: text('run_id')
+    .primaryKey()
+    .references(() => runs.id, { onDelete: 'cascade' }),
+  compactedAt: integer('compacted_at', { mode: 'timestamp_ms' }).notNull(),
+  throughEventId: integer('through_event_id').notNull(),
+  eventsRemoved: integer('events_removed').notNull(),
+  toolCalls: integer('tool_calls').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cachedTokens: integer('cached_tokens'),
+});
+
+/**
  * Exhausted usage windows per lane (agent + credential + pool). A window with `resumedAt` null
  * pauses dispatch on its lane until `resumeAt`; timers are derived from these rows, so they
  * survive restarts.
  */
-export const quotaWindows = sqliteTable('quota_windows', {
-  id: text('id').primaryKey(),
-  /** Lane the window blocks; pool `*` blocks every pool of the agent + credential. */
-  agent: text('agent').notNull().default('claude'),
-  credential: text('credential').notNull().default('login'),
-  pool: text('pool').notNull().default('*'),
-  /** Approximate window start (reset - 5h) when the reset time is known. */
-  startedAt: integer('started_at', { mode: 'timestamp_ms' }),
-  exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),
-  resetsAt: integer('resets_at', { mode: 'timestamp_ms' }),
-  resumeAt: integer('resume_at', { mode: 'timestamp_ms' }).notNull(),
-  /** hook | screen | probe */
-  source: text('source').notNull(),
-  message: text('message'),
-  /** Run whose limit opened the window. */
-  runId: text('run_id'),
-  resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
-});
+export const quotaWindows = sqliteTable(
+  'quota_windows',
+  {
+    id: text('id').primaryKey(),
+    /** Lane the window blocks; pool `*` blocks every pool of the agent + credential. */
+    agent: text('agent').notNull().default('claude'),
+    credential: text('credential').notNull().default('login'),
+    pool: text('pool').notNull().default('*'),
+    /** Approximate window start (reset - 5h) when the reset time is known. */
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),
+    resetsAt: integer('resets_at', { mode: 'timestamp_ms' }),
+    resumeAt: integer('resume_at', { mode: 'timestamp_ms' }).notNull(),
+    /** hook | screen | probe */
+    source: text('source').notNull(),
+    message: text('message'),
+    /** Run whose limit opened the window. */
+    runId: text('run_id'),
+    resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [
+    // Open pauses (`resumed_at is null`) by their resume time: the scheduler's every pass and its re-armed timer.
+    index('quota_windows_open_idx').on(t.resumedAt, t.resumeAt),
+    // A limit hit looks up its lane's open and latest window.
+    index('quota_windows_lane_idx').on(t.agent, t.credential, t.pool, t.exhaustedAt),
+  ],
+);
 
 /** Recurring cron jobs that automatically spawn agent runs on a schedule (Phase 2.2). */
 export const scheduledJobs = sqliteTable(

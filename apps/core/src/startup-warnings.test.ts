@@ -83,4 +83,20 @@ describe('startupWarnings', () => {
     expect(warning?.data).toMatchObject({ previewHost: host });
     expect(warningsFor({ ...env, EMBERLINE_PREVIEW_HOST: 'http://p.example.com' })).toEqual([]);
   });
+
+  it('compose preview limits: valid values are used, unusable ones fall back to the default and are named', () => {
+    expect(loadConfig({}).previewLimits).toEqual({ cpus: 1, memoryMb: 1024 });
+    expect(
+      loadConfig({ EMBERLINE_PREVIEW_CPUS: '2.5', EMBERLINE_PREVIEW_MEMORY_MB: '512' }).previewLimits,
+    ).toEqual({ cpus: 2.5, memoryMb: 512 });
+    const env = { EMBERLINE_PREVIEW_CPUS: '0', EMBERLINE_PREVIEW_MEMORY_MB: '1.5g' };
+    expect(loadConfig(env).previewLimits).toEqual({ cpus: 1, memoryMb: 1024 });
+    expect(warningsFor(env)).toEqual([
+      {
+        data: { variables: ['EMBERLINE_PREVIEW_CPUS', 'EMBERLINE_PREVIEW_MEMORY_MB'] },
+        message:
+          'compose preview limits: EMBERLINE_PREVIEW_CPUS takes 0.1-64 and EMBERLINE_PREVIEW_MEMORY_MB 64-262144; using the default',
+      },
+    ]);
+  });
 });

@@ -1,16 +1,19 @@
-import type { Run, SyncWorktreeResponse, Ticket, TicketStatus } from '@emberline/protocol';
+import type { BulkTicketResult, Run, SyncWorktreeResponse, Ticket, TicketStatus } from '@emberline/protocol';
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
+import {
+  type BoardFilter,
+  EMPTY_BOARD_FILTER,
+  filterBoardTickets,
+  isBoardFilterActive,
+  parseBoardFilter,
+} from '../boardFilter';
+import { bulkResultSummary, selectionAfter } from '../boardSelection';
 import { BlueprintModal } from '../components/BlueprintModal';
+import { BOARD_COLUMNS } from '../components/BoardCard';
 import { BoardColumnsSection } from '../components/board/BoardColumnsSection';
 import { BoardHeaderSection } from '../components/board/BoardHeaderSection';
-import {
-  type BoardCtx,
-  byPosition,
-  COLUMNS,
-  type DropTarget,
-  slotPosition,
-} from '../components/board/boardMeta';
+import { type BoardCtx, byPosition, type DropTarget, slotPosition } from '../components/board/boardMeta';
 import { TicketDrawer } from '../components/board/TicketDrawer';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { WorktreeConfigBanner } from '../components/ProjectSettingsPanel';
@@ -18,6 +21,7 @@ import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPan
 import { QuotaPanel } from '../components/QuotaPanel';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
+import { useBoardSelection } from '../hooks/useBoardSelection';
 import { useProject } from '../hooks/useProjects';
 import {
   DrawerMergeError,
@@ -27,21 +31,22 @@ import {
   worktreeMissing,
 } from '../reviewComments';
 import { dropIntoInProgress } from '../ticketDeps';
-import { toastInfo } from '../toast';
+import { toastError, toastInfo } from '../toast';
+
+export { TicketDrawer } from '../components/board/TicketDrawer';
+
+function boardFilterKey(projectId: string): string {
+  return `emberline.board.filter.${projectId}`;
+}
 
 export function BoardPage({ projectId }: { projectId: string }) {
-  const {
-    project,
-    loading: projectLoading,
-    error: projectError,
-    refresh: refreshProject,
-  } = useProject(projectId, 30_000);
+  const { project, error: projectError, refresh: refreshProject } = useProject(projectId, 30_000);
   const {
     tickets,
     loading: ticketsLoading,
     error: ticketsError,
-    refresh: refreshTickets,
     patchLocal,
+    refresh: refreshTickets,
   } = useTickets(projectId);
   const { runs } = useRuns();
 
@@ -53,7 +58,6 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const goBack = useGoBack();
 
   const [autoStart, setAutoStart] = useState(true);
-  // A blocked ticket dropped into In progress: its drawer opens asking "Start anyway" (`nonce` re-arms it).
   const [armedStart, setArmedStart] = useState<{ id: string; nonce: number }>();
   useEffect(() => {
     setArmedStart((prev) => (prev && prev.id !== openId ? undefined : prev));
@@ -66,6 +70,27 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [blockedDrop, setBlockedDrop] = useState<{ ticket: Ticket; target: DropTarget; count: number }>();
   const [missingDrop, setMissingDrop] = useState<{ ticket: Ticket; target: DropTarget }>();
 
+  const [filter, setFilter] = useState<BoardFilter>(() => {
+    try {
+      return parseBoardFilter(localStorage.getItem(boardFilterKey(projectId)));
+    } catch {
+      return EMPTY_BOARD_FILTER;
+    }
+  });
+
+  const updateFilter = (next: BoardFilter) => {
+    setFilter(next);
+    try {
+      if (isBoardFilterActive(next)) {
+        localStorage.setItem(boardFilterKey(projectId), JSON.stringify(next));
+      } else {
+        localStorage.removeItem(boardFilterKey(projectId));
+      }
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   /** Newest run per ticket (runs arrive newest-first). */
   const latestRun = useMemo(() => {
     const map = new Map<string, Run>();
@@ -77,19 +102,51 @@ export function BoardPage({ projectId }: { projectId: string }) {
     return map;
   }, [runs]);
 
-  const columns = useMemo(() => {
-    const grouped = new Map<TicketStatus, Ticket[]>(COLUMNS.map((c) => [c.status, []]));
+  const allColumns = useMemo(() => {
+    const grouped = new Map<TicketStatus, Ticket[]>(BOARD_COLUMNS.map((c) => [c.status, []]));
     for (const ticket of tickets ?? []) grouped.get(ticket.status)?.push(ticket);
     for (const list of grouped.values()) list.sort(byPosition);
     return grouped;
   }, [tickets]);
+
+  const filteredBoard = useMemo(
+    () => filterBoardTickets(tickets ?? [], latestRun, filter),
+    [tickets, latestRun, filter],
+  );
+  const filterActive = isBoardFilterActive(filter);
+
+  const visibleColumns = useMemo(() => {
+    if (!filterActive) return allColumns;
+    const grouped = new Map<TicketStatus, Ticket[]>(BOARD_COLUMNS.map((c) => [c.status, []]));
+    for (const ticket of filteredBoard.tickets) grouped.get(ticket.status)?.push(ticket);
+    for (const list of grouped.values()) list.sort(byPosition);
+    return grouped;
+  }, [allColumns, filterActive, filteredBoard.tickets]);
+
+  const orderedVisible = useMemo(
+    () => BOARD_COLUMNS.flatMap((c) => (visibleColumns.get(c.status) ?? []).map((t) => t.id)),
+    [visibleColumns],
+  );
+  const bulk = useBoardSelection(tickets, orderedVisible);
+
+  const onBulkApplied = (result: BulkTicketResult) => {
+    for (const ticket of result.updated) patchLocal(ticket);
+    if (result.removed.length > 0) void refreshTickets();
+    (result.failed.length > 0 ? toastError : toastInfo)(bulkResultSummary(result));
+    bulk.replace(selectionAfter(result));
+  };
+
+  const columnCounts = useMemo(
+    () => new Map(BOARD_COLUMNS.map((c) => [c.status, (visibleColumns.get(c.status) ?? []).length])),
+    [visibleColumns],
+  );
 
   const move = async (
     ticket: Ticket,
     target: DropTarget,
     { force = false, skipMerge = false, inDrawer = false } = {},
   ) => {
-    const column = (columns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
+    const column = (allColumns.get(target.status) ?? []).filter((t) => t.id !== ticket.id);
     const position = slotPosition(column, target.beforeId);
     if (ticket.status === target.status && ticket.position === position) return;
     const currentRun = latestRun.get(ticket.id);
@@ -155,16 +212,28 @@ export function BoardPage({ projectId }: { projectId: string }) {
     }
   };
 
+  const canSeed = !ticketsLoading && !ticketsError && (tickets?.length ?? 0) === 0;
+  const open = tickets?.find((t) => t.id === openId);
+
   const ctx: BoardCtx = {
     pid: projectId,
     proj: project,
     tickets,
-    cols: columns,
+    allCols: allColumns,
+    visCols: visibleColumns,
+    colCounts: columnCounts,
     runs: latestRun,
     auto: autoStart,
     flipAuto: () => setAutoStart((v) => !v),
     demo: demoPanelOpen,
     flipDemo: () => setDemoPanelOpen((v) => !v),
+    canSeed,
+    bulk,
+    onBulkApplied,
+    filter,
+    filterActive,
+    filteredShown: filteredBoard.shown,
+    updateFilter,
     openBp: () => setBlueprintOpen(true),
     openImp: () => setImportOpen(true),
     back: goBack,
@@ -179,11 +248,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
     open: (id) => setOpenId(id),
   };
 
-  const open = tickets?.find((t) => t.id === openId);
-
   return (
     <div className="board-page">
-      <BoardHeaderSection ctx={ctx} loading={projectLoading} error={projectError} onRetry={refreshProject} />
+      <BoardHeaderSection ctx={ctx} />
 
       <QuotaPanel compact />
 
@@ -196,6 +263,8 @@ export function BoardPage({ projectId }: { projectId: string }) {
         loading={ticketsLoading}
         loadError={ticketsError}
         onRetry={refreshTickets}
+        projectError={projectError}
+        onRetryProject={refreshProject}
       />
 
       {open && (

@@ -5,9 +5,10 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../../api';
 import { dependencyCandidates } from '../../ticketDeps';
 import { timeAgo } from '../../time';
+import { BOARD_COLUMNS, BOARD_PRIORITIES, IssueChips } from '../BoardCard';
 import { PersonaPicker, TaskTemplateBar } from '../PersonaBadge';
 import { ico } from '../SectionState';
-import { COLUMNS, type DrawerCtx, IssueChips, PRIORITIES } from './boardMeta';
+import type { DrawerCtx } from './boardMeta';
 
 export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
   const {
@@ -113,7 +114,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
       <PersonaPicker value={persona} onChange={setPersona} />
       <div className="drawer-row">
         <div className="segmented" role="radiogroup" aria-label="Priority">
-          {PRIORITIES.map((label, value) => (
+          {BOARD_PRIORITIES.map((label, value) => (
             <button
               key={label}
               type="button"
@@ -198,7 +199,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
         Column
       </label>
       <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
-        {COLUMNS.map((c) => (
+        {BOARD_COLUMNS.map((c) => (
           <button
             key={c.status}
             type="button"

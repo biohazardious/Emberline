@@ -9,7 +9,7 @@
  * (ptyd `exec` has no stdin). The project name is always `-p emberline-<run8>-preview` from the run
  * id: a `name:` in the compose file or `COMPOSE_PROJECT_NAME` in the worktree's `.env` cannot pick it.
  */
-import { COMPOSE_SERVICE_NAME } from '@emberline/protocol';
+import type { ComposePreviewLimits } from '@emberline/protocol';
 import { RUNNER_BIN } from '../command-exec.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 
@@ -25,11 +25,11 @@ function base(project: string, file: string): string[] {
 }
 
 /**
- * Lists the services of the project's compose file, in every profile (to reset the host ports of
- * every one, whichever profiles the preview service's dependencies are in).
+ * The project's compose file as compose resolves it (JSON), in every profile: the services whose
+ * host ports the override resets, and the names the isolation check reads (compose-isolation.ts).
  */
-export function composeServicesArgs(project: string, file: string): string[] {
-  return [...base(project, file), '--profile', '*', 'config', '--services'];
+export function composeStackConfigArgs(project: string, file: string): string[] {
+  return [...base(project, file), '--profile', '*', 'config', '--format', 'json'];
 }
 
 /** What compose prints when a published host port is taken in the engine. */
@@ -99,16 +99,21 @@ export function composeShell(args: string[]): { file: string; args: string[] } {
 /**
  * The override: the preview service publishes exactly `<hostPort>:<port>` (`!override` drops the
  * project's own fixed host ports), and every other service publishes none (`!reset`), so two runs'
- * projects never claim the same port in the engine. No service keeps a fixed `container_name`
- * either: two runs' previews of the same file would collide on it. Names are JSON-quoted (valid YAML
- * keys).
+ * projects never claim the same port in the engine. Every service gets the preview limits, whatever
+ * the file sets: `cpus` and `mem_limit` plus the same values under `deploy.resources.limits` (compose
+ * refuses the two when they differ), and `memswap_limit` equal to the memory (no swap on top).
+ * Fixed `container_name`s and volume or network names are refused before this runs
+ * (compose-isolation.ts). Names are JSON-quoted (valid YAML keys).
  */
 export function composeOverrideYaml(opts: {
   service: string;
   port: number;
   hostPort: number;
   services: readonly string[];
+  limits: ComposePreviewLimits;
 }): string {
+  const memory = opts.limits.memoryMb * 1024 * 1024;
+  const cpus = String(opts.limits.cpus);
   const lines = ['services:'];
   for (const name of new Set([...opts.services, opts.service])) {
     lines.push(`  ${JSON.stringify(name)}:`);
@@ -117,17 +122,18 @@ export function composeOverrideYaml(opts: {
         ? `    ports: !override [${JSON.stringify(`${opts.hostPort}:${opts.port}`)}]`
         : '    ports: !reset []',
     );
-    lines.push('    container_name: !reset null');
+    lines.push(
+      `    cpus: ${cpus}`,
+      `    mem_limit: ${memory}`,
+      `    memswap_limit: ${memory}`,
+      '    deploy:',
+      '      resources:',
+      '        limits: !override',
+      `          cpus: ${JSON.stringify(cpus)}`,
+      `          memory: ${memory}`,
+    );
   }
   return `${lines.join('\n')}\n`;
-}
-
-/** Service names from `config --services`, one per line; anything that is not a name is dropped. */
-export function parseComposeServices(stdout: string): string[] {
-  return stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => COMPOSE_SERVICE_NAME.test(line));
 }
 
 export interface ComposeContainer {

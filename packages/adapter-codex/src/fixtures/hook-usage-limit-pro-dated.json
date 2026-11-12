@@ -1,0 +1,5 @@
+{
+  "error": "cli_exit",
+  "reason": "thinking exec bash -lc  pnpm test  in /workspaces/.worktrees/demo/7f3a9c21 succeeded in 4.1s: ERROR: You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 15th, 2026 9:05 AM.",
+  "message": "thinking exec bash -lc  pnpm test  in /workspaces/.worktrees/demo/7f3a9c21 succeeded in 4.1s: ERROR: You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 15th, 2026 9:05 AM."
+}

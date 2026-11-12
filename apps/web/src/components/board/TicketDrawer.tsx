@@ -10,6 +10,7 @@ import {
   type PendingMergeStep,
 } from '../../reviewComments';
 import { timeAgo } from '../../time';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { PersonaBadge } from '../PersonaBadge';
 import { RunEventTimeline, RunFailureBanner } from '../RunInspector';
 import { RunStatePill } from '../RunStatePill';
@@ -277,23 +278,27 @@ export function TicketDrawer({
 
         {viewTab === 'review' && run && (
           <div className="drawer-review-pane">
-            <Suspense
-              fallback={
-                <div className="empty" aria-busy="true">
-                  Loading diff &amp; review…
-                </div>
-              }
-            >
-              <ReviewView run={run} />
-            </Suspense>
+            <ErrorBoundary resetKey={`${run.id}:review`} compact>
+              <Suspense
+                fallback={
+                  <div className="empty" aria-busy="true">
+                    Loading diff &amp; review…
+                  </div>
+                }
+              >
+                <ReviewView run={run} />
+              </Suspense>
+            </ErrorBoundary>
           </div>
         )}
 
         {viewTab === 'terminal' && run?.terminalId && (
           <div className="drawer-terminal-pane">
-            <Suspense fallback={<div className="term-shell term-shell-compact" aria-busy="true" />}>
-              <TerminalView key={run.terminalId} terminalId={run.terminalId} compact />
-            </Suspense>
+            <ErrorBoundary resetKey={`${run.terminalId}:terminal`} compact>
+              <Suspense fallback={<div className="term-shell term-shell-compact" aria-busy="true" />}>
+                <TerminalView key={run.terminalId} terminalId={run.terminalId} compact />
+              </Suspense>
+            </ErrorBoundary>
           </div>
         )}
 

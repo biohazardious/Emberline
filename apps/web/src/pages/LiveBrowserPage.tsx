@@ -2,6 +2,7 @@ import type { Project, ProjectStatusSummary } from '@emberline/protocol';
 import { Globe } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'wouter';
+import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { LiveBrowserStudio } from '../components/LiveBrowserStudio';
 import { useApi } from '../hooks/useApi';
 
@@ -13,34 +14,63 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
   const project = (projectsPoll.data ?? []).find((p) => p.id === projectId);
   const targets = statusPoll.data?.targets ?? [];
 
+  if (projectsPoll.error && !projectsPoll.data) {
+    return (
+      <div className="board-page">
+        <ViewErrorBanner
+          label="Could not load project"
+          error={projectsPoll.error}
+          onRetry={projectsPoll.refresh}
+        />
+      </div>
+    );
+  }
+
+  if (projectsPoll.loading && !project) {
+    return (
+      <div className="board-page">
+        <ViewLoadingState label="Loading Live Browser Studio…" />
+      </div>
+    );
+  }
+
   if (!project) {
     return (
-      <div className="page">
-        <p className="muted">Loading project…</p>
+      <div className="board-page">
+        <div className="empty">
+          <p>Project not found.</p>
+          <Link href="/" className="btn btn-sm">
+            Back to dashboard
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="page" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <header className="page-header">
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <div className="board-page">
+      <header className="board-head">
+        <div className="board-title">
+          <Link href="/" className="btn btn-ghost btn-sm" aria-label="Back to overview">
+            ←
+          </Link>
+          <div>
+            <p className="eyebrow">{project.name} · Shared Runner Chromium + Playwright MCP</p>
             <h1>
-              <Globe className="icon" aria-hidden /> Live Browser Studio · {project.name}
+              <Globe className="icon" aria-hidden /> Live Browser Studio
             </h1>
-            <span className="badge badge-soft mono">Shared Runner Chromium + Playwright MCP</span>
+            <p className="muted small">
+              Watch agents navigate, click, and verify the application in real time, or interact with the live
+              Chromium browser directly.
+            </p>
           </div>
-          <p className="sub">
-            Watch your agents navigate, click, and verify the application in real time, or interact with the
-            live Chromium browser directly.
-          </p>
         </div>
 
-        <div className="actions">
+        <div className="board-controls">
           {targets.length > 1 && (
             <select
               className="input"
+              aria-label="Live Browser target"
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
               style={{
@@ -57,9 +87,6 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
               ))}
             </select>
           )}
-          <Link href="/" className="btn btn-sm">
-            ← Overview
-          </Link>
           <Link href={`/projects/${project.id}/board`} className="btn btn-sm">
             Kanban Board
           </Link>
@@ -69,7 +96,18 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
         </div>
       </header>
 
-      <LiveBrowserStudio project={project} targetId={targetId} />
+      {Boolean(statusPoll.error && !statusPoll.data) && (
+        <ViewErrorBanner
+          compact
+          label="Could not load browser targets"
+          error={statusPoll.error}
+          onRetry={statusPoll.refresh}
+        />
+      )}
+
+      <ErrorBoundary resetKey={`${project.id}:${targetId}`}>
+        <LiveBrowserStudio project={project} targetId={targetId} />
+      </ErrorBoundary>
     </div>
   );
 }

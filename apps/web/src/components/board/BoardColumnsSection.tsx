@@ -1,139 +1,88 @@
-import type { Run, Ticket } from '@emberline/protocol';
-import { Coins, Wrench } from 'lucide-react';
 import { type DragEvent, useState } from 'react';
+import { EMPTY_BOARD_FILTER } from '../../boardFilter';
 import { blockingMessage } from '../../reviewComments';
-import { waitingLabel, waitingTitle } from '../../ticketDeps';
-import { timeAgo } from '../../time';
-import { PersonaBadge } from '../PersonaBadge';
-import { RunStatePill } from '../RunStatePill';
-import { ico, SectionState } from '../SectionState';
-import { type BoardCtx, COLUMNS, type DropTarget, IssueChips, PRIORITIES } from './boardMeta';
-
-function TicketCard({
-  ticket,
-  run,
-  dragging,
-  dropBefore,
-  onOpen,
-  onDragStart,
-  onDragOver,
-}: {
-  ticket: Ticket;
-  run: Run | undefined;
-  dragging: boolean;
-  dropBefore: boolean;
-  onOpen: () => void;
-  onDragStart: (e: DragEvent<HTMLLIElement>) => void;
-  onDragOver: (e: DragEvent<HTMLLIElement>) => void;
-}) {
-  const live = run && !run.endedAt;
-  const shortBranch = run?.branch?.replace(/^emberline\//, '');
-  return (
-    <>
-      {dropBefore && <li className="drop-marker" aria-hidden="true" />}
-      <li
-        id={`ticket-${ticket.key}`}
-        className={`card prio-${ticket.priority}${dragging ? ' dragging' : ''}${live ? ` card-live card-${run.state}` : ''}`}
-        draggable
-        tabIndex={0}
-        aria-label={`${ticket.key} ${ticket.title}`}
-        onClick={onOpen}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onOpen();
-          }
-        }}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-      >
-        <div className="card-top">
-          <span className="card-key mono">{ticket.key}</span>
-          <PersonaBadge persona={ticket.persona} />
-          {shortBranch && <span className="card-branch mono">{shortBranch}</span>}
-          <span className="prio-dot" title={`${PRIORITIES[ticket.priority]} priority`} />
-        </div>
-        <p className="card-title">{ticket.title}</p>
-        <IssueChips external={ticket.external} />
-        {waitingLabel(ticket.blockedBy) && (
-          <span className="card-waiting mono" title={waitingTitle(ticket.blockedBy)}>
-            {waitingLabel(ticket.blockedBy)}
-          </span>
-        )}
-        {run && (
-          <div className="card-foot">
-            <RunStatePill
-              state={run.state}
-              cancelled={run.cancelled}
-              autoRetry={run.autoRetry}
-              handedOffTo={run.handedOffTo}
-            />
-            {run.telemetry && run.telemetry.totalTokens > 0 && (
-              <span
-                className="card-event mono"
-                style={{ fontVariantNumeric: 'tabular-nums' }}
-                title={`Input: ${run.telemetry.inputTokens.toLocaleString()} tok · Output: ${run.telemetry.outputTokens.toLocaleString()} tok · Tools: ${run.telemetry.toolCalls}`}
-              >
-                {ico(Coins)} {(run.telemetry.totalTokens / 1000).toFixed(1)}k
-                {run.telemetry.toolCalls > 0 ? (
-                  <>
-                    {' · '}
-                    {ico(Wrench)}
-                    {run.telemetry.toolCalls}
-                  </>
-                ) : (
-                  ''
-                )}
-              </span>
-            )}
-            {run.lastEvent && <span className="card-event mono">{run.lastEvent}</span>}
-            <span className="card-meta mono">{timeAgo(run.stateChangedAt)}</span>
-          </div>
-        )}
-      </li>
-    </>
-  );
-}
+import { BoardBulkBar } from '../BoardBulkBar';
+import { BOARD_COLUMNS, TicketCard } from '../BoardCard';
+import { BoardFilterBar, MobileColumnNav } from '../BoardFilterBar';
+import { ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
+import type { BoardCtx, DropTarget } from './boardMeta';
 
 export function BoardColumnsSection({
   ctx,
   loading,
   loadError,
   onRetry,
+  projectError,
+  onRetryProject,
 }: {
   ctx: BoardCtx;
   loading?: boolean;
   loadError?: unknown;
-  onRetry?: () => Promise<void>;
+  onRetry?: () => void | Promise<void>;
+  projectError?: unknown;
+  onRetryProject?: () => void | Promise<void>;
 }) {
-  const { tickets, cols, runs, auto, err, blocked, missing, clrBlocked, clrMissing, move, open } = ctx;
+  const {
+    pid: projectId,
+    proj: project,
+    tickets,
+    allCols: allColumns,
+    visCols: visibleColumns,
+    colCounts: columnCounts,
+    runs: latestRun,
+    auto: autoStart,
+    bulk,
+    onBulkApplied,
+    filter,
+    filterActive,
+    filteredShown,
+    updateFilter,
+    err: error,
+    blocked: blockedDrop,
+    missing: missingDrop,
+    clrBlocked,
+    clrMissing,
+    move,
+    open,
+  } = ctx;
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
 
-  const onDrop = (event: DragEvent) => {
-    event.preventDefault();
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
     const ticket = tickets?.find((t) => t.id === dragId);
-    if (ticket && drop) void move(ticket, drop);
+    const target = drop;
     setDragId(undefined);
     setDrop(undefined);
+    if (ticket && target) void move(ticket, target);
   };
 
   return (
     <>
-      {err && (
+      {Boolean(projectError && !project) && (
+        <ViewErrorBanner
+          label="Could not load project details"
+          error={projectError}
+          onRetry={onRetryProject}
+        />
+      )}
+      {Boolean(loadError) && (
+        <ViewErrorBanner label="Could not load board tickets" error={loadError} onRetry={onRetry} />
+      )}
+      {error && (
         <div className="banner banner-error" role="alert">
-          {err}
+          {error}
         </div>
       )}
-      {blocked && (
+      {blockedDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
           <span>
-            {blockingMessage(blocked.count)} on {blocked.ticket.key}. It was not moved to Done.
+            {blockingMessage(blockedDrop.count)} on {blockedDrop.ticket.key}. It was not moved to Done.
           </span>
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void move(blocked.ticket, blocked.target, { force: true })}
+            onClick={() => void move(blockedDrop.ticket, blockedDrop.target, { force: true })}
           >
             Merge anyway
           </button>
@@ -142,16 +91,16 @@ export function BoardColumnsSection({
           </button>
         </div>
       )}
-      {missing && (
+      {missingDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
           <span>
-            The worktree of {missing.ticket.key}&apos;s run is gone and its work isn&apos;t in main. Nothing
-            was merged.
+            The worktree of {missingDrop.ticket.key}&apos;s run is gone and its work isn&apos;t in main.
+            Nothing was merged.
           </span>
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void move(missing.ticket, missing.target, { skipMerge: true })}
+            onClick={() => void move(missingDrop.ticket, missingDrop.target, { skipMerge: true })}
           >
             Move to Done without merging
           </button>
@@ -161,87 +110,141 @@ export function BoardColumnsSection({
         </div>
       )}
 
-      {tickets === undefined ? (
-        <SectionState
-          loading={loading}
-          error={loadError}
-          onRetry={onRetry}
-          loadingText="Loading board tickets…"
-          emptyText="No tickets loaded yet."
-          errorPrefix="Could not load tickets"
-          ariaLabel="Board columns"
+      {((tickets?.length ?? 0) > 0 || filterActive) && (
+        <BoardFilterBar
+          tickets={tickets ?? []}
+          latestRunByTicket={latestRun}
+          filter={filter}
+          shown={filteredShown}
+          onChange={updateFilter}
         />
-      ) : (
-        <div
-          className="board"
-          onDragEnd={() => {
-            setDragId(undefined);
-            setDrop(undefined);
-          }}
-        >
-          {COLUMNS.map((col) => {
-            const list = cols.get(col.status) ?? [];
-            const isTarget = drop?.status === col.status;
-            return (
-              <section
-                key={col.status}
-                id={`col-${col.status}`}
-                className={`board-col board-col-${col.status}${isTarget ? ' drop-target' : ''}`}
-                aria-label={col.label}
-                onDragOver={(e) => {
-                  if (!dragId) return;
-                  e.preventDefault();
-                  if (
-                    e.target === e.currentTarget ||
-                    (e.target as HTMLElement).classList.contains('board-cards')
-                  ) {
-                    setDrop({ status: col.status, beforeId: null });
-                  }
-                }}
-                onDrop={onDrop}
-              >
-                <header className="board-col-head" title={col.hint}>
-                  <span className="board-col-dot" aria-hidden="true" />
-                  <h2>{col.label}</h2>
-                  {col.status === 'in_progress' && auto && (
-                    <span className="badge mono" title="Drop a card here to auto-start Claude">
-                      auto
-                    </span>
-                  )}
-                  <span className="board-count">{list.length}</span>
-                </header>
-                <ol className="board-cards">
-                  {list.map((ticket) => (
-                    <TicketCard
-                      key={ticket.id}
-                      ticket={ticket}
-                      run={runs.get(ticket.id)}
-                      dragging={dragId === ticket.id}
-                      dropBefore={drop?.beforeId === ticket.id && dragId !== ticket.id}
-                      onOpen={() => open(ticket.id)}
-                      onDragStart={(e) => {
-                        e.dataTransfer.effectAllowed = 'move';
-                        e.dataTransfer.setData('text/plain', ticket.key);
-                        setDragId(ticket.id);
-                      }}
-                      onDragOver={(e) => {
-                        if (!dragId) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const after = e.clientY > rect.top + rect.height / 2;
-                        const beforeId = after ? (list[list.indexOf(ticket) + 1]?.id ?? null) : ticket.id;
-                        setDrop({ status: col.status, beforeId });
-                      }}
-                    />
-                  ))}
-                  {isTarget && drop?.beforeId === null && <li className="drop-marker" aria-hidden="true" />}
-                </ol>
-                {list.length === 0 && !isTarget && <p className="board-empty">{col.hint}</p>}
-              </section>
-            );
-          })}
+      )}
+
+      {bulk.active && (
+        <BoardBulkBar
+          projectId={projectId}
+          columns={BOARD_COLUMNS}
+          selection={bulk.selection}
+          onApplied={onBulkApplied}
+          onExit={() => bulk.setActive(false)}
+        />
+      )}
+
+      {loading && !tickets ? (
+        <ViewLoadingState label="Loading project tickets…" />
+      ) : !tickets && !loadError ? (
+        <div className="empty">
+          <p>No tickets available for this project yet.</p>
         </div>
+      ) : (
+        <>
+          <MobileColumnNav columns={BOARD_COLUMNS} counts={columnCounts} />
+          {filterActive && filteredShown === 0 && (tickets?.length ?? 0) > 0 && (
+            <div className="empty board-filter-empty">
+              <p>No tickets match the current search or filters.</p>
+              <button type="button" className="btn btn-sm" onClick={() => updateFilter(EMPTY_BOARD_FILTER)}>
+                Clear filters
+              </button>
+            </div>
+          )}
+          <div
+            className="board"
+            onDragEnd={() => {
+              setDragId(undefined);
+              setDrop(undefined);
+            }}
+          >
+            {BOARD_COLUMNS.map((col) => {
+              const list = visibleColumns.get(col.status) ?? [];
+              const totalInCol = (allColumns.get(col.status) ?? []).length;
+              const isTarget = drop?.status === col.status;
+              return (
+                <section
+                  key={col.status}
+                  id={`col-${col.status}`}
+                  className={`board-col board-col-${col.status}${isTarget ? ' drop-target' : ''}`}
+                  aria-label={col.label}
+                  onDragOver={(e) => {
+                    if (!dragId) return;
+                    e.preventDefault();
+                    if (
+                      e.target === e.currentTarget ||
+                      (e.target as HTMLElement).classList.contains('board-cards')
+                    ) {
+                      setDrop({ status: col.status, beforeId: null });
+                    }
+                  }}
+                  onDrop={onDrop}
+                >
+                  <header className="board-col-head" title={col.hint}>
+                    <span className="board-col-dot" aria-hidden="true" />
+                    <h2>{col.label}</h2>
+                    {col.status === 'in_progress' && autoStart && (
+                      <span className="badge mono" title="Drop a card here to auto-start Claude">
+                        auto
+                      </span>
+                    )}
+                    {bulk.active && list.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-ghost board-col-select"
+                        aria-label={`${bulk.columnSelected(list.map((t) => t.id)) ? 'Unselect' : 'Select'} every shown ticket in ${col.label}`}
+                        onClick={() => bulk.toggleColumn(list.map((t) => t.id))}
+                      >
+                        {bulk.columnSelected(list.map((t) => t.id)) ? 'None' : 'All'}
+                      </button>
+                    )}
+                    <span className="board-count mono">
+                      {filterActive && list.length !== totalInCol
+                        ? `${list.length}/${totalInCol}`
+                        : list.length}
+                    </span>
+                  </header>
+                  <ol className="board-cards">
+                    {list.map((ticket) => (
+                      <TicketCard
+                        key={ticket.id}
+                        ticket={ticket}
+                        run={latestRun.get(ticket.id)}
+                        dragging={dragId === ticket.id}
+                        dropBefore={drop?.beforeId === ticket.id && dragId !== ticket.id}
+                        selection={
+                          bulk.active
+                            ? {
+                                selected: bulk.isSelected(ticket.id),
+                                onToggle: (range) => bulk.toggle(ticket.id, range),
+                              }
+                            : undefined
+                        }
+                        onOpen={() => open(ticket.id)}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', ticket.key);
+                          setDragId(ticket.id);
+                        }}
+                        onDragOver={(e) => {
+                          if (!dragId) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const after = e.clientY > rect.top + rect.height / 2;
+                          const beforeId = after ? (list[list.indexOf(ticket) + 1]?.id ?? null) : ticket.id;
+                          setDrop({ status: col.status, beforeId });
+                        }}
+                      />
+                    ))}
+                    {isTarget && drop?.beforeId === null && <li className="drop-marker" aria-hidden="true" />}
+                  </ol>
+                  {list.length === 0 && !isTarget && (
+                    <p className="board-empty">
+                      {filterActive && totalInCol > 0 ? 'No matching tickets' : col.hint}
+                    </p>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </>
       )}
     </>
   );

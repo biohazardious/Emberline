@@ -127,8 +127,8 @@ export function useScheduler(): {
   scheduler: SchedulerState | undefined;
   loading: boolean;
   error: unknown;
-  refresh: () => Promise<void>;
   setScheduler: (state: SchedulerState) => void;
+  refresh: () => Promise<void>;
 } {
   const client = useQueryClient();
   const query = useQuery({
@@ -144,7 +144,7 @@ export function useScheduler(): {
     scheduler: query.data,
     loading: query.isPending,
     error: query.error ?? undefined,
-    refresh: useRefresh(query.refetch),
     setScheduler,
+    refresh: useRefresh(query.refetch),
   };
 }

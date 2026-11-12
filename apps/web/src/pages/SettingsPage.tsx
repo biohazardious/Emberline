@@ -52,7 +52,7 @@ const SETTINGS_TABS = [
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
-const TAB_ITEMS: ReadonlyArray<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
+const SETTINGS_TAB_ITEMS: ReadonlyArray<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
   { id: 'autopilot', label: 'Auto-Pilot & Theme', icon: Zap },
   { id: 'providers', label: 'Multi-Agent & Model Matrix', icon: Bot },
   { id: 'mcp_plugins', label: 'MCP & Plugins', icon: Plug },
@@ -232,11 +232,13 @@ export function SettingsPage({
           </h2>
         </div>
 
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {TAB_ITEMS.map(({ id, label, icon }) => (
+        <div className="settings-tabs" role="tablist" aria-label="Factory settings sections">
+          {SETTINGS_TAB_ITEMS.map(({ id, label, icon }) => (
             <button
               key={id}
               type="button"
+              role="tab"
+              aria-selected={activeTab === id}
               className={`btn btn-sm ${activeTab === id ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setActiveTab(id)}
             >
@@ -246,8 +248,16 @@ export function SettingsPage({
         </div>
       </header>
 
-      {error && <div className="banner banner-error">{error}</div>}
-      {notice && <div className="banner banner-ok">{notice}</div>}
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="banner banner-ok" role="status">
+          {notice}
+        </div>
+      )}
 
       {activeTab === 'autopilot' && (
         <AutopilotSection

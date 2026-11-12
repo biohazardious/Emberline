@@ -1,10 +1,11 @@
 import type { TerminalInfo } from '@emberline/protocol';
 import { useState } from 'react';
+import { ErrorBoundary, ViewErrorBanner } from '../components/ErrorBoundary';
 import { RunStatePill } from '../components/RunStatePill';
 import { type ConnectionState, TerminalView } from '../components/TerminalView';
-import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
 import { useGoBack } from '../hooks/navigation';
+import { useApi } from '../hooks/useApi';
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connecting: 'connecting…',
@@ -48,7 +49,17 @@ export function TerminalPage({ id }: { id: string }) {
           {STATE_LABEL[state]}
         </span>
       </header>
-      <TerminalView terminalId={id} onStateChange={setState} />
+      {Boolean(terminals.error && !terminals.data) && (
+        <ViewErrorBanner
+          compact
+          label="Could not load terminal metadata"
+          error={terminals.error}
+          onRetry={terminals.refresh}
+        />
+      )}
+      <ErrorBoundary resetKey={id}>
+        <TerminalView terminalId={id} onStateChange={setState} />
+      </ErrorBoundary>
     </div>
   );
 }

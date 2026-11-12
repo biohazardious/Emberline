@@ -38,9 +38,11 @@ import { terminalBridge } from './routes/terminals.js';
 import { probePreviewFraming } from './runs/preview-framing.js';
 import { runSuggestion } from './runs/suggest.js';
 import { rmTemp } from './test-rm.js';
+import { composeConfigJson } from './test-compose.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { UpdateService } from './updates/service.js';
 import { runWorktreeCommand } from './worktree-config/lifecycle.js';
+import { DEFAULT_PREVIEW_LIMITS } from './config.js';
 import { openDb } from './db/index.js';
 import { getFactorySettings, updateFactorySettings } from './factory/settings.js';
 
@@ -230,7 +232,7 @@ function repo(dir: string): string {
 const composeEngine = (request: ExecRequest): ExecResult => {
   const args = request.args.join(' ');
   if (request.file === RUNNER_BIN.curl) return { ...OK, stdout: '200' };
-  if (args.includes('--services')) return { ...OK, stdout: 'web\n' };
+  if (args.includes(' config ')) return { ...OK, stdout: composeConfigJson(request.args, ['web']) };
   if (args.includes(' ps ')) return { ...OK, stdout: '{"Service":"web","State":"running","Health":""}\n' };
   return OK;
 };
@@ -384,6 +386,7 @@ const CALL_SITES: CallSite[] = [
           hostPort: 4400,
           engineHost: 'docker',
           env: {},
+          limits: DEFAULT_PREVIEW_LIMITS,
         },
         { upTimeoutMs: 5_000, readyTimeoutMs: 5_000, pollMs: 10, stopSettleMs: 0, cancelRetryMs: 0 },
         { execId: 'x', cancelled: () => false, reallocate: async () => 4401 },
