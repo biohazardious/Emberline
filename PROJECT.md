@@ -25,6 +25,56 @@ Three principles shape every decision (DESIGN §2):
 The design rationale (principles, topology, scheduler, review, data model, auth, risks) is in
 [`docs/DESIGN.md`](docs/DESIGN.md). Installation and use are in the [README](README.md).
 
+### 1.1 Who it is for
+
+| Persona                     | Who                                                                   | Wants                                                                               |
+| --------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Operator** (the one user) | A developer who self-hosts Emberline with their own CLI subscriptions | Hand tickets to agents, survive usage limits, review every line before it merges    |
+| **Contributor**             | Someone changing Emberline itself (often an Emberline factory run)    | A gate that catches layer violations, contract drift and environment leaks for them |
+| **Adapter author**          | Someone adding an agent CLI, possibly under another license           | Depend only on the Apache-2.0 `protocol` and `adapter-sdk` packages, never on core  |
+
+### 1.2 Product user stories
+
+Each story names where it is verified today (tests listed in [`docs/TESTING.md`](docs/TESTING.md)).
+
+- **US-1 Board.** As the operator, I create tickets with a priority and `dependsOn`, move them across
+  `backlog → ready → in_progress → review → done`, and a ticket only starts once all its dependencies are merged.
+  _Edge cases:_ a dependency cycle is refused; deleting a ticket with a live run is refused (`run_active`).
+- **US-2 One worktree per run.** As the operator, every run works in its own git worktree and branch, so two
+  agents never edit the same checkout. _Edge cases:_ a pruned worktree also tears down its compose preview.
+- **US-3 Usage limits.** As the operator, when a CLI hits its subscription limit the run goes `rate_limited`, the
+  lane pauses until `resets_at`, and work resumes on its own after the reset — also across a core restart.
+  _Edge cases:_ a pause whose resume time passed while core was down resumes on the next ptyd connect.
+- **US-4 Review before merge.** As the operator, I review each run's diff per file and per line, comment, request
+  another round, and only an accepted change merges. _Edge cases:_ closing a ticket with a run branch requires
+  a merge (`merge_required`); the worktree gate (`build`, `lint`, `test`) must pass first.
+- **US-5 Agents outlive the app.** As the operator, I upgrade or restart core without killing an agent; the
+  terminal redraws at once from the ptyd snapshot. _Edge cases:_ runs whose ptyd session vanished are ended and
+  their slots freed; a runner below `PTYD_MIN_PROTOCOL_VERSION` is refused, fail closed.
+- **US-6 Any browser, including a phone.** As the operator, I sign in with the single admin account and use the
+  board, terminals and review at phone width. _Edge cases:_ an anonymous call gets 401, a write without the CSRF
+  header gets 403.
+- **US-7 Factory planning.** As the operator, a planning run writes `.emberline/new-tickets.json` and the tickets
+  appear on the board with their dependencies. _Edge cases:_ a malformed file is renamed `*.rejected.json` and a
+  toast names the first zod issue; nothing is half-imported.
+- **US-8 Stays mine.** As the operator, forge tokens and CLI logins never leave core and the runner home volume;
+  there is no account sharing or quota pooling (non-goals, DESIGN §1).
+
+### 1.3 Milestone 1 user stories (workspace, layering, wire contracts)
+
+Milestone 1 serves the contributor and the adapter author. Its acceptance criteria are in §6 (AC-1.x).
+
+- **US-M1.1 One-command gate.** As a contributor, I run `make check` (or the factory gate in
+  `.emberline/worktree.yml`) and one exit code tells me whether format, lint, typecheck, build and tests pass.
+- **US-M1.2 Layers are enforced, not documented.** As a contributor, an import that crosses §3.2 fails
+  `pnpm lint` with a message pointing at PROJECT.md §3, so review never has to catch it.
+- **US-M1.3 Contracts live in one place.** As a contributor, every value that crosses a process boundary has a
+  zod schema in `packages/protocol`; core, web, hook and ptyd import it instead of redeclaring the shape.
+- **US-M1.4 Hermetic tests.** As a contributor running the suite inside an Emberline runner, the runner's own
+  Docker engine, run token and provider keys never reach a test, so the result matches CI.
+- **US-M1.5 Third-party adapters.** As an adapter author, I implement an agent against `adapter-sdk` and
+  `protocol` alone (Apache-2.0, no other workspace dependency) without pulling AGPL code.
+
 ---
 
 ## 2. Technology Stack
@@ -190,6 +240,26 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
 
 - [x] **M1 — Workspace, layering and wire contracts:**
       The pnpm workspace and the layering in §3.2 are enforced by lint. The gate (format, lint, typecheck, build, test) passes, and the test suite is hermetic. The contracts are in `packages/protocol` and `packages/adapter-sdk`.
+      Acceptance criteria below; each is testable, and **Guard** names what fails when it regresses.
+
+      | AC     | Given / when / then                                                                                                                                                                                                         | Guard                                                                     |
+      | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+      | AC-1.1 | On a clean checkout, `pnpm install --frozen-lockfile` succeeds on Node ≥ 22.12 / pnpm 10, and an out-of-date lockfile fails it instead of rewriting it.                                                                     | `make ci` (Dockerfile `check` stage)                                      |
+      | AC-1.2 | `pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test` exits 0; any one failing step makes `make check` exit non-zero.                                                                                | `make check`, `.emberline/worktree.yml` checks                            |
+      | AC-1.3 | An import of `@emberline/core`, `web`, `hook` or `ptyd/server` from a lower layer (and of anything but `protocol`/`adapter-sdk` from `adapter-claude`, anything but `protocol` from `hook`/`ptyd`/`web`) fails `pnpm lint` with "Crosses a package layer boundary". Sub-path imports (`@emberline/x/y`) are caught too. | `eslint.config.js` `LAYERS`; regression test: **gap → ticket `qa-m1`** |
+      | AC-1.4 | A `node:*` import in `apps/web/src` fails `pnpm lint`. `*.test.ts`, `test-*.ts` and `test-setup.ts` are exempt from AC-1.3/1.4.                                                                                              | `eslint.config.js`; regression test: **gap → `qa-m1`**                    |
+      | AC-1.5 | `packages/protocol` depends on `zod` only and `packages/adapter-sdk` on nothing; both are `Apache-2.0`, every other package `AGPL-3.0-or-later`.                                                                           | package manifests; regression test: **gap → `qa-m1`**                    |
+      | AC-1.6 | Strict TypeScript everywhere (`strict`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `NodeNext`); no `any`, `@ts-ignore` or `@ts-expect-error` in `src`.                                                          | `tsconfig.base.json`, `pnpm typecheck`, type-aware ESLint                 |
+      | AC-1.7 | Every boundary schema rejects malformed input with a zod issue, not a throw or a cast: ptyd request/response/event frames, hook envelopes, REST bodies, `/api/events` messages, `.emberline/worktree.yml` and the agent files. | `packages/protocol/src/**/*.test.ts`, `apps/ptyd/src/server.test.ts`; hook and ptyd schema round-trips: **gap → `qa-m1`** |
+      | AC-1.8 | A ptyd that reports a protocol below `PTYD_MIN_PROTOCOL_VERSION` gets no spawn or exec from core (fail closed); the status page says which version core needs.                                                             | `apps/core/src/ops.test.ts`                                               |
+      | AC-1.9 | With `DOCKER_HOST`, `EMBERLINE_RUN_ID`, `EMBERLINE_HOOK_TOKEN`, `EMBERLINE_CORE_URL` and provider API keys set in the shell, no test sees them, and `EMBERLINE_RUNNER_HOME` / `EMBERLINE_TOOLS_DIR` point at absent paths. | `apps/core/src/test-setup.ts`; regression test: **gap → `qa-m1`**         |
+      | AC-1.10 | Tests import workspace packages from source (vitest aliases), so `pnpm test` passes on a checkout where nothing was built.                                                                                                 | `vitest.config.ts`                                                        |
+      | AC-1.11 | No `.skip(`, `xit(` or `test.todo(` in any test file; capability-dependent tests skip only when the host capability (e.g. a Docker engine) is absent and run in `make ci`.                                             | `docs/TESTING.md` rule; regression test: **gap → `qa-m1`**                |
+
+      Edge cases M1 must hold: a type-only import across a layer is still a crossing (lint does not exempt `import type`);
+      a new workspace package must be added to `WORKSPACE` and given a `LAYERS` entry in `eslint.config.js`, or nothing guards its imports; a schema widened with
+      `z.looseObject` (hook payloads) still type-checks its known fields (a non-string `session_id` is rejected) while passing unknown ones through.
+
 - [x] **M2 — Domain model, persistence and the run engine:**
       Every table is declared in `apps/core/src/db/schema.ts` (DESIGN §3.7) and opened through `openDb` (WAL, foreign keys,
       a backup before pending migrations). Services in `apps/core/src/{tickets,runs,scheduler,review,repository}` own the domain
