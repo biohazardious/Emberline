@@ -1,0 +1,6 @@
+{
+  "error": "cli_exit",
+  "reason": "stream error: stream disconnected before completion; retrying 5/5 in 3.2s… ERROR: stream disconnected before completion",
+  "message": "stream error: stream disconnected before completion; retrying 5/5 in 3.2s… ERROR: stream disconnected before completion",
+  "transcript_tail": "eyJ0aW1lc3RhbXAiOiIyMDI2LTEwLTEzVDA5OjI5OjQxLjUxMloiLCJ0eXBlIjoiZXZlbnRfbXNnIiwicGF5bG9hZCI6eyJ0eXBlIjoidG9rZW5fY291bnQiLCJpbmZvIjp7InRvdGFsX3Rva2VuX3VzYWdlIjp7ImlucHV0X3Rva2VucyI6MTgzMjA0LCJjYWNoZWRfaW5wdXRfdG9rZW5zIjoxNTEwNDAsIm91dHB1dF90b2tlbnMiOjkxMTIsInJlYXNvbmluZ19vdXRwdXRfdG9rZW5zIjo0NDgwLCJ0b3RhbF90b2tlbnMiOjE5MjMxNn19LCJyYXRlX2xpbWl0cyI6eyJsaW1pdF9pZCI6ImNvZGV4IiwicHJpbWFyeSI6eyJ1c2VkX3BlcmNlbnQiOjEwMCwid2luZG93X21pbnV0ZXMiOjMwMCwicmVzZXRzX2F0IjoxNzkxODk2NDAwfSwic2Vjb25kYXJ5Ijp7InVzZWRfcGVyY2VudCI6NjEsIndpbmRvd19taW51dGVzIjoxMDA4MCwicmVzZXRzX2F0IjoxNzkyMzAzMjAwfSwiY3JlZGl0cyI6bnVsbCwicGxhbl90eXBlIjoicGx1cyJ9fX0="
+}

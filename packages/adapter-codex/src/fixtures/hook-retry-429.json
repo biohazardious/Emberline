@@ -1,0 +1,5 @@
+{
+  "error": "cli_exit",
+  "reason": "stream error: exceeded retry limit, last status: 429 Too Many Requests; retrying 4/5 in 1.8s… ERROR: exceeded retry limit, last status: 429 Too Many Requests",
+  "message": "stream error: exceeded retry limit, last status: 429 Too Many Requests; retrying 4/5 in 1.8s… ERROR: exceeded retry limit, last status: 429 Too Many Requests"
+}

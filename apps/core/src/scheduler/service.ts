@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { type RateLimitInfo, rateLimitFromScreen } from '@emberline/adapter-claude';
+import type { RateLimitInfo } from '@emberline/adapter-sdk';
 import {
   type CreateRunBody,
   type Lane,
@@ -25,6 +25,7 @@ import { quotaWindows, runs, settings, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { getQuotaPolicy, routeUsable } from '../factory/settings.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
+import { providerAdapter } from '../runs/providers.js';
 import { currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import { MAX_TIMER_MS, nextWakeAt } from './next-wake.js';
@@ -540,7 +541,10 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     const screen = await this.runs.screen(run.id).catch(() => undefined);
     if (this.disposed) return;
     const onScreen = screen
-      ? rateLimitFromScreen(screen, new Date(), this.config.timeZone, { agent: run.agent, model: run.model })
+      ? providerAdapter(run.agent).rateLimitFromScreen(screen, {
+          timeZone: this.config.timeZone,
+          model: run.model,
+        })
       : undefined;
     if (onScreen?.resetsAt) {
       this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen', lane.pool);
