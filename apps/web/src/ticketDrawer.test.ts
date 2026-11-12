@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vite
 import { api } from './api';
 import type * as ApiModule from './api';
 import { apiRoutes, cleanup, click, getButton, queryButton, renderDom } from './domRender';
-import { TicketDrawer } from './pages/BoardPage';
+import { TicketDrawer } from './components/board/TicketDrawer';
 import { DrawerMergeError } from './reviewComments';
 
 // Nothing the drawer reads on its own matters here; every read fails as a 404.

@@ -64,18 +64,30 @@ export function LiveEvents(): null {
   return null;
 }
 
+function useRefresh(refetch: () => Promise<unknown>): () => Promise<void> {
+  return useCallback(async () => {
+    await refetch();
+  }, [refetch]);
+}
+
 /** All runs, kept live by {@link LiveEvents}. */
-export function useRuns(): { runs: Run[] | undefined; refresh: () => Promise<void> } {
+export function useRuns(): {
+  runs: Run[] | undefined;
+  loading: boolean;
+  error: unknown;
+  refresh: () => Promise<void>;
+} {
   const query = useQuery({
     queryKey: liveKeys.runs,
     queryFn: () => api<Run[]>('/api/runs'),
     staleTime: Infinity,
   });
-  const { refetch } = query;
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
-  return { runs: query.data, refresh };
+  return {
+    runs: query.data,
+    loading: query.isPending,
+    error: query.error ?? undefined,
+    refresh: useRefresh(query.refetch),
+  };
 }
 
 /** Query options of a project's tickets, kept live by {@link LiveEvents} (shared by every reader). */
@@ -88,6 +100,8 @@ export const ticketsQuery = (projectId: string) => ({
 /** A project's tickets, kept live by {@link LiveEvents}. */
 export function useTickets(projectId: string): {
   tickets: Ticket[] | undefined;
+  loading: boolean;
+  error: unknown;
   /** Optimistic local update; the server echo overwrites it. */
   patchLocal: (ticket: Ticket) => void;
   refresh: () => Promise<void>;
@@ -99,16 +113,21 @@ export function useTickets(projectId: string): {
       client.setQueryData<Ticket[]>(liveKeys.tickets(projectId), (list) => upsert(list, ticket)),
     [client, projectId],
   );
-  const { refetch } = query;
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
-  return { tickets: query.data, patchLocal, refresh };
+  return {
+    tickets: query.data,
+    loading: query.isPending,
+    error: query.error ?? undefined,
+    patchLocal,
+    refresh: useRefresh(query.refetch),
+  };
 }
 
 /** Live quota scheduler state (slots, queue, exhausted window). */
 export function useScheduler(): {
   scheduler: SchedulerState | undefined;
+  loading: boolean;
+  error: unknown;
+  refresh: () => Promise<void>;
   setScheduler: (state: SchedulerState) => void;
 } {
   const client = useQueryClient();
@@ -121,5 +140,11 @@ export function useScheduler(): {
     (state: SchedulerState) => client.setQueryData(liveKeys.scheduler, state),
     [client],
   );
-  return { scheduler: query.data, setScheduler };
+  return {
+    scheduler: query.data,
+    loading: query.isPending,
+    error: query.error ?? undefined,
+    refresh: useRefresh(query.refetch),
+    setScheduler,
+  };
 }
