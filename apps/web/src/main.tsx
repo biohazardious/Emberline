@@ -5,6 +5,7 @@ import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { queryClient } from './queryClient';
 import './index.css';
+import './error-filter.css';
 import './responsive.css';
 
 // Apply the saved theme before the first paint, so sign-in and setup match the app.
