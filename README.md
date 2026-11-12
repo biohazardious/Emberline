@@ -265,6 +265,8 @@ Last checked 2026-10-16. Vendors change these terms without notice; Settings sho
 | `packages/protocol`       | zod schemas for every wire contract                                                         |
 | `packages/adapter-sdk`    | Agent adapter interface                                                                     |
 | `packages/adapter-claude` | Claude Code adapter (hooks, settings, personas)                                             |
+| `packages/adapter-codex`  | Codex CLI adapter (launch, usage limits from output, rollout transcript and screen)         |
+| `packages/adapter-gemini` | Gemini CLI adapter (launch, usage limits from output and screen)                            |
 | `packages/hook`           | `emberline-hook` and CLI wrappers; forward agent events from the runner to core             |
 
 Design decisions and the reasons behind them are in [docs/DESIGN.md](docs/DESIGN.md).

@@ -1979,7 +1979,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * checked in. Secondary CLIs never have it; neither has a Claude run on an older runner image.
    */
   private hasCompletionTool(run: Run): boolean {
-    return providerAdapter(run.agent).claudeNative && this.runs.hasEvent(run.id, 'completion_tool_ready');
+    return (
+      providerAdapter(run.agent).completionSignal === 'tool' &&
+      this.runs.hasEvent(run.id, 'completion_tool_ready')
+    );
   }
 
   /**

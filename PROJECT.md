@@ -55,8 +55,10 @@ Invariants (DESIGN §2):
 
 ```
 packages/protocol        zod schemas + types (ptyd RPC, hooks, REST/WS API, worktree.yml)  → zod only
-packages/adapter-sdk     agent adapter interface (AgentState, AgentEvent, launch specs)   → nothing
-packages/adapter-claude  launch specs, hook state machine, usage-limit parsing            → protocol, adapter-sdk
+packages/adapter-sdk     ProviderAdapter contract, shared limit/reset helpers, CLI wrapper → nothing
+packages/adapter-claude  Claude Code (+ Antigravity, Copilot, Aider wrappers), personas   → protocol, adapter-sdk
+packages/adapter-codex   Codex CLI launch, limits from hook, rollout transcript, screen   → adapter-sdk
+packages/adapter-gemini  Gemini CLI launch, limits from hook and screen (per-model pools) → adapter-sdk
 packages/hook            emberline-hook + CLI wrappers + MCP server                       → protocol
 apps/ptyd                PTY host daemon                                                  → protocol
 apps/web                 React UI (browser: no Node built-ins)                            → protocol
@@ -64,6 +66,10 @@ apps/core                Fastify API, scheduler, runs, review, factory, SQLite  
 ```
 
 `eslint.config.js` (`LAYERS`) enforces these edges, so `pnpm lint` fails on any import that crosses a layer.
+Core reaches every CLI through one typed registry, `Record<AgentId, ProviderAdapter>` in `apps/core/src/runs/providers.ts`
+(launch spec, persona framing, headless-mode check, hook state, rate-limit and transient-error detection); core itself
+parses no CLI's wording. Each adapter's `ratelimit.test.ts` runs fixtures of real CLI output (`src/fixtures/`), checked
+in signal order: hooks first, transcripts second, the screen last (DESIGN §5).
 Tests and `test-*.ts` helpers are exempt, for example core's agent harness starts a real `ptyd/server`.
 `protocol` and `adapter-sdk` are Apache-2.0 so third-party adapters can use any license. Everything else is AGPL-3.0-or-later.
 

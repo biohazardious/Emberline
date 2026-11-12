@@ -628,9 +628,8 @@ describe('M6 review, git commit/push, and artifacts', () => {
   });
 
   it('starts/stops per-worktree preview environments and supports secondary CLI adapters (codex/aider)', async () => {
-    const { buildSecondaryCliLaunchSpec } = await import('@emberline/adapter-claude');
-    const codexSpec = buildSecondaryCliLaunchSpec({
-      agent: 'codex',
+    const { buildCodexLaunchSpec } = await import('@emberline/adapter-codex');
+    const codexSpec = buildCodexLaunchSpec({
       runId: 'run-codex-1234',
       hookToken: 'tok',
       coreUrl: 'http://127.0.0.1:7420',
