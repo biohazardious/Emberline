@@ -9,18 +9,26 @@
 #   - the ops-missing banner shows for a compose file without `ops` and clears with the current one
 #   - the rollback drill: the snapshot back in place opens under the previous release's migrations
 # `upgrade-check.mjs matrix` then upgrades from every migration step of this release.
-# Needs the images emberline/core:e2e and emberline/runner:e2e (make e2e builds them) and the release tags.
+# Needs the images emberline/core:<tag> and emberline/runner:<tag> (make e2e builds them; the tag is
+# $EMBERLINE_E2E_TAG, `e2e` by default, which `make E2E_TAG=...` sets) and the release tags.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSIONS=${UPGRADE_VERSIONS:-"0.5.2 0.6.2 0.7.0"}
-BASE=${EMBERLINE_COMPOSE_PROJECT:-emberline-upgrade}
+# The compose files read the same variable for their images.
+export EMBERLINE_E2E_TAG=${EMBERLINE_E2E_TAG:-e2e}
+CORE=emberline/core:$EMBERLINE_E2E_TAG
+RUNNER=emberline/runner:$EMBERLINE_E2E_TAG
+# Another tag is another (parallel) run: its stacks get their own project names.
+if [ "$EMBERLINE_E2E_TAG" = e2e ]; then
+  BASE=${EMBERLINE_COMPOSE_PROJECT:-emberline-upgrade}
+else
+  BASE=${EMBERLINE_COMPOSE_PROJECT:-emberline-upgrade-$(printf '%s' "$EMBERLINE_E2E_TAG" | tr -c 'a-z0-9_-' '-')}
+fi
 WORK=$(mktemp -d)
 WS=$(mktemp -d)
 chmod 777 "$WS"
 export EMBERLINE_WORKSPACES_HOST_DIR=$WS
-CORE=emberline/core:e2e
-RUNNER=emberline/runner:e2e
 project=""
 
 cleanup() {
@@ -29,7 +37,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -n "$(docker images -q "$CORE")" ] || { echo "image $CORE is missing: run make e2e or build the core and runner targets as :e2e" >&2; exit 1; }
+[ -n "$(docker images -q "$CORE")" ] || { echo "image $CORE is missing: run make e2e or build the core and runner targets as :$EMBERLINE_E2E_TAG" >&2; exit 1; }
 
 # The engine may be remote, so the helper travels on stdin, not in a bind mount.
 run_check() { # run_check <docker run options...> -- <mode> [args]

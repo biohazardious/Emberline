@@ -75,8 +75,8 @@ e2e: ## End-to-end smoke test, the isolation suite (e2e/isolation.sh), then the 
 e2e-upgrade: ## Upgrade paths: 0.5/0.6/0.7 data volumes to the current images (snapshot, rows, secrets, ops banner, rollback drill); needs the release tags
 	@set -e; \
 	if [ -z "$(E2E_PREBUILT)" ]; then \
-	  docker build -q --target core -t emberline/core:e2e . >/dev/null; \
-	  docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	  docker build -q --target core -t emberline/core:$(E2E_TAG) . >/dev/null; \
+	  docker build -q --target runner -t emberline/runner:$(E2E_TAG) . >/dev/null; \
 	fi; \
 	e2e/upgrade-paths.sh
 
