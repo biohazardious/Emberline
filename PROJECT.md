@@ -312,3 +312,39 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       advisories and any install script outside `better-sqlite3`, `esbuild` and `node-pty` (`scripts/supply-chain/`, tests in
       `gate.test.ts`; `strictDepBuilds` in `pnpm-workspace.yaml`). Pushed images get an SPDX SBOM and a cosign keyless signature
       and attestation (verification: SECURITY.md).
+
+- [ ] **M5 — Conflict-aware merging and self-healing merges (EMB-31):**
+      Parallel tickets that edit the same files (`PROJECT.md`, `Makefile`, `.github/workflows/ci.yml`) used to end in
+      "Could not merge EMB-24 into the main workspace (conflicts in …); it was left unchanged." and a person had to fix it.
+      Conflicts are now handled in three layers, cheapest first; each layer is its own module so `tickets/service.ts` only gains call sites:
+
+      1. **Prevent** (`tickets/overlap.ts`): a ticket's _claimed paths_ are the repo paths in its body's `## Target Files`
+      section. Dispatch defers a ready ticket whose claims overlap a busy run's claims or the files that run's branch already
+      changed (`git diff --name-only <main>...<branch>`), until that run is merged or held. _Shared hot files_
+      (`PROJECT.md`, `CHANGELOG.md`, `README.md`, `docs/**`, lockfiles) never defer: layer 2 handles them. Factory setting
+      `serializeOverlappingTickets` (default on). The planner prompt asks for `## Target Files` and for `dependsOn` between tickets that edit the same code file.
+
+      2. **Self-heal deterministically** (`factory/conflict-heal.ts`): when the merge into main conflicts, core merges main into the
+      run's branch in its worktree with `merge.conflictStyle=diff3` and resolves every hunk whose base side is empty (both sides
+      only _added_ lines at the same spot) as ours-then-theirs; lockfile conflicts are left for the agent. If every conflicted
+      file is resolved, it commits `Merge <main> into <branch> (auto-resolved: …)`, runs the worktree gate (build/lint/test) again and merges into main; a
+      failing gate or any hunk that is a real edit/edit conflict aborts the heal (worktree back to its tip) and goes to layer 3.
+      Factory setting `autoResolveAdditiveConflicts` (default on). Event `conflict_auto_resolved` with the files.
+
+      3. **Escalate to an agent**: the run's own session gets the resolution prompt (as before, `CONFLICT_ATTEMPT_CAP`); when it
+      cannot take a prompt (ended and not resumable) or the cap is spent with main still moving, core starts a _resolver run_ on
+      the same ticket, worktree and branch (`conflict_resolver_started`), whose completion goes through the normal pipeline. A
+      person's close (drawer accept, drag to Done → `POST /api/projects/:id/sync-worktree`) takes the same ladder instead of
+      returning a bare failure: `SyncWorktreeResponse.resolution` is `auto_resolved | agent_resolving | resolver_started | manual`.
+
+      Only when all three fail does the ticket stay in Review with the existing Hold Recovery suggestions.
+
+      | AC     | Given / when / then                                                                                                                                                                  | Guard                                         |
+      | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+      | AC-5.1 | Two tickets that both append a different target to `Makefile`, a job to `ci.yml` and a section to `PROJECT.md` both land in main with no person involved; each file keeps both additions. | `conflict-heal.test.ts`, `m5-conflicts.test.ts` |
+      | AC-5.2 | An edit/edit conflict (both change the same line) is never auto-resolved: the heal aborts, the run's worktree, branch tip and index are as before, and the agent is asked. | `conflict-heal.test.ts`                       |
+      | AC-5.3 | A heal whose re-run gate fails is undone and escalated with the gate's failure in the prompt; nothing reaches main.                                                                  | `m5-conflicts.test.ts`                        |
+      | AC-5.4 | A conflicting run whose session ended and is not resumable gets a resolver run on the same branch; its successful completion merges and moves the ticket to Done.                 | `m5-conflicts.test.ts`                        |
+      | AC-5.5 | `sync-worktree` on a conflicting run returns `ok: false` with a `resolution` other than `manual` whenever a layer took over, and the drawer says what happens next.                 | `m3-workflows.test.ts`, web tests             |
+      | AC-5.6 | With 2 parallel slots, a ready ticket claiming `apps/x/a.ts` waits while a run that changed `apps/x/a.ts` is busy, and its card names the ticket it waits for; a claim on `PROJECT.md` alone never waits. | `ticket-overlap.test.ts`, web tests           |
+      | AC-5.7 | The heal runs git in the ops container on the agent-writable worktree with the same refusals as the merge (no planted links in the git dir, no hooks run: `core.hooksPath=/dev/null`). | `conflict-heal.test.ts`                       |
