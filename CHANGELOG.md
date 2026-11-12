@@ -7,6 +7,14 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Added
 
 - **Bulk board actions.** The board's **Select** toggle turns cards into checkboxes (click, Space or Enter; shift-click picks a range; each column header offers All/None), and a toolbar moves, reprioritises, reassigns or deletes every picked ticket in one request (`POST /api/projects/:projectId/tickets/bulk`, up to 100 tickets). Tickets an agent is still working on, and tickets whose run branch would skip its merge when closed, are left as they were, stay selected and are listed with the reason. Escape leaves selection mode.
+- Compose previews run one stack per worktree with per-container caps: `EMBERLINE_PREVIEW_CPUS` (default 1) and `EMBERLINE_PREVIEW_MEMORY_MB` (default 1024, no swap). A ticket moved to Done takes its runs' preview stacks down with their volumes. `GET /api/projects/:id/container-preview/environments` lists every stack as starting, healthy, failed (with the end of its output) or stopped.
+
+### Changed
+
+- A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
+- Codex and Gemini CLI have adapters of their own (`packages/adapter-codex`, `packages/adapter-gemini`); core reaches every CLI through one registry keyed by agent id.
+- Codex runs read the reset time of a usage limit from Codex's own message ("try again at 3:42 PM", "try again at Oct 15th, 2026 9:05 AM"), and, when the output does not say, from the session's latest rate-limit record, so they resume at the reset instead of retrying every 15 minutes. "Quota exceeded. Check your plan and billing details." is a billing problem, not a limit.
+- Gemini runs read "Your quota will reset after 2h31m12s", "Please retry in 38.06s" and the interactive "Access resets at 3:45 PM GMT+3". A Gemini limit that names a model (Pro, Flash, Flash-Lite) pauses only that model's lane; a model with no quota at all on the account's tier (`limit: 0`) is no longer waited for.
 
 ## [0.7.0] - 2026-11-11
 

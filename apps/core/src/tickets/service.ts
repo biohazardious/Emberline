@@ -387,6 +387,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
     this.upgradeCandidates = this.takeUpgradeCandidates();
+    // A finished ticket's worktree previews are not needed any more: their stacks go, ports freed.
+    this.on('moved', (ticket: Ticket) => {
+      if (ticket.status === 'done') void runs.teardownTicketPreviews(ticket.id);
+    });
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;
@@ -1982,7 +1986,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * checked in. Secondary CLIs never have it; neither has a Claude run on an older runner image.
    */
   private hasCompletionTool(run: Run): boolean {
-    return providerAdapter(run.agent).claudeNative && this.runs.hasEvent(run.id, 'completion_tool_ready');
+    return (
+      providerAdapter(run.agent).completionSignal === 'tool' &&
+      this.runs.hasEvent(run.id, 'completion_tool_ready')
+    );
   }
 
   /**

@@ -2,6 +2,7 @@
  * Starting and watching a compose preview: every step runs the Docker CLI (or curl) in the ops container
  * through command-exec, with the engine's client variables. RunService records the outcome.
  */
+import type { ComposePreviewLimits } from '@emberline/protocol';
 import { dockerCommand, execCommand, type ExecResult, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { clipText, stripControlChars } from '../text/control-chars.js';
 import {
@@ -15,17 +16,17 @@ import {
   composePsArgs,
   composePsGone,
   composeServiceState,
-  composeServicesArgs,
   composeShell,
+  composeStackConfigArgs,
   composeUpArgs,
   builderPruneArgs,
   imagePruneArgs,
   isPortConflict,
   parseComposeLs,
   parseComposePs,
-  parseComposeServices,
   reclaimArgs,
 } from './compose.js';
+import { inspectComposeStack } from './compose-isolation.js';
 
 export interface ComposePreviewTiming {
   /** `up -d --build`: builds can take minutes. */
@@ -51,6 +52,8 @@ export const DEFAULT_COMPOSE_PREVIEW_TIMING: ComposePreviewTiming = {
 export const COMPOSE_UP_ATTEMPTS = 3;
 
 const SHORT_TIMEOUT_MS = 60_000;
+/** The resolved compose config is read whole; a larger one is refused rather than cut. */
+const STACK_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 /** Cleanup (prune, teardown, sweep, run or project delete) also removes volumes and the images a project built; a Stop does not. */
 export const CLEANUP_DOWN = { volumes: true, images: true } as const;
 export const COMPOSE_DOWN_TIMEOUT_MS = 2 * 60_000;
@@ -70,6 +73,8 @@ export interface ComposePreviewTarget {
   engineHost: string;
   /** The engine's client variables (DOCKER_HOST, TLS). */
   env: Record<string, string>;
+  /** Caps on every container of the stack (config.previewLimits). */
+  limits: ComposePreviewLimits;
 }
 
 export type ComposePreviewOutcome =
@@ -78,7 +83,8 @@ export type ComposePreviewOutcome =
   | { ok: false; cancelled?: false; error: string; logs: string | null };
 
 /**
- * `config --services`, then `up -d --build` with the port override on stdin, then polls `ps` and an
+ * `config --format json` (refused when the file fixes a container, volume or network name), then
+ * `up -d --build` with the port and limits override on stdin, then polls `ps` and an
  * HTTP request to the published port until the service answers or `readyTimeoutMs` passed.
  */
 export async function runComposePreview(
@@ -93,15 +99,24 @@ export async function runComposePreview(
 ): Promise<ComposePreviewOutcome> {
   const { project, file, service } = target;
   const listed = await run(
-    composeServicesArgs(project, file),
+    composeStackConfigArgs(project, file),
     target.worktreePath,
     target.env,
     SHORT_TIMEOUT_MS,
+    { maxOutputBytes: STACK_CONFIG_MAX_BYTES },
   );
   if (control.cancelled()) return { ok: false, cancelled: true };
   if (!listed.ok)
     return { ok: false, error: `docker compose config failed (${listed.how})`, logs: listed.output };
-  const services = parseComposeServices(listed.result!.stdout);
+  if (listed.result!.truncated)
+    return {
+      ok: false,
+      error: `the configuration of ${file} is larger than ${STACK_CONFIG_MAX_BYTES / 1024 / 1024} MB`,
+      logs: null,
+    };
+  const stack = inspectComposeStack(listed.result!.stdout, project, file);
+  if (!stack.ok) return { ok: false, error: stack.error, logs: null };
+  const services = stack.services;
   if (!services.includes(service))
     return { ok: false, error: `"${service}" is not a service in ${file}`, logs: null };
 
@@ -113,6 +128,7 @@ export async function runComposePreview(
       port: target.containerPort,
       hostPort: target.hostPort,
       services,
+      limits: target.limits,
     });
     const up = await run(
       shell.args,
@@ -296,7 +312,7 @@ async function run(
   cwd: string,
   env: Record<string, string>,
   timeoutMs: number,
-  opts: { file?: string; execId?: string } = {},
+  opts: { file?: string; execId?: string; maxOutputBytes?: number } = {},
 ): Promise<Ran> {
   try {
     // The image's Docker CLI by its path, with no config, plugin or variable of the runner's.
@@ -308,6 +324,7 @@ async function run(
         env,
         timeoutMs,
         ...(opts.execId ? { execId: opts.execId } : {}),
+        ...(opts.maxOutputBytes ? { maxOutputBytes: opts.maxOutputBytes } : {}),
       }),
     );
     const output = composeOutputTail(`${result.stdout}${result.stderr}`);

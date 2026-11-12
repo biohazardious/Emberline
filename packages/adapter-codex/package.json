@@ -1,0 +1,25 @@
+{
+  "name": "@emberline/adapter-codex",
+  "license": "AGPL-3.0-or-later",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "Codex CLI adapter: wrapped launch spec, usage-limit parsing from hooks, rollout transcripts and screen.",
+  "exports": {
+    ".": {
+      "@emberline/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@emberline/adapter-sdk": "workspace:*"
+  }
+}

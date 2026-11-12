@@ -101,3 +101,57 @@ export const AgentPreviewResponse = z.object({
   note: z.string().optional(),
 });
 export type AgentPreviewResponse = z.infer<typeof AgentPreviewResponse>;
+
+/** Per-service cpu and memory caps every compose preview container runs with (EMBERLINE_PREVIEW_CPUS / _MEMORY_MB). */
+export const ComposePreviewLimits = z.object({
+  cpus: z.number().positive(),
+  memoryMb: z.number().int().positive(),
+});
+export type ComposePreviewLimits = z.infer<typeof ComposePreviewLimits>;
+
+/**
+ * The life of one worktree's compose stack: `starting` until the service answers HTTP, `healthy`
+ * while it does, `failed` (with the log tail) when it could not start or its container exited,
+ * `stopped` once it was taken down (a Stop, a prune, its ticket moved to Done).
+ */
+export const ComposeEnvironmentState = z.enum(['starting', 'healthy', 'failed', 'stopped']);
+export type ComposeEnvironmentState = z.infer<typeof ComposeEnvironmentState>;
+
+/** A preview status in the environment's words (`exited`: the container stopped by itself, a failure). */
+export function composeEnvironmentState(status: RunPreviewStatus['status']): ComposeEnvironmentState {
+  switch (status) {
+    case 'running':
+      return 'healthy';
+    case 'starting':
+      return 'starting';
+    case 'stopped':
+      return 'stopped';
+    case 'exited':
+    case 'failed':
+      return 'failed';
+  }
+}
+
+/** One compose stack: a run's worktree (`runId`) or the project's main workspace (`runId` null). */
+export const ComposePreviewEnvironment = z.object({
+  runId: z.string().nullable(),
+  ticketId: z.string().nullable(),
+  /** The compose project (`-p`) the stack runs under, one per worktree. */
+  project: z.string(),
+  state: ComposeEnvironmentState,
+  /** The host port allocated from the docker preview range; null once stopped. */
+  port: z.number().int().nullable(),
+  url: z.string().nullable(),
+  error: z.string().nullable(),
+  /** The end of the build or container output (untrusted): set on `failed`. */
+  logs: z.string().nullable(),
+});
+export type ComposePreviewEnvironment = z.infer<typeof ComposePreviewEnvironment>;
+
+/** `GET /api/projects/:id/container-preview/environments`: every compose stack of the project's worktrees. */
+export const ComposePreviewEnvironmentsResponse = z.object({
+  ports: z.object({ first: z.number().int(), last: z.number().int() }),
+  limits: ComposePreviewLimits,
+  environments: z.array(ComposePreviewEnvironment),
+});
+export type ComposePreviewEnvironmentsResponse = z.infer<typeof ComposePreviewEnvironmentsResponse>;

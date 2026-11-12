@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import path from 'node:path';
+import type { ComposePreviewLimits } from '@emberline/protocol';
 import { parseCidrList } from './auth/cidr.js';
 import { engineHostName } from './docker/compose.js';
 
@@ -105,6 +106,11 @@ export interface CoreConfig {
    * `docker` service's for compose previews. Disjoint, so the two never claim the same port.
    */
   previewPorts: { runner: PortRange; docker: PortRange };
+  /**
+   * Caps on every container of a compose preview stack (`EMBERLINE_PREVIEW_CPUS`,
+   * `EMBERLINE_PREVIEW_MEMORY_MB`), injected by the override whatever the project's file sets.
+   */
+  previewLimits: ComposePreviewLimits;
 }
 
 /** Inclusive TCP port range. */
@@ -119,6 +125,43 @@ export const DEFAULT_PREVIEW_PORTS: CoreConfig['previewPorts'] = {
   runner: { first: 4300, last: 4324 },
   docker: { first: 4325, last: 4349 },
 };
+
+export const DEFAULT_PREVIEW_LIMITS: ComposePreviewLimits = { cpus: 1, memoryMb: 1024 };
+const PREVIEW_CPUS_RANGE = { min: 0.1, max: 64 };
+const PREVIEW_MEMORY_MB_RANGE = { min: 64, max: 262_144 };
+
+/** A decimal in `range`, else null (blank, junk or out of range). */
+function parseBounded(raw: string | undefined, range: { min: number; max: number }, integer: boolean) {
+  const text = (raw ?? '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
+  const value = Number(text);
+  if (integer && !Number.isInteger(value)) return null;
+  return value >= range.min && value <= range.max ? value : null;
+}
+
+/** `EMBERLINE_PREVIEW_CPUS` (0.1-64) and `EMBERLINE_PREVIEW_MEMORY_MB` (64-262144); each falls back to its default. */
+export function parsePreviewLimits(env: NodeJS.ProcessEnv): ComposePreviewLimits {
+  return {
+    cpus: parseBounded(env.EMBERLINE_PREVIEW_CPUS, PREVIEW_CPUS_RANGE, false) ?? DEFAULT_PREVIEW_LIMITS.cpus,
+    memoryMb:
+      parseBounded(env.EMBERLINE_PREVIEW_MEMORY_MB, PREVIEW_MEMORY_MB_RANGE, true) ??
+      DEFAULT_PREVIEW_LIMITS.memoryMb,
+  };
+}
+
+/** Preview limit variables that are set but unusable; core logs them and uses the default. */
+export function invalidPreviewLimitVars(env: NodeJS.ProcessEnv): string[] {
+  const checks = [
+    ['EMBERLINE_PREVIEW_CPUS', PREVIEW_CPUS_RANGE, false],
+    ['EMBERLINE_PREVIEW_MEMORY_MB', PREVIEW_MEMORY_MB_RANGE, true],
+  ] as const;
+  return checks
+    .filter(
+      ([name, range, integer]) =>
+        (env[name] ?? '').trim() !== '' && parseBounded(env[name], range, integer) === null,
+    )
+    .map(([name]) => name);
+}
 
 /** `4300-4324` or a single port `4300` (1-65535, first <= last); null otherwise. */
 export function parsePortRange(raw: string): PortRange | null {
@@ -203,6 +246,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
       runner: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_RUNNER ?? '') ?? DEFAULT_PREVIEW_PORTS.runner,
       docker: parsePortRange(env.EMBERLINE_PREVIEW_PORTS_DOCKER ?? '') ?? DEFAULT_PREVIEW_PORTS.docker,
     },
+    previewLimits: parsePreviewLimits(env),
   };
 }
 

@@ -9,7 +9,12 @@ import {
   WS_PROTOCOL,
 } from '@emberline/protocol';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
-import { type CoreConfig, DEFAULT_DOCKER_CERT_PATH, DEFAULT_PREVIEW_PORTS } from './config.js';
+import {
+  type CoreConfig,
+  DEFAULT_DOCKER_CERT_PATH,
+  DEFAULT_PREVIEW_LIMITS,
+  DEFAULT_PREVIEW_PORTS,
+} from './config.js';
 import { type OpenedDb, openDb } from './db/index.js';
 import { PostMergeJobs } from './factory/post-merge.js';
 import { deriveApiUrl, insertAccount, normalizeServerUrl } from './forge/account-store.js';
@@ -102,6 +107,7 @@ export async function createTestApp(
     transcriptsDir: path.join(dir, 'transcripts'),
     eventRetentionDays: 0,
     previewPorts: DEFAULT_PREVIEW_PORTS,
+    previewLimits: DEFAULT_PREVIEW_LIMITS,
     dockerCertPath: DEFAULT_DOCKER_CERT_PATH,
     ...overrides,
   };

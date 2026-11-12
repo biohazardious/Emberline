@@ -19,12 +19,11 @@ import {
   composePsArgs,
   composePsGone,
   composeServiceState,
-  composeServicesArgs,
   composeShell,
+  composeStackConfigArgs,
   composeUpArgs,
   engineHostName,
   parseComposePs,
-  parseComposeServices,
 } from './compose.js';
 import { RUNNER_BIN } from '../command-exec.js';
 
@@ -45,8 +44,8 @@ describe('compose command lines', () => {
       'web',
     ]);
   });
-  it('config --services reads only the project file, with every profile', () => {
-    expect(composeServicesArgs('emberline-abcd1234', 'deploy/compose.yml')).toEqual([
+  it('config --format json reads only the project file, with every profile', () => {
+    expect(composeStackConfigArgs('emberline-abcd1234', 'deploy/compose.yml')).toEqual([
       'compose',
       '-p',
       'emberline-abcd1234',
@@ -55,7 +54,8 @@ describe('compose command lines', () => {
       '--profile',
       '*',
       'config',
-      '--services',
+      '--format',
+      'json',
     ]);
   });
   it('ps, logs and down go by project name only (they work when the file changed or is gone)', () => {
@@ -154,40 +154,49 @@ describe('compose command lines', () => {
 });
 
 describe('composeOverrideYaml', () => {
-  it('publishes only <hostPort>:<port> for the preview service and no host port for the others', () => {
+  const limits = { cpus: 1.5, memoryMb: 512 };
+  const caps = [
+    '    cpus: 1.5',
+    '    mem_limit: 536870912',
+    '    memswap_limit: 536870912',
+    '    deploy:',
+    '      resources:',
+    '        limits: !override',
+    '          cpus: "1.5"',
+    '          memory: 536870912',
+  ];
+  it('publishes only <hostPort>:<port> for the preview service, none for the others, and caps every one', () => {
     const yaml = composeOverrideYaml({
       service: 'web',
       port: 80,
       hostPort: 4331,
       services: ['db', 'web', 'cache'],
+      limits,
     });
     expect(yaml).toBe(
       [
         'services:',
         '  "db":',
         '    ports: !reset []',
-        '    container_name: !reset null',
+        ...caps,
         '  "web":',
         '    ports: !override ["4331:80"]',
-        '    container_name: !reset null',
+        ...caps,
         '  "cache":',
         '    ports: !reset []',
-        '    container_name: !reset null',
+        ...caps,
         '',
       ].join('\n'),
     );
   });
   it('always names the preview service, even if the list missed it', () => {
-    expect(composeOverrideYaml({ service: 'web', port: 8080, hostPort: 4325, services: [] })).toContain(
-      '  "web":\n    ports: !override ["4325:8080"]',
-    );
+    expect(
+      composeOverrideYaml({ service: 'web', port: 8080, hostPort: 4325, services: [], limits }),
+    ).toContain('  "web":\n    ports: !override ["4325:8080"]');
   });
 });
 
 describe('parsing compose output', () => {
-  it('service names, one per line, junk dropped', () => {
-    expect(parseComposeServices('db\nweb\n\nWARN[0000] something\n')).toEqual(['db', 'web']);
-  });
   it('ps: NDJSON (compose v5) and a JSON array (older compose)', () => {
     const line = (o: object) => JSON.stringify(o);
     const ndjson = [

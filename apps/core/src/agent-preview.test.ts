@@ -26,6 +26,7 @@ import { DemoTokens } from './demo-token.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { mainPreviewComposeProjectName, previewComposeProjectName } from './docker/engine.js';
 import { agentPreview } from './runs/agent-preview.js';
+import { composeConfigJson } from './test-compose.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 const ok = (stdout = ''): ExecResult => ({
@@ -99,7 +100,7 @@ class FakeEngine {
     if (args[0] !== 'compose') return ok('');
     const project = args[2] ?? '';
     const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
-    if (verb === 'config') return ok('web\n');
+    if (verb === 'config') return ok(composeConfigJson(args, ['web']));
     if (verb === 'up') {
       if (this.upGate) {
         const gate = this.upGate;

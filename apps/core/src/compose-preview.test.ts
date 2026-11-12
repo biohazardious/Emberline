@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  ComposePreviewEnvironmentsResponse,
   DOCKER_ENGINE_NOT_ANSWERED_TEXT,
   DOCKER_ENGINE_NOT_CONFIGURED_TEXT,
   DOCKER_ENGINE_OFF_TEXT,
@@ -14,10 +15,9 @@ import {
   type RunPreviewStatus,
 } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  type ExecRequest,
-  type ExecResult,
   localCommandCanceller,
   localCommandExecutor,
   setCommandCanceller,
@@ -25,28 +25,13 @@ import {
   RUNNER_BIN,
   SYSTEM_PATH,
 } from './command-exec.js';
-import type { CoreConfig } from './config.js';
-import { COMPOSE_OVERRIDE_ENV, composeUpArgs } from './docker/compose.js';
+import { type CoreConfig, DEFAULT_PREVIEW_LIMITS } from './config.js';
+import { composeOverrideYaml, composeUpArgs } from './docker/compose.js';
+import { runs } from './db/schema.js';
 import { composeProjectName, previewComposeProjectName } from './docker/engine.js';
+import { failed, FakeEngine } from './test-compose.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
-
-const ok = (stdout = ''): ExecResult => ({
-  exitCode: 0,
-  signal: null,
-  stdout,
-  stderr: '',
-  timedOut: false,
-  truncated: false,
-});
-const failed = (stdout: string, exitCode = 1): ExecResult => ({
-  exitCode,
-  signal: null,
-  stdout,
-  stderr: '',
-  timedOut: false,
-  truncated: false,
-});
 
 const COMPOSE_V2 = [
   'version: 2',
@@ -72,149 +57,6 @@ const PROJECT_COMPOSE = [
   '    ports: ["5432:5432"]',
   '',
 ].join('\n');
-
-interface DockerCall {
-  args: string[];
-  cwd: string;
-  env: Record<string, string>;
-  /** What the command got on stdin (the override), when it was run through the `sh` wrapper. */
-  stdin?: string;
-  file: string;
-  inheritEnv?: boolean;
-}
-
-/** An engine in memory: `compose up/ps/logs/down/config` per project, plus `curl` against published ports. */
-class FakeEngine {
-  calls: DockerCall[] = [];
-  curls: string[] = [];
-  /** URLs of the framing probes (`curl -D -`), kept apart from the readiness `curls`. */
-  probes: string[] = [];
-  /** published port → what the probe's curl prints (default: a plain 200). */
-  frameHeaders = new Map<number, string>();
-  available = true;
-  services = ['web', 'db'];
-  /** project → service → state */
-  projects = new Map<string, Map<string, string>>();
-  /** published host port → project */
-  published = new Map<number, string>();
-  upResult: ExecResult = ok(' Container web-1 Started\n');
-  stateAfterUp = 'running';
-  answersHttp = true;
-  /** Host ports something else in the engine already holds (`up` fails with compose's message). */
-  busyPorts = new Set<number>();
-  /** While set, `up` waits for it (or for a cancel that the canceller honours). */
-  upGate: Promise<void> | null = null;
-  /** Pending `up` calls by execId: resolving one with `cancelled` is what a working cancel does. */
-  pendingUps = new Map<string, (result: ExecResult) => void>();
-  /** Each `cancelCommand` execId, in order; `honourCancels` says how many to honour (Infinity = all). */
-  cancels: string[] = [];
-  ignoreCancels = 0;
-  curlArgs: string[][] = [];
-  /** While set, `down` waits for it; `heldDowns` counts the ones waiting. */
-  downGate: Promise<void> | null = null;
-  heldDowns = 0;
-  /** With a gate set: hold only the `down` of this compose project (null = every project). */
-  downGateFor: string | null = null;
-
-  readonly cancel = async (execId: string): Promise<boolean> => {
-    this.cancels.push(execId);
-    if (this.ignoreCancels > 0) {
-      this.ignoreCancels -= 1;
-      return false;
-    }
-    const pending = this.pendingUps.get(execId);
-    if (!pending) return false;
-    pending({ ...failed('', 137), exitCode: null, cancelled: true });
-    return true;
-  };
-
-  readonly exec = async (request: ExecRequest): Promise<ExecResult> => {
-    if (request.file === RUNNER_BIN.curl && request.args.includes('-D')) {
-      const url = request.args.at(-1) ?? '';
-      this.probes.push(url);
-      return ok(this.frameHeaders.get(Number(new URL(url).port)) ?? 'HTTP/1.1 200 OK\r\n\r\n');
-    }
-    if (request.file === RUNNER_BIN.curl) {
-      const url = request.args.at(-1) ?? '';
-      this.curls.push(url);
-      this.curlArgs.push(request.args);
-      const port = Number(new URL(url).port);
-      return ok(this.answersHttp && this.published.has(port) ? '200' : '000');
-    }
-    let args: string[];
-    let stdin: string | undefined;
-    if (request.file === RUNNER_BIN.docker) {
-      args = request.args;
-    } else if (request.file === RUNNER_BIN.sh && request.args[1]?.includes(RUNNER_BIN.docker)) {
-      args = request.args.slice(3);
-      stdin = request.env?.[COMPOSE_OVERRIDE_ENV];
-    } else {
-      return localCommandExecutor(request);
-    }
-    if (args[0] === 'version')
-      return this.available ? ok('"29.8.2"\n') : failed('Cannot connect to the Docker daemon');
-    this.calls.push({
-      args,
-      cwd: request.cwd,
-      env: request.env ?? {},
-      ...(stdin !== undefined ? { stdin } : {}),
-      file: request.file,
-      inheritEnv: request.inheritEnv,
-    });
-    const project = args[2] ?? '';
-    const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
-    if (verb === 'config') return ok(`${this.services.join('\n')}\n`);
-    if (verb === 'up') {
-      if (this.upGate) {
-        const gate = this.upGate;
-        const cancelled = await new Promise<ExecResult | null>((resolve) => {
-          if (request.execId) this.pendingUps.set(request.execId, resolve);
-          void gate.then(() => resolve(null));
-        });
-        if (request.execId) this.pendingUps.delete(request.execId);
-        if (cancelled) return cancelled;
-      }
-      if (this.upResult.exitCode !== 0) return this.upResult;
-      const service = args.at(-1)!;
-      const port = Number(/"(\d+):\d+"/.exec(stdin ?? '')?.[1]);
-      if (this.busyPorts.has(port)) {
-        return failed(
-          `Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:${port} failed: port is already allocated\n`,
-        );
-      }
-      const states = this.projects.get(project) ?? new Map<string, string>();
-      states.set(service, this.stateAfterUp);
-      this.projects.set(project, states);
-      if (port) this.published.set(port, project);
-      return this.upResult;
-    }
-    if (verb === 'ps') {
-      const states = this.projects.get(project) ?? new Map();
-      return ok(
-        [...states]
-          .map(([service, state]) =>
-            JSON.stringify({ Service: service, State: state, Health: '', ExitCode: 0 }),
-          )
-          .join('\n'),
-      );
-    }
-    if (verb === 'logs') return ok('web-1  | \u001b[31mnginx: [emerg] bind failed\u001b[0m\n');
-    if (verb === 'down') {
-      if (this.downGate && (this.downGateFor === null || this.downGateFor === project)) {
-        this.heldDowns += 1;
-        await this.downGate;
-      }
-      this.projects.delete(project);
-      for (const [port, owner] of this.published) if (owner === project) this.published.delete(port);
-      return ok();
-    }
-    return failed(`unexpected docker ${args.join(' ')}`);
-  };
-
-  composeCalls(verb: string): DockerCall[] {
-    return this.calls.filter((c) => c.args.includes(verb));
-  }
-}
 
 describe('compose previews (worktree.yml v2)', () => {
   let t: TestApp;
@@ -414,12 +256,17 @@ describe('compose previews (worktree.yml v2)', () => {
       expect(up!.cwd).toBe(run.worktreePath);
       expect(up!.env).toMatchObject({ DOCKER_HOST: 'tcp://docker:2376', DOCKER_TLS_VERIFY: '1' });
       // The override drops the file's fixed ports: the preview service gets only its own, the rest none.
+      // Every service also gets the default cpu and memory caps (1 cpu, 1024 MB).
       expect(up!.stdin).toBe(
-        'services:\n  "web":\n    ports: !override ["' +
-          port +
-          ':80"]\n    container_name: !reset null\n' +
-          '  "db":\n    ports: !reset []\n    container_name: !reset null\n',
+        composeOverrideYaml({
+          service: 'web',
+          port: 80,
+          hostPort: port,
+          services: ['web', 'db'],
+          limits: DEFAULT_PREVIEW_LIMITS,
+        }),
       );
+      expect(up!.stdin).toContain('  "db":\n    ports: !reset []\n    cpus: 1\n    mem_limit: 1073741824\n');
       // Every compose command Emberline ran used the run's project, never the file's or `.env`'s.
       for (const call of engine.calls)
         expect(call.args.slice(0, 3)).toEqual(['compose', '-p', composeProject]);
@@ -727,6 +574,101 @@ describe('compose previews (worktree.yml v2)', () => {
     const singlePort = {
       previewPorts: { runner: { first: 4300, last: 4324 }, docker: { first: 4325, last: 4325 } },
     };
+
+    describe('one stack per worktree (DESIGN §4)', () => {
+      it('a compose file that fixes container, volume or network names is refused before up, naming each', async () => {
+        await start('tcp://docker:2376');
+        const p = await project();
+        const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        const own = previewComposeProjectName(run.id);
+        engine.configExtra = {
+          services: { web: { container_name: 'shop-web' }, db: {} },
+          volumes: { data: { name: 'pgdata' }, cache: { name: `${own}_cache` } },
+          networks: { default: { name: `${own}_default` }, edge: { name: 'proxy', external: true } },
+        };
+        expect((await startPreview(run)).statusCode).toBe(200);
+        const failedStatus = await waitStatus(run, 'failed');
+        expect(failedStatus.error).toBe(
+          "compose.yaml fixes names that every worktree's preview would share: " +
+            'service "web" sets container_name "shop-web"; volume "data" has the fixed name "pgdata"; ' +
+            'network "edge" is external ("proxy"). ' +
+            `Remove them so compose names each stack after its own project (${own}).`,
+        );
+        expect(engine.composeCalls('up')).toHaveLength(0);
+      });
+
+      it('the configured cpu and memory limits reach every service of the stack', async () => {
+        await start('tcp://docker:2376', { previewLimits: { cpus: 0.5, memoryMb: 256 } });
+        const p = await project();
+        const run = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        await startPreview(run);
+        await waitStatus(run, 'running');
+        const stdin = engine.composeCalls('up')[0]!.stdin ?? '';
+        for (const service of ['web', 'db']) {
+          expect(stdin).toContain(
+            `  "${service}":\n    ports: ${service === 'web' ? '!override' : '!reset'}`,
+          );
+        }
+        expect(stdin.match(/^ {4}cpus: 0\.5$/gm)).toHaveLength(2);
+        expect(stdin.match(/^ {4}mem_limit: 268435456$/gm)).toHaveLength(2);
+        expect(stdin.match(/^ {10}memory: 268435456$/gm)).toHaveLength(2);
+      });
+
+      it('moving the ticket to Done tears its stack down with its volumes and frees the port', async () => {
+        await start('tcp://docker:2376', singlePort);
+        const p = await project();
+        const a = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        const b = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
+        const ticket = t.tickets.create(p.id, { title: 'Shop page', status: 'review' });
+        t.db.update(runs).set({ ticketId: ticket.id }).where(eq(runs.id, a.id)).run();
+        await startPreview(a);
+        await waitStatus(a, 'running');
+        t.tickets.update(ticket.id, { status: 'done' });
+        const stopped = await waitStatus(a, 'stopped');
+        expect(stopped.port).toBeNull();
+        const down = engine.composeCalls('down').find((c) => c.args[2] === previewComposeProjectName(a.id));
+        expect(down?.args).toEqual(expect.arrayContaining(['-v', '--rmi', 'local', '--remove-orphans']));
+        const stop = t.runs.get(a.id).events.find((e) => e.type === 'preview_stopped');
+        expect(stop?.source).toBe('system');
+        const next = await startPreview(b);
+        expect((next.json() as RunPreviewStatus).port).toBe(4325);
+      });
+
+      it('the environments route reports each stack healthy, failed with its log tail, or stopped', async () => {
+        await start('tcp://docker:2376');
+        const p = await project();
+        const healthy = await t.runs.enqueue({ projectId: p.id, prompt: 'x' });
+        const broken = await t.runs.enqueue({ projectId: p.id, prompt: 'y' });
+        await startPreview(healthy);
+        await waitStatus(healthy, 'running');
+        engine.stateAfterUp = 'exited';
+        await startPreview(broken);
+        await waitStatus(broken, 'failed');
+        const res = await api('GET', `/api/projects/${p.id}/container-preview/environments`);
+        expect(res.statusCode).toBe(200);
+        const body = ComposePreviewEnvironmentsResponse.parse(res.json());
+        expect(body.limits).toEqual(DEFAULT_PREVIEW_LIMITS);
+        expect(body.ports).toEqual({ first: 4325, last: 4349 });
+        const byRun = new Map(body.environments.map((e) => [e.runId, e]));
+        expect(byRun.get(healthy.id)).toMatchObject({
+          state: 'healthy',
+          project: previewComposeProjectName(healthy.id),
+          error: null,
+          logs: null,
+        });
+        expect(byRun.get(healthy.id)?.port).toBeTypeOf('number');
+        expect(byRun.get(broken.id)).toMatchObject({ state: 'failed', error: 'the "web" container stopped' });
+        expect(byRun.get(broken.id)?.logs).toContain('nginx: [emerg] bind failed');
+        await api('POST', `/api/runs/${healthy.id}/preview/stop`, {});
+        const after = ComposePreviewEnvironmentsResponse.parse(
+          (await api('GET', `/api/projects/${p.id}/container-preview/environments`)).json(),
+        );
+        expect(after.environments.find((e) => e.runId === healthy.id)).toMatchObject({
+          state: 'stopped',
+          port: null,
+        });
+      });
+    });
 
     it('a prune takes a running preview down, records it stopped, and its port is free again', async () => {
       await start('tcp://docker:2376', singlePort);

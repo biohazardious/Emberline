@@ -99,7 +99,7 @@ function missingComposeFile(file: string): string {
 
 export interface MainPreviewDeps {
   db: Db;
-  config: Pick<CoreConfig, 'dockerHost'>;
+  config: Pick<CoreConfig, 'dockerHost' | 'previewLimits'>;
   docker: DockerEngine;
   /** The engine's variables for main (RunService.dockerEnvForMain). */
   envForMain: (projectId: string) => Promise<Record<string, string>>;
@@ -444,6 +444,7 @@ export class MainPreviews {
       containerPort: service.compose.port,
       hostPort,
       engineHost: engineHostName(this.deps.config.dockerHost ?? ''),
+      limits: this.deps.config.previewLimits,
       env,
     };
     const current = () => !job.cancelled && this.jobs.get(projectId) === job && this.hasProject(projectId);

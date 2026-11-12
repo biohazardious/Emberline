@@ -3,6 +3,8 @@ export const WORKTREE_EVENT_LABELS: Record<string, string> = {
   worktree_copied: 'files copied into the worktree',
   worktree_copy_skipped: 'copy skipped',
   worktree_setup_pending: 'worktree setup queued',
+  worktree_toolchain_installed: 'package manager installed for setup',
+  worktree_toolchain_failed: 'package manager install failed',
   worktree_setup_started: 'worktree setup started',
   worktree_setup_finished: 'worktree setup finished',
   worktree_setup_failed: 'worktree setup failed',
