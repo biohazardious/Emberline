@@ -213,16 +213,17 @@ export async function worktreeCommandsGate(pass: GatePass): Promise<GateOutcome>
 }
 
 /**
- * The self-healing build, lint and unit test gate: with the setting on and a verifiable target
- * (detected, or the approved worktree.yml's `checks`), every pass builds its own turn's tree. The
- * agent is asked once to fix a failure; when a later turn still fails, the hold is a person's.
+ * The build gate's checks on the run's worktree as it is now: their result, the error that kept them
+ * from running, or null when there is nothing to verify.
  */
-export async function buildGate(pass: GatePass): Promise<GateOutcome> {
-  const { db, run, settings } = pass;
+async function runBuildChecks(
+  pass: Pick<GatePass, 'db' | 'run' | 'dockerEnv'>,
+): Promise<{ ok: boolean; output: string } | Error | null> {
+  const { db, run } = pass;
   const checks = approvedChecks(db, run.projectId);
   const verifiable = Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
-  if (!settings.selfHealingBuildGate || !takesPrompt(run) || !verifiable) return PASS;
-  const buildRes = await buildWorkspaceDemo({
+  if (!verifiable) return null;
+  return buildWorkspaceDemo({
     db,
     projectId: run.projectId,
     targetId: run.id,
@@ -232,6 +233,31 @@ export async function buildGate(pass: GatePass): Promise<GateOutcome> {
     setup: setupFinishedIn(runEventTypes(db, run.id)) ? [] : approvedSetup(db, run.projectId),
     env: await pass.dockerEnv(),
   }).catch((error: unknown) => error as Error);
+}
+
+/**
+ * The build gate's checks again, for a tree core changed itself (the conflict heal's merge of main):
+ * no agent is asked. Passes when the gate is off or there is nothing to verify, as the gate does.
+ */
+export async function verifyBuild(
+  pass: Pick<GatePass, 'db' | 'run' | 'settings' | 'dockerEnv'>,
+): Promise<{ ok: true } | { ok: false; output: string }> {
+  if (!pass.settings.selfHealingBuildGate) return { ok: true };
+  const res = await runBuildChecks(pass);
+  if (res === null || (!(res instanceof Error) && res.ok)) return { ok: true };
+  return { ok: false, output: res instanceof Error ? res.message : res.output };
+}
+
+/**
+ * The self-healing build, lint and unit test gate: with the setting on and a verifiable target
+ * (detected, or the approved worktree.yml's `checks`), every pass builds its own turn's tree. The
+ * agent is asked once to fix a failure; when a later turn still fails, the hold is a person's.
+ */
+export async function buildGate(pass: GatePass): Promise<GateOutcome> {
+  const { db, run, settings } = pass;
+  if (!settings.selfHealingBuildGate || !takesPrompt(run)) return PASS;
+  const buildRes = await runBuildChecks(pass);
+  if (buildRes === null) return PASS;
   // B17: a gate that could not run is not a pass; leave the ticket for a person.
   if (buildRes instanceof Error) {
     if (pass.stale()) return HALT;

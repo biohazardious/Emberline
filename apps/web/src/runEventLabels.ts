@@ -21,6 +21,8 @@ export const EVENT_LABEL: Record<string, string> = {
   tickets_file_left_to_factory: 'Ticket plan left to the [Factory] ticket',
   conflict_resolution_requested: 'resolving merge conflict',
   conflict_resolution_failed: 'conflict resolution failed',
+  conflict_auto_resolved: 'merge conflict auto-resolved',
+  conflict_heal_failed: 'conflict auto-resolve failed',
   factory_chain_paused: 'factory paused',
   secret_guard_blocked: 'held: secret found',
   slop_guard_blocked: 'held: slop check',
