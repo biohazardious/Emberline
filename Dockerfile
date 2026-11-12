@@ -75,6 +75,8 @@ RUN mkdir -p /pnpm-store /run/emberline /data /workspaces \
     /workspace/packages/protocol/node_modules \
     /workspace/packages/adapter-sdk/node_modules \
     /workspace/packages/adapter-claude/node_modules \
+    /workspace/packages/adapter-codex/node_modules \
+    /workspace/packages/adapter-gemini/node_modules \
     /workspace/packages/hook/node_modules \
   && chown -R node:node /pnpm-store /run/emberline /data /workspaces /workspace
 USER node
@@ -97,6 +99,8 @@ COPY apps/ptyd/package.json apps/ptyd/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/adapter-sdk/package.json packages/adapter-sdk/
 COPY packages/adapter-claude/package.json packages/adapter-claude/
+COPY packages/adapter-codex/package.json packages/adapter-codex/
+COPY packages/adapter-gemini/package.json packages/adapter-gemini/
 COPY packages/hook/package.json packages/hook/
 RUN --mount=type=cache,id=emberline-pnpm,target=/pnpm-store pnpm install --frozen-lockfile
 COPY . .

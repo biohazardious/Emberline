@@ -1,718 +1,141 @@
 /**
  * Claude Code adapter.
  *
- * Pure building blocks used by core's run service:
- * - {@link buildHookSettings}: the `--settings` object wiring every hook to `emberline-hook`.
- * - {@link buildLaunchSpec}: the full command line + env for a run.
- * - {@link nextStateFromHook}: the hook -> {@link AgentState} state machine (docs/DESIGN.md §3.3).
+ * - ./settings.ts: the `--settings` object wiring every hook to `emberline-hook`, and the MCP servers.
+ * - ./launch.ts: the full command line + env for a run.
+ * - ./personas.ts: persona prompts and the unattended-run policy.
+ * - ./secondary.ts: Antigravity, Copilot and Aider on the generic wrapper, with a Claude fallback.
+ * - ./ratelimit.ts: usage-limit detection and reset-time parsing, behind fixture tests.
  *
- * Rate-limit detection and reset-time parsing live in ./ratelimit.ts, behind fixture tests.
+ * This module turns them into the {@link ProviderAdapter}s core registers.
  */
-import { type AgentState, isPermissionNotification, type LaunchSpec } from '@emberline/adapter-sdk';
-import type { AgentPersona, HookEventName, HookPayload } from '@emberline/protocol';
-import { isQuotaWaitNotification, type LimitContext, rateLimitFromHook } from './ratelimit.js';
+import {
+  type AgentState,
+  decorateWithPersona,
+  type HookPayloadLike,
+  nextStateFromHookWith,
+  type ProviderAdapter,
+} from '@emberline/adapter-sdk';
+import type { HookEventName } from '@emberline/protocol';
+import { buildLaunchSpec } from './launch.js';
+import {
+  isQuotaWaitNotification,
+  type LimitContext,
+  rateLimitFromHook,
+  rateLimitFromScreen,
+  transientErrorFromHook,
+} from './ratelimit.js';
+import { buildSecondaryCliLaunchSpec, headlessModeProblem, type SecondaryAgent } from './secondary.js';
 
+export * from './launch.js';
+export * from './personas.js';
 export * from './ratelimit.js';
+export * from './secondary.js';
+export * from './settings.js';
+export { isAutonomousPermissionMode, stateAfterExit } from '@emberline/adapter-sdk';
 
-export const CLAUDE_ADAPTER_ID = 'claude';
-
-export interface PersonaSpec {
-  id: AgentPersona;
-  label: string;
-  shortLabel: string;
-  roleTitle: string;
-  systemPrompt: string;
-}
-
-export const ANTI_SLOP_ENGINEERING_RULES = [
-  '[ANTI-AI-SLOP & CODE HYGIENE CONSTITUTION — STRICTLY ENFORCED]:',
-  '1. ZERO TYPE EVASION: Never use `: any`, `as any`, `@ts-ignore`, `@ts-expect-error`, or `eslint-disable`. Always define explicit domain types, generics, or Zod schemas.',
-  '2. ZERO PLACEHOLDERS OR STUBS: Never leave `TODO`, `FIXME`, `HACK`, `PLACEHOLDER`, `// implement later`, or empty catch blocks. Implement every function completely.',
-  '3. ZERO PARROT COMMENTS & DEBUG GARBAGE: Do not write comments that merely restate what the next line of code does, and remove all `console.log` / `debugger` statements from production code.',
-  '4. ZERO OVER-ENGINEERING & FILE BLOAT: Do not invent speculative abstractions, unused wrapper classes, or redundant helper layers. Keep files focused and modular (< 450 lines); split large modules cleanly.',
-  '5. ZERO SKIPPED TESTS: Never commit `.skip(`, `xit(`, or `test.todo(`. Every test must run and assert real behavior.',
-].join('\n');
-
-export const ANTI_VIBE_UI_RULES = [
-  '[ANTI-VIBE-CODING & DESIGN CRAFTSMANSHIP CONSTITUTION — STRICTLY ENFORCED]:',
-  '1. BAN COOKIE-CUTTER AI AESTHETICS: Never default to generic purple/indigo-to-pink linear gradients (`#6366f1`, `#8b5cf6`, `#ec4899`), glowing neon glassmorphic slop, or 3 identical emoji-titled marketing cards.',
-  "2. USE PROJECT DESIGN TOKENS: Always inspect the project's existing CSS variables (`var(--...)`), theme palette, spacing scale, and typography first. Avoid scattering hardcoded hex colors when CSS tokens exist.",
-  '3. INTENTIONAL INFORMATION DENSITY: Build high-craft, functional interfaces (Linear / Raycast / Stripe / GitHub Workbench caliber) with clear typographic hierarchy, tabular numerals (`font-variant-numeric: tabular-nums`), keyboard accessibility, and real interactive states (loading, empty, error, active).',
-].join('\n');
-
-/** What every agent needs to know about the runner it works in; appended to the system prompt. */
-export const RUNNER_ENVIRONMENT = [
-  '[RUNNER ENVIRONMENT]:',
-  "You work inside Emberline's runner container: Ubuntu 26.04 as user `node`, with no root and no sudo. `apt-get` is not available; never try it.",
-  '- Preinstalled: Node 24 + npm, Python 3 + pipx, Go, Rust + cargo, gcc/clang/cmake/ninja, git, headless Chromium, Xvfb, and the GTK/webkit2gtk libraries Tauri and Flutter Linux builds need.',
-  '- More SDKs: `emberline-sdk list` shows them and `emberline-sdk install platformio|android|flutter|esp-qemu` installs one at a pinned version into a persistent volume that is already on PATH (JAVA_HOME and ANDROID_HOME are set). Use it instead of downloading SDKs yourself.',
-  '- `npm install -g` and `pipx install` also land in that persistent volume, on PATH. For Python libraries use a venv or pipx; `pip install --user` is blocked.',
-  '- There is no display: run GUI apps and their tests with `xvfb-run -a` (Electron also needs `--no-sandbox --disable-gpu`). There is no Android emulator (no KVM): build APKs and rely on unit and widget tests.',
-  '- Hardware: serial boards show up as `/dev/ttyUSB*` or `/dev/ttyACM*` only when the owner attached them to the runner; check with `ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and never assume one is there.',
-  '- Without a board, test ESP32 / ESP32-S3 / ESP32-C3 firmware in QEMU (`emberline-sdk install esp-qemu`): create a blank flash with `truncate -s 4M flash.bin`, start `qemu-system-xtensa -nographic -machine esp32 -drive file=flash.bin,if=mtd,format=raw -global driver=esp32.gpio,property=strap_mode,value=0x0f -serial tcp::5555,server,nowait` in the background, flash with `pio run -t upload --upload-port socket://localhost:5555`, then stop it and boot normally (without the strap_mode option) with `-serial file:uart.log` under `timeout` to read the serial output.',
-  '- PlatformIO notes: the stock `espressif32` platform only has Arduino core 2.x; for Arduino on ESP32-C6 and other newer chips use the pioarduino platform (`platform = https://github.com/pioarduino/platform-espressif32/releases/download/<release>/platform-espressif32.zip`). Boards with native USB (ESP32-C3/C6/S3) need `-DARDUINO_USB_CDC_ON_BOOT=1` for `Serial` on that port. `pio device monitor` needs a TTY; read a port non-interactively with pyserial under `timeout`.',
-  '- Anything that never exits on its own (serial monitors, dev servers, emulators) must run with `timeout` or in the background and be stopped before your turn ends.',
-].join('\n');
-
-export const AUTONOMOUS_EXECUTION_POLICY = `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
-
-export const AUTONOMOUS_ALLOWED_TOOLS = [
-  'Bash',
-  'Edit',
-  'Write',
-  'Read',
-  'Glob',
-  'Grep',
-  'WebFetch',
-  'WebSearch',
-  'NotebookEdit',
-  'mcp__playwright__*',
-] as const;
-
-export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
-  product_owner: {
-    id: 'product_owner',
-    label: 'Product Owner',
-    shortLabel: 'PO',
-    roleTitle: 'Senior Technical Product Owner & Requirements Architect',
-    systemPrompt:
-      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & build verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
-  },
-  architect: {
-    id: 'architect',
-    label: 'System Architect',
-    shortLabel: 'ARCH',
-    roleTitle: 'Principal Software & Systems Architect',
-    systemPrompt:
-      "You are acting as the Principal Systems Architect for this project. Read PROJECT.md first. Focus on clean module boundaries, API contracts, data flow, scalability, and idiomatic directory structure. Spawn follow-up specialist tickets by writing `.emberline/new-tickets.json` only when your ticket asks for them; the `[Factory]` ticket plans the project's feature work. Execute autonomously without asking clarifying questions.",
-  },
-  ui_ux: {
-    id: 'ui_ux',
-    label: 'UI/UX Engineer',
-    shortLabel: 'UI/UX',
-    roleTitle: 'Staff Design Systems & Frontend UX Engineer',
-    systemPrompt:
-      "You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project's build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.",
-  },
-  coder: {
-    id: 'coder',
-    label: 'Software Engineer',
-    shortLabel: 'DEV',
-    roleTitle: 'Senior Full-Stack Software Engineer',
-    systemPrompt:
-      "You are acting as the Senior Full-Stack Software Engineer for this project. Read PROJECT.md first if it exists. Write clean, production-grade, well-tested backend, engine, state, and API code that adheres to existing repository conventions. When done, run the project's own build and tests for its stack (for example `npm run build`, `pio run`, `cargo check`, `flutter test` or `./gradlew assembleDebug`). Execute autonomously without asking clarifying questions or asking whether to commit.",
-  },
-  dba: {
-    id: 'dba',
-    label: 'Database Architect',
-    shortLabel: 'DBA',
-    roleTitle: 'Principal Database & Data Layer Engineer',
-    systemPrompt:
-      'You are acting as the Principal Database & Data Layer Engineer for this project. Read PROJECT.md first. Focus on normalized schema design, safe reversible migrations, indexing strategy, query performance, and data integrity. Execute autonomously without asking clarifying questions.',
-  },
-  qa: {
-    id: 'qa',
-    label: 'QA & Test Engineer',
-    shortLabel: 'QA',
-    roleTitle: 'Staff Quality Assurance & Verification Engineer',
-    systemPrompt:
-      "You are acting as the Staff QA & Verification Engineer for this project. Read PROJECT.md first. Focus on comprehensive unit, integration, and E2E tests, edge-case coverage, and regression prevention. Always run the test suite and the build for the project's stack. For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it using `mcp__playwright__browser_navigate`, interact with it via `mcp__playwright__browser_click` / `mcp__playwright__browser_snapshot`, and verify there are no console errors in the Live Browser. For a desktop app, run it and its UI tests under `xvfb-run -a`. For firmware, build it and, when no board is attached, run it in QEMU and check its serial output. Execute autonomously without asking whether to commit.",
-  },
-  security: {
-    id: 'security',
-    label: 'Security Engineer',
-    shortLabel: 'SEC',
-    roleTitle: 'Principal Application Security Engineer',
-    systemPrompt:
-      'You are acting as the Principal Application Security Engineer for this project. Read PROJECT.md first. Audit and harden authentication, authorization, input validation, secret handling, injection vectors, and dependency safety. Execute autonomously without asking clarifying questions.',
-  },
-};
-
-/**
- * Prepends role-specific instructions for non-default personas (or when explicitly requested)
- * so the CLI coding agent operates with the chosen specialist mindset.
- */
-export function decoratePromptWithPersona(
-  prompt: string | undefined,
-  persona: AgentPersona = 'coder',
-): string | undefined {
-  if (!prompt) return prompt;
-  if (persona === 'coder') return prompt;
-  const spec = PERSONA_CATALOG[persona] ?? PERSONA_CATALOG.coder;
-  const qualityRules =
-    persona === 'ui_ux'
-      ? `\n\n${ANTI_VIBE_UI_RULES}\n\n${ANTI_SLOP_ENGINEERING_RULES}`
-      : persona === 'product_owner'
-        ? ''
-        : `\n\n${ANTI_SLOP_ENGINEERING_RULES}`;
-  return `[Role: ${spec.roleTitle}]\n${spec.systemPrompt}${qualityRules}\n\n---\nTask:\n${prompt}`;
-}
-
-/** The tool through which a Claude run tells Emberline its ticket is finished (served by `emberline-mcp`). */
-export const COMPLETION_TOOL = 'mcp__emberline__ticket_complete';
-
-/** The tool with which a Claude run starts its own preview and gets the URL to open (served by `emberline-mcp`). */
-export const PREVIEW_TOOL = 'mcp__emberline__preview';
-
-/** The `emberline` server's tools (the Claude fallback of a secondary CLI has neither). */
-const EMBERLINE_TOOLS = [COMPLETION_TOOL, PREVIEW_TOOL];
-
-/** Appended to the prompt of a run that works on a ticket. */
-export const COMPLETION_INSTRUCTION =
-  'When this ticket is finished and its work is saved in the worktree, call the `ticket_complete` tool with a short summary and a handoff note for whoever builds on it. If it cannot be finished, call it with `blockers` listing why. Do not call it while you are waiting for an answer to a question.';
-
-/** Hooks Emberline listens to for state detection (docs/DESIGN.md §3.3). */
-export const WATCHED_HOOKS: readonly HookEventName[] = [
-  'SessionStart',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PostToolUse',
-  'Notification',
-  'Stop',
-  'StopFailure',
-  'SessionEnd',
-];
-
-interface HookCommand {
-  type: 'command';
-  command: string;
-  timeout?: number;
-}
-
-interface HookMatcherGroup {
-  matcher?: string;
-  hooks: HookCommand[];
-}
-
-export interface ClaudeHookSettings {
-  hooks: Partial<Record<HookEventName, HookMatcherGroup[]>>;
-  /** Renderer; any value also stops Claude Code from offering the fullscreen one mid-turn. */
-  tui: 'default';
-  spinnerTipsEnabled: false;
-  /** The bypass-mode warning defaults to "No, exit"; nobody is there to answer it. */
-  skipDangerousModePermissionPrompt: true;
-  /** A fresh worktree is never "trusted", so a repo's .mcp.json would be asked about on every run. */
-  enableAllProjectMcpServers: true;
-  /** When a safeguard flags a message, switch models instead of asking which to prefer. */
-  switchModelsOnFlag: true;
-  skillOverrides: { 'auto-mode-setup': 'off' };
-  modelProposedGoals: 'disabled';
-  /**
-   * The CLI pipes its status (with subscription `rate_limits`) to this runner script, which keeps the
-   * latest limits for Emberline's usage view; Emberline never reads or sends the login token itself.
-   */
-  statusLine: { type: 'command'; command: string; padding: 0 };
-  /** Auto-continue a question the agent asks despite running unattended. */
-  askUserQuestionTimeout?: string;
-  permissions: {
-    /** Always set: otherwise Claude Code offers to make auto mode the default, mid-session. */
-    defaultMode: ClaudePermissionMode;
-    allow?: string[];
-  };
-}
-
-/** Tool events require a matcher; an empty string matches every tool. */
-const MATCHER_EVENTS = new Set<HookEventName>(['PreToolUse', 'PostToolUse']);
-
-/**
- * Builds the settings object passed to `claude --settings <json>` for a run.
- * Every watched hook invokes `<hookCommand> <EventName>`; the run id travels via env.
- * When `autonomous` is enabled, pre-allows Bash/Edit/Write tools and sets `defaultMode: 'auto'`.
- *
- * Settings passed this way override the user's own (~/.claude/settings.json). They also answer, in
- * advance, every dialog Claude Code would otherwise open in the terminal and wait on: Emberline reads
- * the agent's screen and hooks, but nobody sits at the keyboard of an unattended run.
- */
-export function buildHookSettings(
-  hookCommand: string,
-  timeoutSeconds = 5,
-  autonomous = false,
-  permissionMode: ClaudePermissionMode = 'default',
-): ClaudeHookSettings {
-  const hooks: ClaudeHookSettings['hooks'] = {};
-  for (const event of WATCHED_HOOKS) {
-    const group: HookMatcherGroup = {
-      hooks: [{ type: 'command', command: `${hookCommand} ${event}`, timeout: timeoutSeconds }],
-    };
-    if (MATCHER_EVENTS.has(event)) group.matcher = '';
-    hooks[event] = [group];
-  }
-  const base = {
-    hooks,
-    // Classic renderer: Emberline reads the agent's screen (limit banners, Fleet thumbnails), and any
-    // value here also suppresses the "Try the new fullscreen renderer?" dialog mid-turn.
-    tui: 'default',
-    spinnerTipsEnabled: false,
-    skipDangerousModePermissionPrompt: true,
-    enableAllProjectMcpServers: true,
-    switchModelsOnFlag: true,
-    skillOverrides: { 'auto-mode-setup': 'off' },
-    modelProposedGoals: 'disabled',
-    statusLine: { type: 'command', command: 'claude-statusline.mjs', padding: 0 },
-  } as const;
-  if (autonomous) {
-    return {
-      ...base,
-      askUserQuestionTimeout: '60s',
-      permissions: {
-        defaultMode: 'auto',
-        allow: [...AUTONOMOUS_ALLOWED_TOOLS, ...EMBERLINE_TOOLS],
-      },
-    };
-  }
-  // The completion tool is allowed in every mode: signalling "done" must never wait for an approval.
-  // `preview` is not: it runs the worktree's dev script or `docker compose up --build`, files the
-  // agent can edit, so it asks like Bash does here (it is pre-allowed with Bash in the autonomous modes).
-  return { ...base, permissions: { defaultMode: permissionMode, allow: [COMPLETION_TOOL] } };
-}
-
-export interface ClaudeMcpServerSpec {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-  type?: 'stdio' | 'sse' | 'http';
-}
-
-export interface ClaudeMcpConfig {
-  mcpServers: Record<string, ClaudeMcpServerSpec>;
-}
-
-/**
- * Builds the `--mcp-config` payload wiring `@playwright/mcp` to the shared CDP Chromium
- * instance (`http://127.0.0.1:9222`) inside the runner so the user can watch and interact
- * with the agent's browser in real time from the Emberline Live Browser view.
- */
-export function buildPlaywrightMcpConfig(
-  outputDir = './artifacts',
-  cdpEndpoint = 'http://127.0.0.1:9222',
-): ClaudeMcpConfig {
+/** How Claude Code's (and its fallbacks') wording drives the shared hook state machine. */
+function claudeStateRules(ctx: LimitContext | undefined) {
   return {
-    mcpServers: {
-      playwright: {
-        command: 'playwright-mcp',
-        args: ['--cdp-endpoint', cdpEndpoint, '--output-dir', outputDir],
-      },
-    },
+    isRateLimit: (event: string, payload: HookPayloadLike) =>
+      rateLimitFromHook(event, payload, new Date(), 'UTC', ctx) !== undefined,
+    isQuotaWait: isQuotaWaitNotification,
   };
 }
 
 /**
- * The `emberline` stdio server (`emberline-mcp`, serving `ticket_complete` and `preview`). The run's
- * identity reaches it through `${VAR}` expansion of the CLI process env, so the hook token never
- * appears on a command line.
- */
-export function buildEmberlineMcpConfig(): ClaudeMcpConfig {
-  return {
-    mcpServers: {
-      emberline: {
-        type: 'stdio',
-        command: 'emberline-mcp',
-        env: {
-          EMBERLINE_RUN_ID: '${EMBERLINE_RUN_ID}',
-          EMBERLINE_HOOK_TOKEN: '${EMBERLINE_HOOK_TOKEN}',
-          EMBERLINE_CORE_URL: '${EMBERLINE_CORE_URL}',
-        },
-      },
-    },
-  };
-}
-
-export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions';
-
-export type ClaudeModelTier =
-  | 'auto'
-  | 'fable'
-  | 'opus'
-  | 'sonnet'
-  | 'haiku'
-  | 'argon'
-  | 'gemini-pro'
-  | 'gemini-flash'
-  | 'gemini-flash-lite'
-  | 'o3'
-  | 'gpt-4o'
-  | 'o4-mini'
-  | 'gpt-4o-mini';
-
-export interface ClaudeLaunchOptions {
-  runId: string;
-  /** Per-run secret the hook presents to core. */
-  hookToken: string;
-  /** Base URL of core as reachable from the runner. */
-  coreUrl: string;
-  /** Executable names/paths inside the runner. */
-  claudeCommand?: string;
-  hookCommand?: string;
-  permissionMode?: ClaudePermissionMode;
-  /** Optional model tier (fable, opus, sonnet, haiku, etc.). */
-  model?: ClaudeModelTier;
-  /** Initial prompt; empty starts an idle interactive session. */
-  prompt?: string;
-  /** Claude session id to continue (`--resume`). */
-  resumeSessionId?: string;
-  /** When true, passes `--mcp-config` wiring headless `@playwright/mcp`. */
-  playwrightMcp?: boolean;
-  /** Optional persona-scoped MCP servers from the Factory MCP Registry. */
-  customMcpServers?: Record<string, ClaudeMcpServerSpec>;
-  /** The run works on a ticket: its prompt gets the `ticket_complete` instruction. */
-  ticketRun?: boolean;
-  /** Optional active Skill / Rule Plugin instructions to append to the system prompt. */
-  extraSystemPrompt?: string;
-}
-
-export function resolveClaudeCliModelFlag(model?: ClaudeModelTier): string | undefined {
-  if (!model || model === 'auto') return undefined;
-  if (model === 'fable' || model === 'opus' || model === 'o3') return 'opus';
-  if (
-    model === 'sonnet' ||
-    model === 'argon' ||
-    model === 'gemini-pro' ||
-    model === 'gemini-flash' ||
-    model === 'gpt-4o' ||
-    model === 'o4-mini'
-  ) {
-    return 'sonnet';
-  }
-  if (model === 'haiku' || model === 'gemini-flash-lite' || model === 'gpt-4o-mini') return 'haiku';
-  return undefined;
-}
-
-/**
- * Only `auto` and `bypassPermissions` run unattended. `default` and `acceptEdits` keep Claude's
- * own approval prompts for commands, and `plan` never edits.
- */
-export function isAutonomousPermissionMode(mode: ClaudePermissionMode | undefined): boolean {
-  return mode === 'auto' || mode === 'bypassPermissions';
-}
-
-/** CLIs that run a prompt with `-p`: nobody can answer their approval questions. Names as the web shows them. */
-const HEADLESS_AGENT_NAMES: ReadonlyMap<string, string> = new Map([
-  ['antigravity', 'Antigravity'],
-  ['copilot', 'Copilot'],
-  ['gemini', 'Gemini'],
-]);
-/** The modes in which those CLIs would ask, with the permission picker's labels. */
-const ASKING_MODE_LABELS: ReadonlyMap<ClaudePermissionMode, string> = new Map([
-  ['default', 'Ask'],
-  ['acceptEdits', 'Accept edits'],
-]);
-
-/**
- * Why `agent` cannot run a prompt in `mode`, or null. A headless CLI denies, silently, every action
- * that needs approval; `plan` is read-only by request, and without a prompt the CLI runs interactively.
- */
-export function headlessModeProblem(
-  agent: string,
-  mode: ClaudePermissionMode | undefined,
-  hasPrompt: boolean,
-): string | null {
-  const name = HEADLESS_AGENT_NAMES.get(agent);
-  const label = ASKING_MODE_LABELS.get(mode ?? 'default');
-  if (!hasPrompt || !name || !label) return null;
-  return `${name} runs without a terminal to answer in, so in ${label} mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.`;
-}
-
-/**
- * In `auto`/`bypassPermissions` the session starts unattended with pre-authorized Bash/Edit/Write
- * permissions and the autonomous non-interactive system prompt.
- */
-export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
-  const isAutonomous = isAutonomousPermissionMode(options.permissionMode);
-  const settings = buildHookSettings(
-    options.hookCommand ?? 'emberline-hook',
-    5,
-    isAutonomous,
-    options.permissionMode ?? 'default',
-  );
-  const customServerKeys = options.customMcpServers ? Object.keys(options.customMcpServers) : [];
-  if (isAutonomous && settings.permissions?.allow && customServerKeys.length > 0) {
-    const allowSet = new Set(settings.permissions.allow);
-    for (const srvId of customServerKeys) {
-      allowSet.add(`mcp__${srvId}__*`);
-    }
-    settings.permissions.allow = Array.from(allowSet);
-  }
-  // Claude in Chrome would offer to drive the user's own browser (its extension is found through the
-  // account) in a dialog nobody answers; runs use the runner's headless Chromium instead.
-  const args = ['--settings', JSON.stringify(settings), '--no-chrome'];
-  // `emberline` is added last so a registry server can never shadow it.
-  const mergedServers: Record<string, ClaudeMcpServerSpec> = {
-    ...(options.playwrightMcp ? buildPlaywrightMcpConfig().mcpServers : {}),
-    ...options.customMcpServers,
-    ...buildEmberlineMcpConfig().mcpServers,
-  };
-  args.push('--mcp-config', JSON.stringify({ mcpServers: mergedServers }));
-  const cliModel = resolveClaudeCliModelFlag(options.model);
-  if (cliModel) {
-    args.push('--model', cliModel);
-  }
-  if (isAutonomous) {
-    const cliMode = options.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto';
-    args.push('--permission-mode', cliMode);
-    let extraPolicy =
-      options.model === 'fable'
-        ? `${AUTONOMOUS_EXECUTION_POLICY}\n[FABLE DEEP-ANALYSIS MODE: Perform deep architectural synthesis, edge-case analysis, and root-cause verification before writing code.]`
-        : AUTONOMOUS_EXECUTION_POLICY;
-    extraPolicy = `${extraPolicy}\n\n${RUNNER_ENVIRONMENT}`;
-    if (options.extraSystemPrompt?.trim()) {
-      extraPolicy = `${extraPolicy}\n\n${options.extraSystemPrompt.trim()}`;
-    }
-    args.push('--append-system-prompt', extraPolicy);
-  } else {
-    if (options.permissionMode && options.permissionMode !== 'default') {
-      args.push('--permission-mode', options.permissionMode);
-    }
-    const extra = options.extraSystemPrompt?.trim();
-    args.push('--append-system-prompt', extra ? `${RUNNER_ENVIRONMENT}\n\n${extra}` : RUNNER_ENVIRONMENT);
-  }
-  if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);
-  // `--` ends option parsing so a prompt starting with "-" is never read as a flag.
-  if (options.prompt) {
-    args.push('--', options.ticketRun ? `${options.prompt}\n\n${COMPLETION_INSTRUCTION}` : options.prompt);
-  }
-  return {
-    file: options.claudeCommand ?? 'claude',
-    args,
-    env: {
-      EMBERLINE_RUN_ID: options.runId,
-      EMBERLINE_HOOK_TOKEN: options.hookToken,
-      EMBERLINE_CORE_URL: options.coreUrl,
-      DISABLE_AUTOUPDATER: '1',
-      // Each run gets a fresh git worktree, and Claude Code (2.1.300+) only inherits folder trust up to
-      // the git root, so every run would stop at the "trust this folder?" dialog. The runner container
-      // is the sandbox boundary; this tells Claude Code so.
-      CLAUDE_CODE_SANDBOXED: '1',
-      ...CLAUDE_DIALOG_ENV,
-    },
-  };
-}
-
-export interface SecondaryCliLaunchOptions {
-  agent: 'antigravity' | 'copilot' | 'gemini' | 'codex' | 'aider';
-  model?: ClaudeModelTier;
-  runId: string;
-  hookToken: string;
-  coreUrl: string;
-  hookCommand?: string;
-  permissionMode?: ClaudePermissionMode;
-  prompt?: string;
-  resumeSessionId?: string;
-  extraEnv?: Record<string, string>;
-}
-
-/** Env that keeps Claude Code's surveys and cost acknowledgements out of a run's terminal. */
-const CLAUDE_DIALOG_ENV = {
-  // The session-feedback survey takes keystrokes; a prompt typed into the PTY must not answer it.
-  CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
-  // The cost-threshold acknowledgement (API billing) would wait for a keypress after a turn.
-  DISABLE_COST_WARNINGS: '1',
-} as const;
-
-/** Run settings for the Claude fallback of a secondary CLI: every pre-answered dialog, no hooks. */
-function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, 'hooks'> {
-  const { hooks: _hooks, ...dialogs } = buildHookSettings('emberline-hook', 5, autonomous);
-  // Secondary CLIs have no `emberline` MCP server and signal completion by their exit code.
-  const { allow, ...permissions } = dialogs.permissions ?? {};
-  const kept = (allow ?? []).filter((rule) => !EMBERLINE_TOOLS.includes(rule));
-  return { ...dialogs, permissions: { ...permissions, ...(kept.length > 0 ? { allow: kept } : {}) } };
-}
-
-/**
- * Builds a launch spec for secondary CLI coding agents (`antigravity`, `copilot`, `gemini`, `codex`, or `aider`),
- * wrapping execution with `emberline-hook` lifecycle signals so core tracks `working` -> `done` / `failed`.
- * If a secondary CLI binary is not yet installed in the runner image, gracefully falls back to `claude` with
- * the corresponding model & specialist mode so runs never fail with `command not found`.
- */
-export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
-  const hook = options.hookCommand ?? 'emberline-hook';
-  const autoApprove = isAutonomousPermissionMode(options.permissionMode);
-  const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
-  // The Claude fallback gets the same pre-answered dialogs as a Claude run (its state comes from this
-  // script's hooks, so not Claude's own).
-  const claudeFallback = `claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
-  const extraEnv: Record<string, string> = {};
-
-  // Every CLI below has first-run questions (folder trust, update offers, onboarding) that would wait
-  // in the PTY for an answer nobody gives; each one is pre-answered with a flag, an env var, or a
-  // config entry that `emberline-cli-seed` merges into the runner's home before the CLI starts.
-  let cliCmd: string;
-  if (options.agent === 'antigravity') {
-    const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
-    const modelFlag =
-      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
-    const continueFlag = options.resumeSessionId ? '-c ' : '';
-    // The agy wrapper may fall back to Gemini CLI, which refuses untrusted folders.
-    extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
-    cliCmd = options.prompt
-      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
-      : `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}; else claude --model ${fallbackModel}; fi`;
-  } else if (options.agent === 'copilot') {
-    const bin = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
-    // Unattended runs may use every tool and never ask; otherwise -p denies what needs approval.
-    const flags = autoApprove ? '--allow-all --no-ask-user ' : '';
-    extraEnv.COPILOT_AUTO_UPDATE = 'false';
-    cliCmd = options.prompt
-      ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${flags}-p "$EMBERLINE_PROMPT"; elif command -v gh >/dev/null 2>&1 && gh copilot --version >/dev/null 2>&1; then gh copilot suggest -t shell "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
-      : `if command -v ${bin} >/dev/null 2>&1; then ${`${bin} ${flags}`.trim()}; else claude --model sonnet; fi`;
-  } else if (options.agent === 'gemini') {
-    const bin = process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini';
-    const geminiModel =
-      options.model === 'gemini-pro'
-        ? '--model gemini-2.5-pro '
-        : options.model === 'gemini-flash'
-          ? '--model gemini-2.5-flash '
-          : options.model === 'gemini-flash-lite'
-            ? '--model gemini-2.5-flash-lite '
-            : '';
-    // Gemini CLI refuses (exit 55) or downgrades --yolo in folders it does not trust; every run is a
-    // fresh worktree. In -p mode, tools that need approval are denied rather than asked.
-    extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
-    const approval = autoApprove
-      ? '--yolo '
-      : options.permissionMode === 'acceptEdits'
-        ? '--approval-mode auto_edit '
-        : '';
-    const flags = `${approval}${geminiModel}`;
-    cliCmd = options.prompt ? `${bin} ${flags}-p "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
-  } else if (options.agent === 'codex') {
-    const bin = process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex';
-    const codexModel = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
-    // Codex's own sandbox (bubblewrap) cannot run inside the runner container, which is the sandbox.
-    // `--full-auto` no longer exists; unattended means no approvals and no inner sandbox.
-    const access = autoApprove ? '--dangerously-bypass-approvals-and-sandbox ' : '-s danger-full-access ';
-    const noUpdate = '-c check_for_update_on_startup=false ';
-    // `codex exec` reads CODEX_API_KEY, not OPENAI_API_KEY.
-    const apiKey =
-      'if [ -n "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then export CODEX_API_KEY="$OPENAI_API_KEY"; fi; ';
-    // The interactive UI asks to trust the repository root (where the worktree's .git lives).
-    const trust =
-      '-c "projects.\\"$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)")\\".trust_level=\\"trusted\\"" ';
-    cliCmd = options.prompt
-      ? `${apiKey}${bin} exec ${noUpdate}${access}--skip-git-repo-check ${codexModel}"$EMBERLINE_PROMPT"`
-      : `${apiKey}${bin} ${noUpdate}${trust}${autoApprove ? '--dangerously-bypass-approvals-and-sandbox ' : ''}${codexModel}`.trim();
-  } else {
-    const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
-    const aiderModel = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
-    // First-run questions (gitignore, release notes, analytics, model warnings, URLs, updates) would
-    // wait on the PTY; --no-gitignore also keeps aider from editing the project's .gitignore.
-    const quiet =
-      '--no-gitignore --no-show-release-notes --no-show-model-warnings --no-check-update --analytics-disable --no-detect-urls ';
-    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${aiderModel}`;
-    cliCmd = options.prompt ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
-  }
-
-  const watcherSnippet = options.prompt
-    ? `( LAST_GIT=""; while sleep 2; do CUR_GIT=$(git status --porcelain 2>/dev/null | head -n 5 | tr '\\n' ' ' | sed 's/["\\\\]/ /g'); if [ -n "$CUR_GIT" ] && [ "$CUR_GIT" != "$LAST_GIT" ]; then LAST_GIT="$CUR_GIT"; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PreToolUse >/dev/null 2>&1 || true; echo "{\\"tool_name\\":\\"Edit\\",\\"message\\":\\"Worktree updated: $CUR_GIT\\"}" | ${hook} PostToolUse >/dev/null 2>&1 || true; fi; done ) & EMBERLINE_WATCH_PID=$!`
-    : '';
-
-  const logFile = `/tmp/emberline-cli-${options.runId}.log`;
-  const statusFile = `/tmp/emberline-cli-${options.runId}.status`;
-  const wrappedExec = options.prompt
-    ? `rm -f "${logFile}" "${statusFile}"; { { ${cliCmd}; echo $? > "${statusFile}"; } 2>&1 | tee "${logFile}"; }; STATUS=$(cat "${statusFile}" 2>/dev/null || echo 1); rm -f "${statusFile}"${
-        // Aider reports a failed login and still exits 0.
-        options.agent === 'aider'
-          ? `; if [ "$STATUS" -eq 0 ] && grep -qi "not able to authenticate" "${logFile}" 2>/dev/null; then STATUS=1; fi`
-          : ''
-      }`
-    : `${cliCmd}; STATUS=$?`;
-
-  const script = [
-    // Merges the per-CLI config entries that pre-answer first-run questions (never blocks the run).
-    `emberline-cli-seed.mjs ${options.agent} >/dev/null 2>&1 || true`,
-    `echo '{"session_id":"'${options.agent}-${options.runId.slice(0, 8)}'"}' | ${hook} SessionStart >/dev/null 2>&1 || true`,
-    options.prompt ? `echo '{"prompt":"started"}' | ${hook} UserPromptSubmit >/dev/null 2>&1 || true` : '',
-    options.prompt
-      ? `echo '{"tool_name":"${options.agent}","message":"Executing ${options.agent} CLI task"}' | ${hook} PreToolUse >/dev/null 2>&1 || true`
-      : '',
-    watcherSnippet,
-    wrappedExec,
-    options.prompt ? `kill "$EMBERLINE_WATCH_PID" >/dev/null 2>&1 || true` : '',
-    // On failure the hook gets the end of the output: the error (e.g. agy's quota message with its
-    // reset time) is the last line, after whatever the CLI printed while it worked.
-    `if [ "$STATUS" -eq 0 ]; then rm -f "${logFile}"; echo '{"tool_name":"${options.agent}","message":"Completed ${options.agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else ERR_DETAIL=$(sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' "${logFile}" 2>/dev/null | tr '\\r' '\\n' | sed '/^[[:space:]]*$/d' | tail -n 6 | tr '\\n' ' ' | sed 's/["\\\\]/ /g' | tail -c 420); rm -f "${logFile}"; if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL="${options.agent} exited with code $STATUS"; fi; printf "\\n\\033[1;31m=== ❌ ${options.agent} exited with code %s ===\\033[0m\\n%s\\n" "$STATUS" "$ERR_DETAIL"; echo "{\\"error\\":\\"cli_exit\\",\\"reason\\":\\"$ERR_DETAIL\\",\\"message\\":\\"$ERR_DETAIL\\"}" | ${hook} StopFailure >/dev/null 2>&1 || true; sleep 4; fi`,
-    `exit $STATUS`,
-  ]
-    .filter(Boolean)
-    .join('; ');
-
-  return {
-    file: 'sh',
-    args: ['-c', script],
-    env: {
-      ...options.extraEnv,
-      EMBERLINE_RUN_ID: options.runId,
-      EMBERLINE_HOOK_TOKEN: options.hookToken,
-      EMBERLINE_CORE_URL: options.coreUrl,
-      EMBERLINE_PROMPT: options.prompt ?? '',
-      // Read by the runner's CLI wrappers (e.g. `agy`) to decide whether to skip approval prompts.
-      EMBERLINE_AUTO_APPROVE: autoApprove ? '1' : '0',
-      EMBERLINE_CLAUDE_SETTINGS: JSON.stringify(claudeFallbackSettings(autoApprove)),
-      ...CLAUDE_DIALOG_ENV,
-      ...extraEnv,
-    },
-  };
-}
-
-/**
- * Derives the next agent state from a hook. Returns `undefined` when the state is unchanged.
- *
- * - SessionStart: interactive session is up and idle until a prompt arrives.
- * - UserPromptSubmit / Pre/PostToolUse: the agent is working.
- * - Notification: permission prompts always need the user; idle reminders only matter while
- *   the agent has not finished (after `Stop` the run is already `done`) or hit a limit.
- * - Stop / SessionEnd: turn or session finished.
- * - StopFailure: the turn died on an API error. `rate_limit` -> `rate_limited` (the scheduler
- *   resumes it); anything else needs the user.
+ * Derives the next agent state from a hook (see the SDK's `nextStateFromHookWith`). `StopFailure`
+ * with a usage limit -> `rate_limited` (the scheduler resumes it); any other error needs the user.
  */
 export function nextStateFromHook(
   current: AgentState,
   event: HookEventName,
-  payload: HookPayload = {},
+  payload: HookPayloadLike = {},
   ctx?: LimitContext,
 ): AgentState | undefined {
-  if (current === 'failed') return undefined;
-  let next: AgentState | undefined;
-  switch (event) {
-    case 'SessionStart':
-      // A fresh session waits for its prompt. Mid-run, `resume` (Claude Code relaunched itself, e.g.
-      // after a renderer switch) and `clear` drop any turn in flight: the agent is back at an empty
-      // prompt. `compact` happens inside a turn, which keeps going.
-      if (current === 'starting') next = 'waiting_input';
-      else if (payload.source === 'resume' || payload.source === 'clear') next = 'waiting_input';
-      else next = undefined;
-      break;
-    case 'UserPromptSubmit':
-    case 'PreToolUse':
-    case 'PostToolUse':
-      next = 'working';
-      break;
-    case 'Notification':
-      if (isQuotaWaitNotification(payload)) next = current === 'done' ? undefined : 'rate_limited';
-      else if (isPermissionNotification(payload)) next = 'waiting_input';
-      else next = current === 'done' || current === 'rate_limited' ? undefined : 'waiting_input';
-      break;
-    case 'Stop':
-      next = rateLimitFromHook(event, payload, new Date(), 'UTC', ctx) ? 'rate_limited' : 'done';
-      break;
-    case 'StopFailure':
-      next = rateLimitFromHook(event, payload, new Date(), 'UTC', ctx) ? 'rate_limited' : 'waiting_input';
-      break;
-    case 'SessionEnd':
-      next = current === 'rate_limited' ? undefined : 'done';
-      break;
-    default:
-      next = undefined;
-  }
-  return next === current ? undefined : next;
-}
-
-/** State after the PTY process exited (hooks may not have fired, e.g. on a crash). */
-export function stateAfterExit(current: AgentState, exitCode: number | null): AgentState {
-  // A rate-limited run whose process went away stays rate-limited: it resumes via --resume.
-  if (current === 'done' || current === 'failed' || current === 'rate_limited') return current;
-  return exitCode === 0 ? 'done' : 'failed';
+  return nextStateFromHookWith(claudeStateRules(ctx), current, event, payload);
 }
 
 /** Prompt typed into a session to pick up after a limit reset. */
 export const CONTINUE_PROMPT = 'Continue where you left off.';
+
+export const CLAUDE_ADAPTER_ID = 'claude';
+
+/** Claude Code: native hooks through `--settings`, the `emberline` MCP server, skill prompts. */
+export const claudeAdapter: ProviderAdapter = {
+  id: CLAUDE_ADAPTER_ID,
+  displayName: 'Claude',
+  hooks: 'native',
+  completionSignal: 'tool',
+  launch: (ctx) =>
+    buildLaunchSpec({
+      runId: ctx.runId,
+      hookToken: ctx.hookToken,
+      coreUrl: ctx.coreUrl,
+      claudeCommand: ctx.claude.command,
+      hookCommand: ctx.hookCommand,
+      permissionMode: ctx.permissionMode,
+      model: ctx.model,
+      prompt: ctx.prompt,
+      resumeSessionId: ctx.resumeSessionId,
+      playwrightMcp: ctx.claude.playwrightMcp,
+      ticketRun: ctx.claude.ticketRun,
+      customMcpServers: ctx.claude.customMcpServers,
+      extraSystemPrompt: ctx.claude.extraSystemPrompt,
+    }),
+  decoratePrompt: decorateWithPersona,
+  headlessProblem: () => null,
+  nextState: (current, event, payload, options) =>
+    nextStateFromHookWith(
+      claudeStateRules({ agent: CLAUDE_ADAPTER_ID, model: options?.model }),
+      current,
+      event,
+      payload,
+    ),
+  rateLimitFromHook: (event, payload, options) =>
+    rateLimitFromHook(event, payload, options?.now, options?.timeZone, {
+      agent: CLAUDE_ADAPTER_ID,
+      model: options?.model,
+    }),
+  rateLimitFromScreen: (ansi, options) =>
+    rateLimitFromScreen(ansi, options?.now, options?.timeZone, {
+      agent: CLAUDE_ADAPTER_ID,
+      model: options?.model,
+    }),
+  transientErrorFromHook: (event, payload, options) =>
+    transientErrorFromHook(event, payload, { agent: CLAUDE_ADAPTER_ID, model: options?.model }),
+};
+
+/** A wrapped CLI with a Claude fallback (Antigravity, Copilot, Aider). */
+export function secondaryCliAdapter(agent: SecondaryAgent, displayName: string): ProviderAdapter {
+  const ctx = (model?: string | null): LimitContext => ({ agent, model });
+  return {
+    id: agent,
+    displayName,
+    hooks: 'wrapper',
+    completionSignal: 'exit',
+    launch: (launch) =>
+      buildSecondaryCliLaunchSpec({
+        agent,
+        model: launch.model,
+        runId: launch.runId,
+        hookToken: launch.hookToken,
+        coreUrl: launch.coreUrl,
+        hookCommand: launch.hookCommand,
+        permissionMode: launch.permissionMode,
+        prompt: launch.prompt,
+        resumeSessionId: launch.resumeSessionId,
+        extraEnv: launch.extraEnv,
+      }),
+    decoratePrompt: decorateWithPersona,
+    headlessProblem: (mode, hasPrompt) => headlessModeProblem(agent, mode, hasPrompt),
+    nextState: (current, event, payload, options) =>
+      nextStateFromHookWith(claudeStateRules(ctx(options?.model)), current, event, payload),
+    rateLimitFromHook: (event, payload, options) =>
+      rateLimitFromHook(event, payload, options?.now, options?.timeZone, ctx(options?.model)),
+    rateLimitFromScreen: (ansi, options) =>
+      rateLimitFromScreen(ansi, options?.now, options?.timeZone, ctx(options?.model)),
+    transientErrorFromHook: (event, payload, options) =>
+      transientErrorFromHook(event, payload, ctx(options?.model)),
+  };
+}

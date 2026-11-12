@@ -12,6 +12,8 @@ const WORKSPACE = [
   '@emberline/protocol',
   '@emberline/adapter-sdk',
   '@emberline/adapter-claude',
+  '@emberline/adapter-codex',
+  '@emberline/adapter-gemini',
   '@emberline/hook',
   '@emberline/core',
   '@emberline/web',
@@ -24,6 +26,10 @@ const LAYERS = [
   {
     files: ['packages/adapter-claude/src/**/*.ts'],
     forbidden: allowOnly('@emberline/protocol', '@emberline/adapter-sdk'),
+  },
+  {
+    files: ['packages/adapter-codex/src/**/*.ts', 'packages/adapter-gemini/src/**/*.ts'],
+    forbidden: allowOnly('@emberline/adapter-sdk'),
   },
   { files: ['packages/hook/src/**/*.ts'], forbidden: allowOnly('@emberline/protocol') },
   { files: ['apps/ptyd/src/**/*.ts'], forbidden: allowOnly('@emberline/protocol') },

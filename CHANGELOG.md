@@ -13,6 +13,9 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - CI now runs the upgrade paths (`make e2e-upgrade`, `e2e/upgrade-paths.sh`): it seeds data volumes as 0.5.2, 0.6.2 and 0.7.0 left them, starts the current images on each release's own compose file and fails if a migration ran without a snapshot or broke a seeded row. See "Upgrade paths checked in CI" under Upgrade notes.
 - A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
+- Codex and Gemini CLI have adapters of their own (`packages/adapter-codex`, `packages/adapter-gemini`); core reaches every CLI through one registry keyed by agent id.
+- Codex runs read the reset time of a usage limit from Codex's own message ("try again at 3:42 PM", "try again at Oct 15th, 2026 9:05 AM"), and, when the output does not say, from the session's latest rate-limit record, so they resume at the reset instead of retrying every 15 minutes. "Quota exceeded. Check your plan and billing details." is a billing problem, not a limit.
+- Gemini runs read "Your quota will reset after 2h31m12s", "Please retry in 38.06s" and the interactive "Access resets at 3:45 PM GMT+3". A Gemini limit that names a model (Pro, Flash, Flash-Lite) pauses only that model's lane; a model with no quota at all on the account's tier (`limit: 0`) is no longer waited for.
 
 ### Upgrade notes
 

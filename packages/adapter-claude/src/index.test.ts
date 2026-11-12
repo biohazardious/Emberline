@@ -153,13 +153,13 @@ describe('buildLaunchSpec', () => {
     const secondary = { runId: 'r1', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'go' };
     const careful = buildSecondaryCliLaunchSpec({
       ...secondary,
-      agent: 'gemini',
+      agent: 'aider',
       permissionMode: 'acceptEdits',
     });
-    expect(careful.args[1]).not.toContain('--yolo');
+    expect(careful.args[1]).not.toContain('--yes-always');
     expect(careful.env.EMBERLINE_AUTO_APPROVE).toBe('0');
-    const unattended = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'gemini', permissionMode: 'auto' });
-    expect(unattended.args[1]).toContain('--yolo');
+    const unattended = buildSecondaryCliLaunchSpec({ ...secondary, agent: 'aider', permissionMode: 'auto' });
+    expect(unattended.args[1]).toContain('--yes-always');
     expect(unattended.env.EMBERLINE_AUTO_APPROVE).toBe('1');
   });
 
@@ -254,7 +254,7 @@ describe('stateAfterExit', () => {
 });
 
 describe('headlessModeProblem', () => {
-  const names = { antigravity: 'Antigravity', copilot: 'Copilot', gemini: 'Gemini' } as const;
+  const names = { antigravity: 'Antigravity', copilot: 'Copilot' } as const;
   const labels = { default: 'Ask', acceptEdits: 'Accept edits' } as const;
 
   for (const [agent, name] of Object.entries(names)) {
@@ -277,11 +277,11 @@ describe('headlessModeProblem', () => {
   }
 
   it('an unset mode is Ask', () => {
-    expect(headlessModeProblem('gemini', undefined, true)).toContain('in Ask mode');
+    expect(headlessModeProblem('copilot', undefined, true)).toContain('in Ask mode');
   });
 
-  it('codex, aider and claude are unaffected', () => {
-    for (const agent of ['codex', 'aider', 'claude']) {
+  it('aider and claude are unaffected (Gemini CLI answers for itself in adapter-gemini)', () => {
+    for (const agent of ['aider', 'claude']) {
       for (const mode of ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const) {
         expect(headlessModeProblem(agent, mode, true)).toBeNull();
       }
@@ -293,21 +293,7 @@ describe('secondary CLIs start without first-run questions', () => {
   const base = { runId: 'r1234567', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'do it' };
   const script = (spec: { args: string[] }) => spec.args[1] ?? '';
 
-  it('codex: no removed --full-auto, no inner sandbox, no update offer', () => {
-    const auto = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'auto' });
-    expect(script(auto)).not.toContain('--full-auto');
-    expect(script(auto)).toContain(
-      'exec -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox',
-    );
-    const ask = buildSecondaryCliLaunchSpec({ ...base, agent: 'codex', permissionMode: 'default' });
-    expect(script(ask)).toContain('-s danger-full-access');
-    expect(script(ask)).toContain('export CODEX_API_KEY="$OPENAI_API_KEY"');
-  });
-
-  it('gemini and the agy fallback trust the worktree; accept-edits maps to auto_edit', () => {
-    const gemini = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', permissionMode: 'acceptEdits' });
-    expect(gemini.env.GEMINI_CLI_TRUST_WORKSPACE).toBe('true');
-    expect(script(gemini)).toContain('--approval-mode auto_edit');
+  it('the agy fallback to Gemini CLI trusts the worktree', () => {
     expect(
       buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity' }).env.GEMINI_CLI_TRUST_WORKSPACE,
     ).toBe('true');
@@ -343,15 +329,15 @@ describe('secondary CLIs start without first-run questions', () => {
   });
 
   /** Runs a launch spec's script in a git repo with a fake CLI that records its arguments. */
-  function runWithFake(agent: 'codex' | 'aider', fakeBody: string, prompt?: string) {
+  function runWithFake(fakeBody: string, prompt?: string) {
     const dir = mkdtempSync(path.join(tmpdir(), 'cli-launch-'));
     execFileSync('git', ['init', '-q', dir]);
-    const fake = path.join(dir, `fake-${agent}`);
+    const fake = path.join(dir, 'fake-aider');
     writeFileSync(fake, `#!/bin/sh\n${fakeBody}\n`, { mode: 0o755 });
-    const envKey = agent === 'codex' ? 'EMBERLINE_CODEX_COMMAND' : 'EMBERLINE_AIDER_COMMAND';
+    const envKey = 'EMBERLINE_AIDER_COMMAND';
     process.env[envKey] = fake;
     try {
-      const spec = buildSecondaryCliLaunchSpec({ ...base, agent, prompt });
+      const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'aider', prompt });
       const res = spawnSync(spec.file, spec.args, {
         cwd: dir,
         env: { PATH: process.env.PATH ?? '', HOME: dir, ...spec.env },
@@ -364,18 +350,8 @@ describe('secondary CLIs start without first-run questions', () => {
     }
   }
 
-  it('codex UI trusts the repository root, quoted for its config syntax', () => {
-    const { dir } = runWithFake('codex', 'for a in "$@"; do printf "%s\\n" "$a"; done > "$PWD/args.txt"');
-    const args = readFileSync(path.join(dir, 'args.txt'), 'utf8').split('\n');
-    expect(args).toContain(
-      `projects."${execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel']).toString().trim()}".trust_level="trusted"`,
-    );
-    expect(args).toContain('check_for_update_on_startup=false');
-  });
-
   it('an aider run that could not authenticate fails although aider exits 0', () => {
     const { status } = runWithFake(
-      'aider',
       'echo "The API provider is not able to authenticate you."; exit 0',
       'do it',
     );
@@ -489,7 +465,7 @@ describe('emberline completion tool', () => {
   });
 
   it('leaves secondary CLIs alone', () => {
-    const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'gemini', prompt: 'go' });
+    const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot', prompt: 'go' });
     expect(JSON.stringify(spec)).not.toContain('ticket_complete');
     expect(JSON.stringify(spec)).not.toContain('mcp__emberline__preview');
     expect(JSON.stringify(spec)).not.toContain('emberline-mcp');

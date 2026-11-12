@@ -10,6 +10,8 @@ export default defineConfig({
       { find: /^@emberline\/protocol$/, replacement: r('./packages/protocol/src/index.ts') },
       { find: /^@emberline\/adapter-sdk$/, replacement: r('./packages/adapter-sdk/src/index.ts') },
       { find: /^@emberline\/adapter-claude$/, replacement: r('./packages/adapter-claude/src/index.ts') },
+      { find: /^@emberline\/adapter-codex$/, replacement: r('./packages/adapter-codex/src/index.ts') },
+      { find: /^@emberline\/adapter-gemini$/, replacement: r('./packages/adapter-gemini/src/index.ts') },
       { find: /^@emberline\/ptyd\/client$/, replacement: r('./apps/ptyd/src/client.ts') },
       { find: /^@emberline\/ptyd\/server$/, replacement: r('./apps/ptyd/src/server.ts') },
     ],

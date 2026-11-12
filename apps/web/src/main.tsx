@@ -8,6 +8,7 @@ import './index.css';
 import './error-filter.css';
 import './responsive.css';
 import './board-bulk.css';
+import './review-keyboard.css';
 
 // Apply the saved theme before the first paint, so sign-in and setup match the app.
 try {
@@ -15,6 +16,12 @@ try {
   if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
 } catch {
   // Storage unavailable: the default (dark) theme applies.
+}
+
+const fontLink = document.getElementById('emberline-google-fonts');
+if (fontLink instanceof HTMLLinkElement) {
+  if (fontLink.sheet) fontLink.media = 'all';
+  else fontLink.addEventListener('load', () => (fontLink.media = 'all'), { once: true });
 }
 
 const root = document.getElementById('root');
