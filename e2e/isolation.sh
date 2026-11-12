@@ -72,14 +72,15 @@ E2E_PROBE_WAIT_MS=75000
 check 'SR-15 a session cookie replayed from a container named docker is refused' \
   probe_as_docker cookie '403 session_from_container'
 
-# SR-19: every volume the runner or ops mounts, read as root. The Docker engine's TLS client key
-# (docker-client-certs) is the agents' by design and is not an SSH key.
+# SR-19: every volume the runner or ops mounts, read as root, for any PEM private key header
+# (OpenSSH, PKCS#1 RSA/DSA/EC, PKCS#8 plain or encrypted, SSH2, PGP). The Docker engine's TLS client
+# key (docker-client-certs) is the agents' by design and is not an SSH key.
 scan_volumes() {
   docker run --rm --user root --entrypoint /bin/sh \
     -v "${project}_ptyd-socket:/scan/ptyd-socket:ro" -v "${project}_ops-socket:/scan/ops-socket:ro" \
     -v "${project}_runner-home:/scan/runner-home:ro" -v "${project}_runner-tools:/scan/runner-tools:ro" \
     -v "${project}_runner-logs:/scan/runner-logs:ro" -v "$EMBERLINE_WORKSPACES_HOST_DIR:/scan/workspaces:ro" \
-    "$runner_image" -c "! grep -rlsIE -e '-----BEGIN (OPENSSH|RSA|DSA|EC|ENCRYPTED) PRIVATE KEY-----' /scan"
+    "$runner_image" -c "! grep -rlsIE -e '-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)? ?-{4,5}' /scan"
 }
 check 'SR-19 no private SSH key in any volume the runner or ops mounts' scan_volumes
 

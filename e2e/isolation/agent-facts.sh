@@ -56,9 +56,10 @@ done
 r environsRead "$readable"
 r secretLeaks "${leaks:-none}"
 
-# SR-09: private SSH keys anywhere the runner mounts or the agent can write. The Docker engine's TLS
-# client key (/run/emberline-docker-certs) is the agents' by design and is not an SSH key.
-keys="$(grep -rlsIE -e '-----BEGIN (OPENSSH|RSA|DSA|EC|ENCRYPTED) PRIVATE KEY-----' \
+# SR-09: private keys (any PEM private key header, as SR-19) anywhere the runner mounts or the agent
+# can write. The Docker engine's TLS client key (/run/emberline-docker-certs) is the agents' by design
+# and is not an SSH key.
+keys="$(grep -rlsIE -e '-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)? ?-{4,5}' \
   /workspaces /home/node /opt/ai-tools /run/emberline /var/log/emberline /tmp 2>/dev/null | tr '\n' ' ')"
 r sshKeys "${keys:-none}"
 r logDirReadable "$([ -r /var/log/emberline ] && echo readable || echo refused)"
