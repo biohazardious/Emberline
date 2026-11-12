@@ -1,5 +1,6 @@
 /** API contracts: unified factory settings, theme, code explorer, checkpoints & browser (F7-F11). */
 import { z } from 'zod';
+import { CommitIdentity, DEFAULT_COMMIT_IDENTITY } from './commit-identity.js';
 import { AgentPersona } from './projects.js';
 import { TerminalInfo } from './terminals.js';
 import { AgentId, AgentModelId } from './runs.js';
@@ -285,6 +286,11 @@ export const FactorySettings = z.object({
   buildOutputsQuotaGb: z.number().min(0.5).max(1000).default(5),
   /** A Claude factory run moves its ticket on only after the agent called `ticket_complete`. */
   requireCompletionSignal: z.boolean().default(true),
+  /**
+   * Who Emberline's commits (merges, snapshots, adopt) and the agents' own commits in a run are
+   * made as; a project may override it under Project settings → Repository.
+   */
+  commitIdentity: CommitIdentity.default({ ...DEFAULT_COMMIT_IDENTITY }),
   mcpServers: z.array(McpServerEntry).default(DEFAULT_MCP_SERVERS),
   skillPlugins: z.array(SkillPluginEntry).default(DEFAULT_SKILL_PLUGINS),
   anthropicKeyConfigured: z.boolean().default(false),
@@ -336,6 +342,7 @@ export const UpdateFactorySettingsBody = z
     serializeOverlappingTickets: z.boolean(),
     buildOutputsQuotaGb: z.number().min(0.5).max(1000),
     requireCompletionSignal: z.boolean(),
+    commitIdentity: CommitIdentity,
     mcpServers: z.array(McpServerEntry),
     skillPlugins: z.array(SkillPluginEntry),
     anthropicApiKey: z.string().trim().max(500).nullable(),

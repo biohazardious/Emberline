@@ -2,19 +2,21 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type {
-  ArtifactKind,
-  DiffFile,
-  DiffFileStatus,
-  DiffScope,
-  GitCommitBody,
-  GitCommitResponse,
-  GitPushResponse,
-  GitStageBody,
-  RunArtifact,
-  RunBuildOutput,
-  RunDiffSummary,
-  RunFileDiff,
+import {
+  type ArtifactKind,
+  type CommitIdentity,
+  DEFAULT_COMMIT_IDENTITY,
+  type DiffFile,
+  type DiffFileStatus,
+  type DiffScope,
+  type GitCommitBody,
+  type GitCommitResponse,
+  type GitPushResponse,
+  type GitStageBody,
+  type RunArtifact,
+  type RunBuildOutput,
+  type RunDiffSummary,
+  type RunFileDiff,
 } from '@emberline/protocol';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { unstageScratchFiles } from '../factory/merge.js';
@@ -677,10 +679,12 @@ export async function stageWorktreeFiles(worktreePath: string, body: GitStageBod
   }
 }
 
+/** A person's commit from the run's page; a repository without its own identity gets `identity`. */
 export async function commitWorktree(
   worktreePath: string,
   branch: string | null,
   body: GitCommitBody,
+  identity: CommitIdentity = DEFAULT_COMMIT_IDENTITY,
 ): Promise<GitCommitResponse> {
   if (!existsSync(path.join(worktreePath, '.git'))) throw conflict('project is not a git repository');
   if (body.stageAll) {
@@ -698,8 +702,8 @@ export async function commitWorktree(
   const hasName = await git(worktreePath, ['config', 'user.name']).catch(() => '');
   const hasEmail = await git(worktreePath, ['config', 'user.email']).catch(() => '');
   const identityArgs: string[] = [];
-  if (!hasName) identityArgs.push('-c', 'user.name=Emberline');
-  if (!hasEmail) identityArgs.push('-c', 'user.email=emberline@local');
+  if (!hasName) identityArgs.push('-c', `user.name=${identity.name}`);
+  if (!hasEmail) identityArgs.push('-c', `user.email=${identity.email}`);
 
   try {
     const summary = await git(worktreePath, [...identityArgs, 'commit', '-m', body.message]);

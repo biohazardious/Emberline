@@ -18,7 +18,8 @@ import { projectWorktreeConfig } from '../db/schema.js';
 import { runnerUnavailableCause } from '../command-exec.js';
 import { conflict, HttpError, RUNNER_NOT_REACHABLE, unavailable } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
-import { FACTORY_GIT_IDENTITY, mainWorkspaceBranchStrict, withMainWorkspaceLock } from '../factory/merge.js';
+import { commitIdentityFor, gitIdentityArgs } from '../factory/commit-identity.js';
+import { mainWorkspaceBranchStrict, withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import { shortGitError } from '../repository/git.js';
 import { createExclusiveFile, isMissing, realDirUnder, UnsafePathError } from '../outputs/safe-fs.js';
@@ -208,7 +209,7 @@ export async function saveWorktreeConfig(
         // A commit with paths takes only those paths, whatever else is staged.
         await execGitFile(
           [
-            ...FACTORY_GIT_IDENTITY,
+            ...gitIdentityArgs(commitIdentityFor(db, project.id)),
             'commit',
             '-q',
             '--no-verify',

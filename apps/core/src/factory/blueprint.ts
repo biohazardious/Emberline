@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  type CommitIdentity,
   findOption,
   getDimension,
   getProjectType,
@@ -21,6 +22,7 @@ import {
 } from '@emberline/protocol';
 import { isCommandsUnavailable } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
+import { gitIdentityArgs } from './commit-identity.js';
 import { unstageScratchFiles } from './merge.js';
 import type { TicketService } from '../tickets/service.js';
 
@@ -699,23 +701,18 @@ Prepare **${ctx.name}** for deployment to: ${choice === 'agent' ? 'a target you 
  * Initializes a local git repository in `projectPath` and commits any generated blueprint files
  * so `git worktree` isolation works immediately on brand-new wizard/manual projects.
  */
-export async function initLocalGitRepository(projectPath: string, defaultBranch = 'main'): Promise<void> {
+export async function initLocalGitRepository(
+  projectPath: string,
+  defaultBranch = 'main',
+  identity?: CommitIdentity,
+): Promise<void> {
   if (existsSync(path.join(projectPath, '.git'))) return;
   try {
     await execGitFile(['init', '-b', defaultBranch], { cwd: projectPath });
     await execGitFile(['add', '-A'], { cwd: projectPath });
     await unstageScratchFiles(projectPath);
     await execGitFile(
-      [
-        '-c',
-        'user.name=Emberline Factory',
-        '-c',
-        'user.email=factory@emberline.local',
-        'commit',
-        '--allow-empty',
-        '-m',
-        'chore: initialize project blueprint',
-      ],
+      [...gitIdentityArgs(identity), 'commit', '--allow-empty', '-m', 'chore: initialize project blueprint'],
       { cwd: projectPath },
     );
   } catch (error) {

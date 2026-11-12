@@ -12,6 +12,7 @@ import {
   type AdoptPreviewResponse,
   type AdoptProjectBody,
   type AdoptWriteFile,
+  type CommitIdentity,
   type ImportStatusResponse,
   type Project,
   type ProjectAppType,
@@ -31,7 +32,8 @@ import {
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
 import { importFileContents, inspectImportedProject } from './detect.js';
-import { FACTORY_GIT_IDENTITY, mainWorkspaceBranch, withMainWorkspaceLock } from './merge.js';
+import { gitIdentityArgs } from './commit-identity.js';
+import { mainWorkspaceBranch, withMainWorkspaceLock } from './merge.js';
 import { validateChoices } from './project-plan.js';
 
 const ADOPT_ORDER: readonly AdoptWriteFile[] = ['projectMd', 'claudeMd', 'worktreeYml'];
@@ -429,6 +431,7 @@ export async function executeAdopt(
   workspacesDir: string,
   project: Project,
   body: AdoptInput,
+  identity?: CommitIdentity,
 ): Promise<AdoptResult> {
   return withMainWorkspaceLock(project.path, async () => {
     const plan = await planAdopt(workspacesDir, project, body);
@@ -444,7 +447,16 @@ export async function executeAdopt(
       await execGitFile(['add', '-f', '--', ...paths], inRepo);
       // A commit with paths takes only those paths, whatever else is staged.
       await execGitFile(
-        [...FACTORY_GIT_IDENTITY, 'commit', '-q', '--no-verify', '-m', plan.commitMessage, '--', ...paths],
+        [
+          ...gitIdentityArgs(identity),
+          'commit',
+          '-q',
+          '--no-verify',
+          '-m',
+          plan.commitMessage,
+          '--',
+          ...paths,
+        ],
         inRepo,
       );
     } catch (error) {

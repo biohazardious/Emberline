@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CommitIdentity } from './commit-identity.js';
 import { ForgeProvider } from './forge.js';
 
 export const RepositoryMainState = z.enum([
@@ -58,6 +59,10 @@ export const RepositoryStatus = z.object({
   keepMainPushed: z.boolean(),
   /** The last automatic push's failure (redacted); cleared by any successful push. */
   lastMainPushError: z.string().nullable(),
+  /** This project's own commit identity; null: the factory's (Settings → Factory) is used. */
+  commitIdentity: CommitIdentity.nullable(),
+  /** The factory's commit identity, what a project without its own uses. */
+  factoryCommitIdentity: CommitIdentity,
 });
 export type RepositoryStatus = z.infer<typeof RepositoryStatus>;
 
@@ -82,5 +87,12 @@ export const CreateRepositoryBody = z.object({
 });
 export type CreateRepositoryBody = z.input<typeof CreateRepositoryBody>;
 
-export const UpdateRepositoryBody = z.object({ keepMainPushed: z.boolean() });
+export const UpdateRepositoryBody = z
+  .object({
+    keepMainPushed: z.boolean(),
+    /** null: use the factory's identity again. */
+    commitIdentity: CommitIdentity.nullable(),
+  })
+  .partial()
+  .refine((b) => Object.keys(b).length > 0, 'nothing to update');
 export type UpdateRepositoryBody = z.infer<typeof UpdateRepositoryBody>;

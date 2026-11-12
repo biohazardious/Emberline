@@ -155,6 +155,7 @@ import {
   resolveRunRoutes,
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
+import { commitIdentityFor, gitIdentityEnv } from '../factory/commit-identity.js';
 import { assertCommitSecretFree } from './gates.js';
 import {
   applyRunEvent,
@@ -1899,6 +1900,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           ...extraEnv,
           ...playwrightEnv,
           ...dockerEnv,
+          // Every CLI's own commits (a merge of main, a fix-up) carry the project's commit identity.
+          ...gitIdentityEnv(commitIdentityFor(this.db, row.projectId)),
           EMBERLINE_DEMO_URL: demoUrl,
           EMBERLINE_MODEL: resolvedModel,
         },
@@ -2472,7 +2475,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async commit(id: string, body: GitCommitBody): Promise<GitCommitResponse> {
     const row = this.row(id);
     await assertCommitSecretFree(effectiveFactorySettings(this.db, row.projectId), id, row.worktreePath);
-    const res = await commitWorktree(row.worktreePath, row.branch, body);
+    const res = await commitWorktree(
+      row.worktreePath,
+      row.branch,
+      body,
+      commitIdentityFor(this.db, row.projectId),
+    );
     this.record(id, {
       source: 'user',
       type: 'committed',

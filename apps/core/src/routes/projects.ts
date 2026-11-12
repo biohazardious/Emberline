@@ -135,6 +135,7 @@ import {
   generateClaudeInstructions,
   generateProjectBlueprint,
   effectiveFactorySettings,
+  getCommitIdentity,
   getFactorySettings,
   readProjectGates,
   getSavedCrossCriticResult,
@@ -178,6 +179,7 @@ import {
 } from '../repository/git.js';
 import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
+import { runCommit } from '../factory/commit-identity.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
 import { ToolchainService } from '../toolchain/service.js';
 
@@ -461,7 +463,7 @@ export function registerProjectRoutes(
       // Committed with the first commit, so every run worktree has them.
       await writeMaterials(projectPath, plan.materials, decoded);
       if (body.initGit ?? true) {
-        await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
+        await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main', getCommitIdentity(db));
         // initLocalGitRepository swallows errors; runs need the commit, so a missing one fails the create.
         await execGitFile(['rev-parse', '--verify', 'HEAD'], { cwd: projectPath }).catch(() => {
           throw new Error('git init failed');
@@ -732,7 +734,7 @@ export function registerProjectRoutes(
           // unless the caller opts out. The runner or ops not able to run it fails the create.
           const shouldInitGit = body.initGit ?? true;
           if (shouldInitGit) {
-            await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main');
+            await initLocalGitRepository(projectPath, body.defaultBranch ?? 'main', getCommitIdentity(db));
           }
         } catch (err) {
           const leftovers = existed
@@ -952,6 +954,7 @@ export function registerProjectRoutes(
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
       // Open blocking review comments keep the gate closed for a person too, unless they say otherwise.
       const blocking = openBlockingCount(db, run.id);
+      const commit = runCommit(db, run, ticket);
       const merge = () =>
         syncWorktreeToMainWorkspace({
           worktreePath: run.worktreePath,
@@ -959,6 +962,7 @@ export function registerProjectRoutes(
           ticketKey: ticket?.key ?? null,
           runId: run.id,
           branch: run.branch,
+          ...commit,
           // Only work that is not in main yet is held back: a no-op merge needs no override.
           beforeMerge: () => {
             if (blocking > 0 && !body.force) {

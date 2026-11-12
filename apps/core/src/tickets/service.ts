@@ -37,6 +37,7 @@ import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, max, or
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import type { AgentFileRejection } from '../factory/agent-files.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
+import { runCommit } from '../factory/commit-identity.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, settings, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
@@ -1812,7 +1813,15 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     mainHead: string | null;
     healFailure?: HealFailure;
   } | null> {
-    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale, heal });
+    const ticket = run.ticketId
+      ? (this.db
+          .select({ key: tickets.key, title: tickets.title })
+          .from(tickets)
+          .where(eq(tickets.id, run.ticketId))
+          .get() ?? null)
+      : null;
+    const commit = runCommit(this.db, run, ticket);
+    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale, heal, commit });
     // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
     if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.

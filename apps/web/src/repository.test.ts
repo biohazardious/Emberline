@@ -35,6 +35,8 @@ const base: RepositoryStatus = {
   originMasked: false,
   keepMainPushed: false,
   lastMainPushError: null,
+  commitIdentity: null,
+  factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
 };
 
 describe('mainStateText', () => {

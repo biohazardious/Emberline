@@ -126,9 +126,9 @@ export async function probeMerge(
   }
 }
 
-/** 'feat(EL-10): …' or 'Merge EL-10 (…)' → 'EL-10'. */
+/** 'feat(EL-10): …' (or test/docs, runOutputSubject) or 'Merge EL-10 (…)' → 'EL-10'. */
 export function ticketKeyFromSubject(subject: string): string | null {
-  const m = /^feat\(([^)\s]+)\):/.exec(subject) ?? /^Merge ([^\s(]+) \(/.exec(subject);
+  const m = /^(?:feat|test|docs)\(([^)\s]+)\):/.exec(subject) ?? /^Merge ([^\s(]+) \(/.exec(subject);
   return m ? m[1]! : null;
 }
 

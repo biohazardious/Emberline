@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { GarbageCollectRunsResponse, Run } from '@emberline/protocol';
+import type { CommitIdentity, GarbageCollectRunsResponse, Run } from '@emberline/protocol';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
@@ -201,8 +201,10 @@ export async function mergeRunBranch(params: {
   ticketKey: string | null;
   stale: () => boolean;
   heal?: MergeHeal;
+  /** Who Emberline's commits are made as, and the output commit's subject (merge.ts defaults otherwise). */
+  commit?: { identity: CommitIdentity; subject: string };
 }): Promise<RunMerge | null> {
-  const { run, stale, heal, mainWorkspacePath, ticketKey } = params;
+  const { run, stale, heal, mainWorkspacePath, ticketKey, commit } = params;
   const mergeOnce = () =>
     syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
@@ -210,6 +212,7 @@ export async function mergeRunBranch(params: {
       ticketKey,
       runId: run.id,
       branch: run.branch,
+      ...commit,
       beforeMerge: () => {
         if (stale()) throw new TurnMoved();
       },
@@ -230,7 +233,16 @@ export async function mergeRunBranch(params: {
     });
   const first = await mergeOnce();
   if (!heal || !first || first.ok || first.conflicts.length === 0) return first;
-  return healThenMerge({ run, mainWorkspacePath, ticketKey, stale, heal, first, merge: mergeOnce });
+  return healThenMerge({
+    run,
+    mainWorkspacePath,
+    ticketKey,
+    stale,
+    heal,
+    first,
+    merge: mergeOnce,
+    identity: commit?.identity,
+  });
 }
 
 /**
@@ -246,6 +258,8 @@ export async function healThenMerge<M extends RunMerge>(params: {
   heal: MergeHeal;
   first: M;
   merge: () => Promise<M | null>;
+  /** Who the heal's merge commit is made as. */
+  identity?: CommitIdentity;
 }): Promise<M | null> {
   const { run, mainWorkspacePath, ticketKey, stale, heal, first } = params;
   const healed = await healConflicts({
@@ -256,6 +270,7 @@ export async function healThenMerge<M extends RunMerge>(params: {
     mainTip: first.mainHead,
     stale,
     verify: heal.verify,
+    identity: params.identity,
   });
   if (!healed.healed) {
     if (healed.reason === 'turn_moved') return null;

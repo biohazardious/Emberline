@@ -157,6 +157,30 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
     expect(again.ok).toBe(true);
     expect(git(main, 'rev-parse', 'HEAD')).toBe(head);
   });
+
+  it('commits the output, the snapshot and the merge as the given identity, with the given subject', async () => {
+    // The repository's own identity never decides who Emberline's commits are by.
+    git(main, 'config', 'user.name', 'Repo Config');
+    git(main, 'config', 'user.email', 'repo@example.com');
+    const a = addWorktree('a');
+    writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
+    writeFileSync(path.join(main, 'app.js'), 'edited in main\n'); // snapshotted before the merge
+    const res = await syncWorktreeToMainWorkspace({
+      worktreePath: a,
+      mainWorkspacePath: main,
+      ticketKey: 'T-1',
+      runId: 'run-T-1',
+      identity: { name: 'Ada Lovelace', email: 'ada@example.com' },
+      subject: 'feat(T-1): Add feature A',
+    });
+    expect(res.ok).toBe(true);
+    expect(git(main, 'log', '-3', '--format=%an <%ae>|%cn <%ce>|%s').split('\n')).toEqual([
+      'Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>|Merge T-1 (emberline/a)',
+      'Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>|chore: snapshot workspace edits before merging T-1',
+      'Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>|feat(T-1): Add feature A',
+    ]);
+    expect(git(a, 'reflog', '-1', '--format=%gs')).toBe('commit: feat(T-1): Add feature A');
+  });
 });
 
 describe('a merge refused before it starts', () => {

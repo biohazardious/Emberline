@@ -16,6 +16,7 @@ export * from './api/notifications.js';
 export * from './api/forge.js';
 export * from './api/forge-accounts.js';
 export * from './api/ssh-keys.js';
+export * from './api/commit-identity.js';
 export * from './api/repository.js';
 export * from './api/issues.js';
 export * from './api/scheduled-jobs.js';

@@ -6,6 +6,8 @@ import {
   AgentModelId,
   type AgentPersona,
   coerceModelForProvider,
+  CommitIdentity,
+  DEFAULT_COMMIT_IDENTITY,
   type Credential,
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
@@ -362,6 +364,17 @@ function quotaPolicyOf(raw: StoredFactorySettings): QuotaPolicy {
   return { newRuns: raw.quotaPolicy?.newRuns ?? 'wait', inFlight: raw.quotaPolicy?.inFlight ?? 'wait' };
 }
 
+/** The stored commit identity, or the default when none (or one that no longer validates) is stored. */
+function commitIdentityOf(raw: StoredFactorySettings): CommitIdentity {
+  const parsed = CommitIdentity.safeParse(raw.commitIdentity);
+  return parsed.success ? parsed.data : { ...DEFAULT_COMMIT_IDENTITY };
+}
+
+/** The global commit identity alone: one settings row, none of the provider auth detection. */
+export function getCommitIdentity(db: Db): CommitIdentity {
+  return commitIdentityOf(getSetting<StoredFactorySettings>(db, FACTORY_SETTINGS_KEY) ?? {});
+}
+
 /** The quota policy alone: one settings row, none of the provider auth detection `getFactorySettings` does. */
 export function getQuotaPolicy(db: Db): QuotaPolicy {
   return quotaPolicyOf(getSetting<StoredFactorySettings>(db, FACTORY_SETTINGS_KEY) ?? {});
@@ -471,6 +484,7 @@ export function getFactorySettings(db: Db): FactorySettings {
     serializeOverlappingTickets: raw.serializeOverlappingTickets ?? true,
     buildOutputsQuotaGb: raw.buildOutputsQuotaGb ?? 5,
     requireCompletionSignal: raw.requireCompletionSignal ?? true,
+    commitIdentity: commitIdentityOf(raw),
     mcpServers: mergedMcpServers,
     skillPlugins: mergedSkillPlugins,
     anthropicKeyConfigured,
@@ -571,6 +585,7 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
     serializeOverlappingTickets: body.serializeOverlappingTickets ?? current.serializeOverlappingTickets,
     buildOutputsQuotaGb: body.buildOutputsQuotaGb ?? current.buildOutputsQuotaGb,
     requireCompletionSignal: body.requireCompletionSignal ?? current.requireCompletionSignal,
+    commitIdentity: body.commitIdentity ?? current.commitIdentity,
     mcpServers: body.mcpServers ?? current.mcpServers,
     skillPlugins: body.skillPlugins ?? current.skillPlugins,
   };

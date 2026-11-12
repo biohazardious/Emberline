@@ -1,22 +1,15 @@
 /** Integration of run worktrees into the main workspace (git merge under a per-workspace lock). */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { type SyncWorktreeResponse } from '@emberline/protocol';
+import { type CommitIdentity, type SyncWorktreeResponse } from '@emberline/protocol';
 import { execFileChecked, isRunnerUnavailable, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { gitIdentityArgs, runOutputSubject } from './commit-identity.js';
 
-/**
- * Command-line config beats repo config, and `author.*` / `committer.*` beat `user.*`: setting all
- * of them keeps a repo's own config from forging who made Emberline's commits.
- */
-export const FACTORY_GIT_IDENTITY = (['user', 'author', 'committer'] as const).flatMap((who) => [
-  '-c',
-  `${who}.name=Emberline AI Factory`,
-  '-c',
-  `${who}.email=factory@emberline.local`,
-]);
+/** The default identity's `-c` options (gitIdentityArgs); a configured one goes through gitIdentityArgs. */
+export const FACTORY_GIT_IDENTITY = gitIdentityArgs();
 
 /**
  * Emberline's scratch files under `.emberline/`: agents write them for core to read (tickets,
@@ -211,7 +204,7 @@ async function endPendingOperation(worktreePath: string, pending: PendingOperati
 async function buildRunOutputCommit(
   worktreePath: string,
   head: string,
-  label: string,
+  commit: { identity: string[]; subject: string },
   pending: PendingOperation,
 ): Promise<string | null> {
   const inWorktree = { cwd: worktreePath };
@@ -243,26 +236,16 @@ async function buildRunOutputCommit(
       : null;
     const parents = pending.parents.flatMap((p) => ['-p', p]);
     return (
-      await execGitFile(
-        [
-          ...FACTORY_GIT_IDENTITY,
-          'commit-tree',
-          tree,
-          ...parents,
-          '-m',
-          `feat(${label}): factory run output`,
-        ],
-        {
-          ...inWorktree,
-          env: author
-            ? {
-                GIT_AUTHOR_NAME: author[0] ?? '',
-                GIT_AUTHOR_EMAIL: author[1] ?? '',
-                GIT_AUTHOR_DATE: author[2] ?? '',
-              }
-            : undefined,
-        },
-      )
+      await execGitFile([...commit.identity, 'commit-tree', tree, ...parents, '-m', commit.subject], {
+        ...inWorktree,
+        env: author
+          ? {
+              GIT_AUTHOR_NAME: author[0] ?? '',
+              GIT_AUTHOR_EMAIL: author[1] ?? '',
+              GIT_AUTHOR_DATE: author[2] ?? '',
+            }
+          : undefined,
+      })
     ).stdout.trim();
   } finally {
     await inOps(RUNNER_BIN.rm, ['-f', '--', scratchIndex]).catch(() => undefined);
@@ -425,9 +408,15 @@ export async function syncWorktreeToMainWorkspace(params: {
    * built but the run's branch, worktree and index untouched; may throw to refuse, which leaves them so.
    */
   beforeMerge?: () => void;
+  /** Who the output, snapshot and merge commits are made as (default: DEFAULT_COMMIT_IDENTITY). */
+  identity?: CommitIdentity;
+  /** The output commit's subject (default: `feat(<label>): factory run output`); see runOutputSubject. */
+  subject?: string;
 }): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
+  const identity = gitIdentityArgs(params.identity);
+  const subject = params.subject ?? runOutputSubject({ label });
   const result = (
     ok: boolean,
     summary: string,
@@ -492,7 +481,7 @@ export async function syncWorktreeToMainWorkspace(params: {
         `Could not merge ${label}: a git merge --autostash in its worktree is not finished. Finish it with git commit (or end it with git merge --abort), then merge again.`,
       );
     }
-    const output = await buildRunOutputCommit(worktreePath, head, label, pending);
+    const output = await buildRunOutputCommit(worktreePath, head, { identity, subject }, pending);
     const tip = output ?? head;
     const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
     const shortHead = async () =>
@@ -519,7 +508,7 @@ export async function syncWorktreeToMainWorkspace(params: {
         [
           'update-ref',
           '-m',
-          `commit${pending.parents.length > 1 ? ' (merge)' : ''}: feat(${label}): factory run output`,
+          `commit${pending.parents.length > 1 ? ' (merge)' : ''}: ${subject}`,
           'HEAD',
           output,
           head,
@@ -558,13 +547,7 @@ export async function syncWorktreeToMainWorkspace(params: {
       const snapshot = await execGitFile(['diff', '--cached', '--name-only'], inMain);
       if (snapshot.stdout.trim()) {
         await execGitFile(
-          [
-            ...FACTORY_GIT_IDENTITY,
-            'commit',
-            '-q',
-            '-m',
-            `chore: snapshot workspace edits before merging ${label}`,
-          ],
+          [...identity, 'commit', '-q', '-m', `chore: snapshot workspace edits before merging ${label}`],
           inMain,
         );
       }
@@ -574,7 +557,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     // 3. Merge. On any failure (conflict, untracked file in the way) restore the previous state.
     try {
       await execGitFile(
-        [...FACTORY_GIT_IDENTITY, 'merge', '--no-ff', '--no-edit', '-m', `Merge ${label} (${branch})`, tip],
+        [...identity, 'merge', '--no-ff', '--no-edit', '-m', `Merge ${label} (${branch})`, tip],
         { ...inMain, timeout: 120_000 },
       );
     } catch (error) {

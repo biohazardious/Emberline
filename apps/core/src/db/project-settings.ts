@@ -1,4 +1,4 @@
-import { IssueSyncSettings, ProjectImportSource } from '@emberline/protocol';
+import { CommitIdentity, IssueSyncSettings, ProjectImportSource } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from './index.js';
@@ -130,12 +130,17 @@ const PendingMainPushSchema = z.object({
   origin: z.string().nullable().optional(),
 });
 export type PendingMainPush = z.infer<typeof PendingMainPushSchema>;
-/** Project settings → Repository: the opt-in automatic push, its last failure, the last read of origin. */
+/**
+ * Project settings → Repository: the opt-in automatic push, its last failure, the last read of
+ * origin, and the project's own commit identity.
+ */
 export interface RepositorySettings {
   keepMainPushed: boolean;
   lastMainPushError: string | null;
   lastRemoteCheck: RemoteCheck | null;
   pendingMainPush: PendingMainPush | null;
+  /** null: the factory's commit identity. */
+  commitIdentity: CommitIdentity | null;
 }
 const RemoteCheckSchema = z.object({
   url: z.string(),
@@ -150,6 +155,7 @@ const RepositorySettingsSchema = z.object({
   lastMainPushError: z.string().nullable().catch(null).default(null),
   lastRemoteCheck: RemoteCheckSchema.nullable().catch(null).default(null),
   pendingMainPush: PendingMainPushSchema.nullable().catch(null).default(null),
+  commitIdentity: CommitIdentity.nullable().catch(null).default(null),
 });
 export function readRepositorySettings(db: Db, projectId: string): RepositorySettings {
   return RepositorySettingsSchema.parse(readProjectSettings(db, projectId).repository ?? {});

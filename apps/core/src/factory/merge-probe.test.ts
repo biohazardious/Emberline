@@ -112,6 +112,8 @@ describe('parseMergeTree', () => {
 describe('ticketKeyFromSubject', () => {
   it('reads both subject forms', () => {
     expect(ticketKeyFromSubject('feat(EL-10): factory run output')).toBe('EL-10');
+    expect(ticketKeyFromSubject('test(EL-11): Cover the board')).toBe('EL-11');
+    expect(ticketKeyFromSubject('docs(EL-12): Plan the release')).toBe('EL-12');
     expect(ticketKeyFromSubject('Merge EL-10 (emberline/el-10-x)')).toBe('EL-10');
     expect(ticketKeyFromSubject('chore: x')).toBeNull();
   });

@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents, runs, tickets } from '../db/schema.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
+import { commitIdentityFor } from '../factory/commit-identity.js';
 import { conflictResolutionPrompt, type SyncWorktreeResult } from '../factory/merge.js';
 import { effectiveFactorySettings } from '../factory/settings.js';
 import { verifyBuild } from '../runs/gates.js';
@@ -298,6 +299,7 @@ export class ConflictLadder {
             },
             first,
             merge: p.merge,
+            identity: commitIdentityFor(this.deps.db, run.projectId),
           })
         : null;
     const result: HealedMerge = healed ?? first;

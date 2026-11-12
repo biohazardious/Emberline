@@ -11,10 +11,12 @@
  * text is written with `dd oflag=nofollow`, so a link planted at the path is refused, not written through.
  */
 import path from 'node:path';
+import type { CommitIdentity } from '@emberline/protocol';
 import { CommandFailedError, execFileChecked, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { execGitFile } from '../git-exec.js';
 import { isLockfile } from '../lockfiles.js';
-import { FACTORY_GIT_IDENTITY, NOT_REGULAR, readGitDirFile } from './merge.js';
+import { gitIdentityArgs } from './commit-identity.js';
+import { NOT_REGULAR, readGitDirFile } from './merge.js';
 
 /** The marker size of the heal's own merge-file output: long enough that a file's text never looks like one. */
 const HEAL_MARKER_SIZE = 32;
@@ -129,6 +131,8 @@ export interface HealParams {
   stale: () => boolean;
   /** The worktree gate (build/lint/test) on the healed tree. */
   verify: () => Promise<HealGate>;
+  /** Who the heal's merge commit is made as (default: DEFAULT_COMMIT_IDENTITY). */
+  identity?: CommitIdentity;
 }
 
 interface Stage {
@@ -285,6 +289,7 @@ async function untouchedSince(worktreePath: string, healCommit: string): Promise
  */
 export async function healConflicts(params: HealParams): Promise<HealResult> {
   const { worktreePath, mainBranch, label, stale, verify } = params;
+  const identity = gitIdentityArgs(params.identity);
   const inWorktree = { cwd: worktreePath };
   let conflicts: string[] = [];
   const failed = (
@@ -329,7 +334,7 @@ export async function healConflicts(params: HealParams): Promise<HealResult> {
   try {
     const merge = await execGitFile(
       [
-        ...FACTORY_GIT_IDENTITY,
+        ...identity,
         '-c',
         'core.hooksPath=/dev/null',
         '-c',
@@ -375,7 +380,7 @@ export async function healConflicts(params: HealParams): Promise<HealResult> {
     const message = `Merge ${mainBranch} into ${branch}${conflicts.length > 0 ? ` (auto-resolved: ${conflicts.join(', ')})` : ''}`;
     const commit = (
       await execGitFile(
-        [...FACTORY_GIT_IDENTITY, 'commit-tree', tree, '-p', previous, '-p', mainTip, '-m', message],
+        [...identity, 'commit-tree', tree, '-p', previous, '-p', mainTip, '-m', message],
         inWorktree,
       )
     ).stdout.trim();

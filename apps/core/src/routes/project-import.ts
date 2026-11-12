@@ -15,6 +15,7 @@ import type { FastifyInstance } from 'fastify';
 import { markImportCloned, readImportClone, writeProjectSettings } from '../db/project-settings.js';
 import { projects, projectWorktreeConfig } from '../db/schema.js';
 import { notFound } from '../errors.js';
+import { commitIdentityFor } from '../factory/commit-identity.js';
 import { detectProject } from '../factory/detect.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { techStackFromChoices } from '../factory/project-plan.js';
@@ -135,7 +136,12 @@ export function registerProjectImportRoutes(
       const body = AdoptProjectBody.parse(request.body ?? {});
       await assertNotCloning(clones, project.id);
       await reconcileClonedBranch(project);
-      const result = await executeAdopt(config.workspacesDir, project, body);
+      const result = await executeAdopt(
+        config.workspacesDir,
+        project,
+        body,
+        commitIdentityFor(db, project.id),
+      );
 
       const approvedAt = new Date();
       let warning: string | undefined;

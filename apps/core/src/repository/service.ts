@@ -13,6 +13,7 @@ import { type RemoteCheck, readRepositorySettings, writeRepositorySettings } fro
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { isEmberlineMergeCommit, withMainWorkspaceLock } from '../factory/merge.js';
+import { getCommitIdentity } from '../factory/settings.js';
 import { accountForGitRemote, accountForRemote } from '../forge/account-store.js';
 import type { ForgeAccountsService } from '../forge/accounts.js';
 import { remoteCompareKey } from '../forge/hosts.js';
@@ -153,6 +154,8 @@ export class RepositoryService {
       checkedAt: null,
       keepMainPushed: settings.keepMainPushed,
       lastMainPushError: settings.lastMainPushError,
+      commitIdentity: settings.commitIdentity,
+      factoryCommitIdentity: getCommitIdentity(this.db),
     };
     if (!(await isGitRepo(row.path))) return base;
     const { branch } = await mainBranchState(row.path);
@@ -317,15 +320,16 @@ export class RepositoryService {
     return { ok: false, reason };
   }
 
-  update(projectId: string, raw: unknown): Promise<RepositoryStatus> {
+  async update(projectId: string, raw: unknown): Promise<RepositoryStatus> {
     this.project(projectId);
     const body = parse(UpdateRepositoryBody, raw);
+    const current = readRepositorySettings(this.db, projectId);
+    const keepMainPushed = body.keepMainPushed ?? current.keepMainPushed;
     // Switched off, a push kept for the runner never runs: it no longer waits.
-    const waiting =
-      !body.keepMainPushed &&
-      readRepositorySettings(this.db, projectId).lastMainPushError === RUNNER_WAITING_MESSAGE;
+    const waiting = !keepMainPushed && current.lastMainPushError === RUNNER_WAITING_MESSAGE;
     writeRepositorySettings(this.db, projectId, {
-      keepMainPushed: body.keepMainPushed,
+      keepMainPushed,
+      ...(body.commitIdentity !== undefined ? { commitIdentity: body.commitIdentity } : {}),
       ...(waiting ? { lastMainPushError: null } : {}),
     });
     return this.status(projectId);
