@@ -149,7 +149,7 @@ export function ViewErrorBanner({
       </span>
       {onRetry && (
         <button type="button" className="btn btn-sm" disabled={retrying} onClick={() => void retry()}>
-          <RefreshCw className={`icon${retrying ? ' spin' : ''}`} aria-hidden />
+          <RefreshCw className={`icon${retrying ? ' icon-spin' : ''}`} aria-hidden />
           {retrying ? 'Retrying…' : 'Retry'}
         </button>
       )}
@@ -167,7 +167,7 @@ export function ViewLoadingState({
 }) {
   return (
     <div className={`view-loading${compact ? ' view-loading-compact' : ''}`} role="status" aria-busy="true">
-      <LoaderCircle className="icon spin" aria-hidden />
+      <LoaderCircle className="icon icon-spin" aria-hidden />
       <span className="muted mono small">{label}</span>
     </div>
   );

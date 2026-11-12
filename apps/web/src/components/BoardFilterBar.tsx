@@ -113,7 +113,7 @@ export function BoardFilterBar({
               <button
                 key={p.id}
                 type="button"
-                className={`chip-btn${pressed ? ' active' : ''}`}
+                className={`chip-btn${pressed ? ' chip-on' : ''}`}
                 aria-pressed={pressed}
                 title={p.hint}
                 onClick={() => onChange({ ...filter, personas: toggled(filter.personas, p.id) })}
@@ -135,7 +135,7 @@ export function BoardFilterBar({
           {(flags.activeRun > 0 || filter.onlyActiveRun) && (
             <button
               type="button"
-              className={`chip-btn${filter.onlyActiveRun ? ' active' : ''}`}
+              className={`chip-btn${filter.onlyActiveRun ? ' chip-on' : ''}`}
               aria-pressed={filter.onlyActiveRun}
               onClick={() => onChange({ ...filter, onlyActiveRun: !filter.onlyActiveRun })}
             >
@@ -146,7 +146,7 @@ export function BoardFilterBar({
           {(flags.blocked > 0 || filter.onlyBlocked) && (
             <button
               type="button"
-              className={`chip-btn${filter.onlyBlocked ? ' active' : ''}`}
+              className={`chip-btn${filter.onlyBlocked ? ' chip-on' : ''}`}
               aria-pressed={filter.onlyBlocked}
               onClick={() => onChange({ ...filter, onlyBlocked: !filter.onlyBlocked })}
             >
@@ -160,7 +160,7 @@ export function BoardFilterBar({
               <button
                 key={p.value}
                 type="button"
-                className={`chip-btn${pressed ? ' active' : ''}`}
+                className={`chip-btn${pressed ? ' chip-on' : ''}`}
                 aria-pressed={pressed}
                 onClick={() => onChange({ ...filter, priorities: toggled(filter.priorities, p.value) })}
               >

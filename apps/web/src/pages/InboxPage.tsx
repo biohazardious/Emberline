@@ -245,7 +245,7 @@ export function InboxPage({
                   <button
                     key={reason}
                     type="button"
-                    className={`chip-btn${pressed ? ' active' : ''}`}
+                    className={`chip-btn${pressed ? ' chip-on' : ''}`}
                     aria-pressed={pressed}
                     onClick={() => setFilter({ ...filter, reasons: toggled(filter.reasons, reason) })}
                   >

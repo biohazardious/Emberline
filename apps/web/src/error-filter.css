@@ -1,9 +1,5 @@
 /* Error boundaries, async loading/recovery banners, and reusable search/filter toolbars. */
 
-.spin {
-  animation: icon-spin 0.9s linear infinite;
-}
-
 .btn-xs {
   padding: 3px 8px;
   font-size: 0.74rem;
@@ -227,12 +223,6 @@
   gap: 5px;
 }
 
-.chip-btn.active {
-  color: var(--ember-2);
-  border-color: color-mix(in hsl, var(--ember-1) 55%, var(--border));
-  background: color-mix(in hsl, var(--ember-1) 14%, var(--surface-2));
-}
-
 .board-filter-count {
   padding: 0 4px;
   border-radius: var(--radius-xs);
@@ -242,7 +232,7 @@
   line-height: 1.4;
 }
 
-.chip-btn.active .board-filter-count {
+.chip-btn.chip-on .board-filter-count {
   background: color-mix(in hsl, var(--ember-1) 22%, transparent);
   color: var(--ember-2);
 }
@@ -257,10 +247,6 @@
 
 .board-filter-empty {
   padding: 18px 14px;
-}
-
-.mobile-col-nav {
-  display: none;
 }
 
 .board-col {
