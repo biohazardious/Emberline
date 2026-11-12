@@ -9,6 +9,7 @@ import { getFactorySettings } from '../factory/settings.js';
 import { runStructuredCommand, structuredCommand, supportsRivalReview } from '../factory/rival-critic.js';
 import { realGit } from '../repository/git.js';
 import { ticketKeyOf } from './history.js';
+import { VERSION_TAG_MATCH } from './release.js';
 
 export const ReleaseNotesAnswer = z.object({
   bump: z.enum(['patch', 'minor', 'major']),
@@ -65,7 +66,7 @@ export interface ReleaseRange {
 /** What goes into the next release: the commits of the working branch since main's last version tag. */
 export async function releaseRange(mainPath: string, main: string, working: string): Promise<ReleaseRange> {
   const baseTag = await realGit(
-    ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', main],
+    ['describe', '--tags', '--abbrev=0', ...VERSION_TAG_MATCH, main],
     mainPath,
   ).then(
     (r) => r.stdout.trim() || null,

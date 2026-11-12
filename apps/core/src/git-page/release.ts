@@ -65,6 +65,13 @@ const composeProjectOf = (dir: string) => `emberline-${path.basename(dir)}`;
 
 const NO_CHECKS = 'No approved checks in .emberline/worktree.yml';
 const ORIGIN_MAIN_MOVED = "origin's main moved during the release: Pull, then Retry";
+/**
+ * With no working branch of its own, main is where the factory merges and Keep main pushed publishes:
+ * commits origin got meanwhile may be ones the person never saw, so the release is not redone on top
+ * of them. After the Pull, a new release shows them.
+ */
+const ORIGIN_MAIN_MOVED_START_AGAIN =
+  "origin's main moved during the release: Pull, then start the release again";
 const PROMOTE_CONFLICT = 'main has commits the working branch lacks; Pull first';
 const INTERRUPTED =
   'Emberline stopped during this step. Retry checks what it got done and goes on from there.';
@@ -115,6 +122,20 @@ function expectedMain(job: ReleaseJob): string | null {
   return job.previousMain;
 }
 
+/**
+ * Whether main moved from `previous` to `tip` only by commits origin's main has (as last read, after a
+ * Pull): those are published already, and may join a release whose working branch is not main.
+ */
+async function onlyFromOrigin(mainPath: string, main: string, previous: string | null, tip: string) {
+  const originMain = await refTip(mainPath, `refs/remotes/origin/${main}`);
+  return (
+    previous !== null &&
+    originMain !== null &&
+    (await isAncestorCommit(mainPath, previous, tip)) &&
+    (await isAncestorCommit(mainPath, tip, originMain))
+  );
+}
+
 const mainMoved = (main: string) =>
   `${main} moved during the release (something else changed it here), so Emberline stopped. Start the release again once ${main} is where you want it.`;
 
@@ -126,21 +147,20 @@ function failureText(error: unknown): string {
 }
 
 /**
- * The approved notes as a new section of CHANGELOG.md: right below an `## [Unreleased]` heading when
- * there is one, else above the first `## ` heading, else at the end.
+ * The approved notes as a new section of CHANGELOG.md, above the first released version: after the
+ * `## [Unreleased]` section (whose items stay under it, unpublished) when there is one, else above
+ * the first `## ` heading, else at the end. Only linear scans: the file may be anyone's.
  */
 export function withReleaseSection(text: string, version: string, date: string, notes: string): string {
   const body = notes.replace(/\r\n/g, '\n').trim();
   const section = `## [${version.replace(/^v/, '')}] - ${date}\n\n${body ? `${body}\n` : ''}`;
   const unreleased = /^## \[unreleased\][^\n]*$/im.exec(text);
-  if (unreleased) {
-    const end = unreleased.index + unreleased[0].length;
-    const after = text.slice(end).replace(/^\n+/, '');
-    return `${text.slice(0, end)}\n\n${section}${after ? `\n${after}` : ''}`;
-  }
-  const first = /^## /m.exec(text);
-  if (first) return `${text.slice(0, first.index)}${section}\n${text.slice(first.index)}`;
-  return text.trim() ? `${text.replace(/\s*$/, '')}\n\n${section}` : section;
+  const from = unreleased ? unreleased.index + unreleased[0].length : 0;
+  const next = /^## /m.exec(text.slice(from));
+  const at = next ? from + next.index : text.length;
+  const before = text.slice(0, at).trimEnd();
+  const after = text.slice(at);
+  return `${before ? `${before}\n\n` : ''}${section}${after ? `\n${after}` : ''}`;
 }
 
 /** The tree merging `theirs` into `ours` gives, or the paths that would conflict; nothing is written. */
@@ -162,9 +182,12 @@ async function mergeTree(
   }
 }
 
-/** The most recent version tag in `ref`'s history (as the release-notes draft finds it), else null. */
+/** What a version tag looks like to describe: `v1.2.3` or `1.2.3` (RELEASE_VERSION allows both). */
+export const VERSION_TAG_MATCH = ['--match', 'v[0-9]*.[0-9]*.[0-9]*', '--match', '[0-9]*.[0-9]*.[0-9]*'];
+
+/** The most recent version tag in `ref`'s history, else null. */
 export async function latestVersionTag(mainPath: string, ref: string): Promise<string | null> {
-  return realGit(['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', ref], mainPath).then(
+  return realGit(['describe', '--tags', '--abbrev=0', ...VERSION_TAG_MATCH, ref], mainPath).then(
     (r) => r.stdout.trim() || null,
     unlessRunnerUnavailable(null),
   );
@@ -335,6 +358,10 @@ export class ReleaseJobs {
             `${main} moved since the release stopped, so Emberline left it as it is.`,
             'main_moved',
           );
+        // The push went through though it was not recorded: origin has it, so it stays.
+        const originMain = await refTip(project.path, `refs/remotes/origin/${main}`);
+        if (originMain && (await isAncestorCommit(project.path, tip, originMain)))
+          throw conflict(`${main} is on origin already, so its promote stays.`, 'already_pushed');
         await this.moveMain(ctx, tip, previous, 'emberline: undo promote');
       });
       const job: ReleaseJob = { ...stopped, state: 'undone', finishedAt: new Date().toISOString() };
@@ -601,14 +628,8 @@ export class ReleaseJobs {
       job.promoteOid = null;
       if (!mainTip) return failed(`${main} has no commits here.`);
       if (mainTip !== job.previousMain) {
-        // Only commits that came from origin's main since (a Pull) may have joined: they are published already.
-        const originMain = await refTip(mainPath, `refs/remotes/origin/${main}`);
-        const fromOrigin =
-          job.previousMain !== null &&
-          originMain !== null &&
-          (await isAncestorCommit(mainPath, job.previousMain, mainTip)) &&
-          (await isAncestorCommit(mainPath, mainTip, originMain));
-        if (!fromOrigin) return failed(mainMoved(main));
+        if (!(await onlyFromOrigin(mainPath, main, job.previousMain, mainTip)))
+          return failed(mainMoved(main));
         job.previousMain = mainTip;
       }
       if ((await checkedOutBranches(mainPath)).has(main))
@@ -647,11 +668,28 @@ export class ReleaseJobs {
     });
   }
 
-  /** The approved worktree.yml checks on main as this release left it, in core's own worktree. */
-  private async checks(ctx: JobContext): Promise<Outcome> {
+  /**
+   * The commit main must name for the next step: the one this release left. Before the release made
+   * any commit (a skipped promote, or one taken back after a rejected push), main may have taken in
+   * origin's commits by a Pull, when the working branch is not main; the release starts from there.
+   */
+  private async pinnedMain(ctx: JobContext, mainTip: string | null): Promise<string | null> {
     const { project, main, job } = ctx;
     const expected = expectedMain(job);
-    if (!expected || (await localTip(project.path, main)) !== expected) return failed(mainMoved(main));
+    if (!expected || !mainTip) return null;
+    if (mainTip === expected) return expected;
+    const made = finished(job, 'promote') || finished(job, 'changelog');
+    if (made || job.working === main || !(await onlyFromOrigin(project.path, main, expected, mainTip)))
+      return null;
+    job.previousMain = mainTip;
+    return mainTip;
+  }
+
+  /** The approved worktree.yml checks on main as this release left it, in core's own worktree. */
+  private async checks(ctx: JobContext): Promise<Outcome> {
+    const { project, main } = ctx;
+    const expected = await this.pinnedMain(ctx, await localTip(project.path, main));
+    if (!expected) return failed(mainMoved(main));
     const checks = approvedChecks(this.db, project.id);
     if (!checks) return skipped(NO_CHECKS);
     const dir = await this.worktreeAt(ctx, expected);
@@ -680,8 +718,8 @@ export class ReleaseJobs {
     if (job.releaseCommit && mainTip && (await isAncestorCommit(mainPath, job.releaseCommit, mainTip)))
       return done();
     job.releaseCommit = null;
-    const expected = expectedMain(job);
-    if (!expected || mainTip !== expected) return failed(mainMoved(main));
+    const expected = await this.pinnedMain(ctx, mainTip);
+    if (!expected) return failed(mainMoved(main));
     const entry = (await realGit(['ls-tree', '-z', expected, '--', 'CHANGELOG.md'], mainPath)).stdout.split(
       '\0',
     )[0];
@@ -740,41 +778,60 @@ export class ReleaseJobs {
       });
       if (!has) return 'gone' as const;
       const pushed = await pushBranch(ws.path, ws.access, main, expected);
-      if (pushed === 'pushed') await this.deps.repository.recordPush(project.id, ws, main, expected);
-      return pushed;
+      if (pushed === 'pushed') {
+        await this.deps.repository.recordPush(project.id, ws, main, expected);
+        return pushed;
+      }
+      // Rejected: origin's main moved. If it has the release's commit already (Keep main pushed, or a
+      // push recorded nowhere), there is nothing to push; the read also sets the tracking ref.
+      const read = await this.deps.repository.readOrigin(project.id, ws);
+      const contained =
+        !read.stale &&
+        !read.error &&
+        read.main !== null &&
+        (await isAncestorCommit(ws.path, expected, read.main));
+      return contained ? ('contained' as const) : pushed;
     });
     if (result === 'gone')
       return failed(
         `${main} here no longer has the release's commit ${short(expected)}, so it was not pushed.`,
       );
+    if (result === 'contained') return done(`origin's ${main} has this release's commit already.`);
     if (result === 'rejected') {
-      await this.takeBack(ctx);
-      return failed(ORIGIN_MAIN_MOVED);
+      const kept = await this.takeBack(ctx);
+      if (kept)
+        return failed(
+          `origin's ${main} moved during the release, and ${main} here could not be put back where the release found it (${kept}), so a Pull cannot bring origin's in yet. Undo promote once that is fixed, then Pull and start the release again.`,
+        );
+      return failed(job.working === main ? ORIGIN_MAIN_MOVED_START_AGAIN : ORIGIN_MAIN_MOVED);
     }
     return done();
   }
 
   /**
    * After a rejected main push: main back at the commit the release found, if it still names this
-   * release's last commit, and the steps that made those commits to do again on Retry.
+   * release's last commit, and the steps that made those commits to do again on Retry. Returns why
+   * main could not be put back, or null (put back, or nothing of the release's to take back).
    */
-  private async takeBack(ctx: JobContext): Promise<void> {
+  private async takeBack(ctx: JobContext): Promise<string | null> {
     const { project, main, job } = ctx;
     const previous = job.previousMain;
     const expected = expectedMain(job);
-    if (!previous || !expected || expected === previous) return;
-    const back = await withMainWorkspaceLock(project.path, async () => {
-      if ((await localTip(project.path, main)) !== expected) return false;
+    if (!previous || !expected || expected === previous) return null;
+    const why = await withMainWorkspaceLock(project.path, async () => {
+      if ((await localTip(project.path, main)) !== expected)
+        return `${main} moved here since the release changed it`;
       await this.moveMain(ctx, expected, previous, 'emberline: release not pushed');
-      return true;
-    }).catch(() => false);
-    if (!back) return;
+      return null;
+    }).catch((error: unknown) => failureText(error));
+    if (why) return why;
     for (const name of ['promote', 'checks', 'changelog'] as const) {
       const step = stepOf(job, name);
       if (step.status === 'done') Object.assign(step, { status: 'pending', detail: null });
     }
     job.promoteOid = null;
     job.releaseCommit = null;
+    return null;
   }
 
   /** The annotated tag `<version>` on the release commit, with the project's identity. */

@@ -18,7 +18,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
-import { ReleaseJobs } from './release.js';
+import { ReleaseJobs, withReleaseSection } from './release.js';
 import { GitPageService } from './service.js';
 
 let t: TestApp;
@@ -33,7 +33,7 @@ const git = (dir: string, ...args: string[]) =>
   execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], {
     encoding: 'utf8',
   }).trim();
-const send = (method: 'GET' | 'POST', url: string, payload?: object) =>
+const send = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
   t.app.inject({ method, url, headers: authHeaders(cookie), ...(payload ? { payload } : {}) });
 const gitUrl = (rest = '') => `/api/projects/${projectId}/git${rest}`;
 const commit = (dir: string, file: string, content: string, subject: string) => {
@@ -86,11 +86,10 @@ const approveChecks = () => {
 };
 
 let checked: string[];
-const jobsWith = (
-  extra: { build?: Build; forge?: ConstructorParameters<typeof ReleaseJobs>[1]['forge'] } = {},
-) =>
+type Deps = ConstructorParameters<typeof ReleaseJobs>[1];
+const jobsWith = (extra: { build?: Build; forge?: Deps['forge']; repository?: Deps['repository'] } = {}) =>
   new ReleaseJobs(t.db, {
-    repository: t.repository,
+    repository: extra.repository ?? t.repository,
     forge: extra.forge ?? t.forge,
     runs: t.runs,
     workspacesDir: t.config.workspacesDir,
@@ -246,6 +245,21 @@ describe('release', () => {
     expect((await refusal(jobs.retry(projectId))).code).toBe('nothing_to_retry');
   });
 
+  it('Undo promote is refused once origin has main, though the push was not recorded', async () => {
+    approveChecks();
+    const head = await developWithTickets();
+    const jobs = jobsWith({ build: async () => ({ ...okBuild(), ok: false, output: 'red' }) });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const promoted = git(projectPath, 'rev-parse', 'main');
+    expect(storedJob().state).toBe('failed');
+    // The push landed (and origin was read) without the job knowing.
+    git(projectPath, 'push', '-q', bare, 'main');
+    git(projectPath, 'update-ref', 'refs/remotes/origin/main', promoted);
+    expect((await refusal(jobs.undoPromote(projectId))).code).toBe('already_pushed');
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(promoted);
+  });
+
   it('refuses a version whose tag exists on origin before main changes', async () => {
     const head = await developWithTickets();
     const mainBefore = git(projectPath, 'rev-parse', 'main');
@@ -376,6 +390,14 @@ describe('release', () => {
     expect(readFileSync(path.join(projectPath, 'CHANGELOG.md'), 'utf8')).toMatch(
       /^# Changelog\n\n## \[0\.2\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n- x\n\n## \[0\.1\.0\]/,
     );
+    // A version tag without a "v" is the latest tag, and main at it has nothing to release.
+    const status = await serviceWith(jobs).status(projectId);
+    expect(status.latestTag).toBe('0.2.0');
+    expect(status.release).toEqual({ ok: false, reason: expect.stringContaining('nothing new to release') });
+    const again = await refusal(
+      jobs.start(projectId, publish(git(projectPath, 'rev-parse', 'main'), { version: '0.3.0' })),
+    );
+    expect(again.code).toBe('nothing_to_release');
   });
 
   it('without a forge account the tag is pushed and the release step is skipped with the reason', async () => {
@@ -542,6 +564,138 @@ describe('release', () => {
     await merging;
   });
 
+  it("working = default: origin's main moving stops at push_main, main goes back, and after a Pull a new release finishes", async () => {
+    commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: log');
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    let moved = false;
+    const jobs = jobsWith({
+      build: async () => {
+        if (!moved) {
+          moved = true;
+          const elsewhere = cloneOf(bare);
+          commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+          git(elsewhere, 'push', '-q', 'origin', 'main');
+        }
+        return okBuild();
+      },
+    });
+    approveChecks();
+    const svc = serviceWith(jobs);
+    await svc.startRelease(projectId, publish(head));
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('failed');
+    expect(job.steps.find((s) => s.name === 'push_main')!.detail).toBe(
+      "origin's main moved during the release: Pull, then start the release again",
+    );
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(head);
+    expect(git(projectPath, 'status', '--porcelain')).toBe('');
+    expect(has(bare, 'refs/tags/v0.2.0')).toBe('');
+
+    expect((await svc.pull(projectId, { auto: false })).state).toBe('pulled');
+    const pulled = git(projectPath, 'rev-parse', 'main');
+    expect(pulled).not.toBe(head);
+    await svc.startRelease(projectId, publish(pulled));
+    await jobs.idle();
+    expect(storedJob().state).toBe('done');
+    expect(git(bare, 'log', '-1', '--format=%P', 'main')).toBe(pulled);
+    expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(git(bare, 'rev-parse', 'main'));
+  });
+
+  it("push_main is done when origin's main already has the release's commit", async () => {
+    approveChecks();
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    const jobs = jobsWith({
+      build: async () => {
+        const elsewhere = cloneOf(bare);
+        commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+        git(elsewhere, 'push', '-q', 'origin', 'main');
+        return okBuild();
+      },
+    });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('done');
+    expect(job.steps.find((s) => s.name === 'push_main')).toMatchObject({
+      status: 'done',
+      detail: "origin's main has this release's commit already.",
+    });
+    // The tag names exactly the approved commit, not what origin got since.
+    expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(head);
+  });
+
+  it('with the promote skipped (main has the working branch), Pull then Retry finishes after origin moved', async () => {
+    commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: log');
+    commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    git(projectPath, 'branch', 'develop');
+    git(projectPath, 'push', '-q', bare, 'develop');
+    expect((await send('POST', gitUrl('/working-branch'), { branch: 'develop' })).statusCode).toBe(200);
+    const head = git(projectPath, 'rev-parse', 'develop');
+    let moved = false;
+    approveChecks();
+    const jobs = jobsWith({
+      build: async () => {
+        if (!moved) {
+          moved = true;
+          const elsewhere = cloneOf(bare);
+          commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+          git(elsewhere, 'push', '-q', 'origin', 'main');
+        }
+        return okBuild();
+      },
+    });
+    const svc = serviceWith(jobs);
+    await svc.startRelease(projectId, publish(head));
+    await jobs.idle();
+    let job = storedJob();
+    expect(job.steps[0]).toMatchObject({ name: 'promote', status: 'skipped' });
+    expect(job.steps.find((s) => s.name === 'push_main')!.detail).toBe(
+      "origin's main moved during the release: Pull, then Retry",
+    );
+    expect((await svc.pull(projectId, { auto: false })).state).toBe('pulled');
+    await svc.retryRelease(projectId);
+    await jobs.idle();
+    job = storedJob();
+    expect(job.state).toBe('done');
+    expect(git(bare, 'log', '-1', '--format=%s', 'main')).toBe('chore(release): v0.2.0');
+    expect(git(bare, 'log', '--format=%s', 'main')).toContain('feat: merged on the forge');
+    git(projectPath, 'merge-base', '--is-ancestor', 'main', 'develop');
+  });
+
+  it('a take-back that fails says why instead of "Pull, then Retry"', async () => {
+    commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: log');
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    let calls = 0;
+    const repository: Deps['repository'] = {
+      readOrigin: (id, ws) => t.repository.readOrigin(id, ws),
+      recordPush: (id, ws, b, oid) => t.repository.recordPush(id, ws, b, oid),
+      remoteAction: async (id, fn) => {
+        // The push of main: origin moved, and the person edited CHANGELOG.md here meanwhile.
+        if (++calls === 2) {
+          const elsewhere = cloneOf(bare);
+          commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+          git(elsewhere, 'push', '-q', 'origin', 'main');
+          writeFileSync(path.join(projectPath, 'CHANGELOG.md'), 'edited by hand\n');
+        }
+        return t.repository.remoteAction(id, fn);
+      },
+    };
+    const jobs = jobsWith({ repository });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const job = storedJob();
+    const detail = job.steps.find((s) => s.name === 'push_main')!.detail!;
+    expect(detail).toContain('could not be put back');
+    expect(detail).not.toContain('Pull, then');
+    // main keeps the release commit (unpushed); Undo promote is what the detail names.
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(job.releaseCommit);
+    expect(readFileSync(path.join(projectPath, 'CHANGELOG.md'), 'utf8')).toBe('edited by hand\n');
+  });
+
   it('POST /git/release answers 202 with the job, and GET /git shows the page status', async () => {
     const head = await developWithTickets();
     const before = (await send('GET', gitUrl())).json() as GitPageStatus;
@@ -585,5 +739,81 @@ describe('release', () => {
     });
     expect((await send('POST', gitUrl('/release/retry'))).statusCode).toBe(409);
     expect((await send('POST', gitUrl('/release/undo-promote'))).statusCode).toBe(409);
+  });
+});
+
+describe('the CHANGELOG section', () => {
+  it('keeps the items under ## [Unreleased] there, and puts the version below them', () => {
+    const text =
+      '# Changelog\n\n## [Unreleased]\n\n- Not released yet.\n\n## [0.1.0] - 2026-01-01\n\n- First.\n';
+    expect(withReleaseSection(text, 'v0.2.0', '2026-11-13', '- Second.')).toBe(
+      '# Changelog\n\n## [Unreleased]\n\n- Not released yet.\n\n## [0.2.0] - 2026-11-13\n\n- Second.\n\n## [0.1.0] - 2026-01-01\n\n- First.\n',
+    );
+    // An Unreleased section that is the last one: the version goes at its end.
+    expect(
+      withReleaseSection('# Log\n\n## [Unreleased]\n- Pending.\n', '1.0.0', '2026-11-13', '- One.'),
+    ).toBe('# Log\n\n## [Unreleased]\n- Pending.\n\n## [1.0.0] - 2026-11-13\n\n- One.\n');
+    // No heading at all: at the end.
+    expect(withReleaseSection('# Log\n', '1.0.0', '2026-11-13', '- One.')).toBe(
+      '# Log\n\n## [1.0.0] - 2026-11-13\n\n- One.\n',
+    );
+  });
+
+  it('stays linear on a long run of whitespace', () => {
+    const text = `# Log\n${' '.repeat(400_000)}x\n${' \t'.repeat(200_000)}`;
+    const started = performance.now();
+    const out = withReleaseSection(text, 'v1.0.0', '2026-11-13', '- One.');
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(out.endsWith('x\n\n## [1.0.0] - 2026-11-13\n\n- One.\n')).toBe(true);
+  });
+});
+
+describe('GET /git', () => {
+  it('a folder that is no git repository', async () => {
+    const made = (await send('POST', '/api/projects', { name: 'Plain Folder', initGit: false })).json();
+    const status = (await send('GET', `/api/projects/${made.project.id}/git`)).json() as GitPageStatus;
+    expect(status).toMatchObject({
+      isGitRepo: false,
+      hasOrigin: false,
+      working: 'unknown',
+      main: 'unknown',
+      release: { ok: false, reason: expect.stringContaining('not a git repository') },
+    });
+  });
+
+  it('a project with no origin', async () => {
+    const made = (await send('POST', '/api/projects', { name: 'No Origin', initGit: true })).json();
+    commit(made.project.path, 'a.txt', 'a\n', 'feat: a');
+    const status = (await send('GET', `/api/projects/${made.project.id}/git`)).json() as GitPageStatus;
+    expect(status).toMatchObject({
+      isGitRepo: true,
+      hasOrigin: false,
+      originUrl: null,
+      main: 'unknown',
+      forgeRelease: false,
+      release: { ok: false, reason: expect.stringContaining('no origin') },
+    });
+  });
+
+  it('with auto-pull off, main and the working branch are classified against the tracking refs', async () => {
+    await developWithTickets();
+    expect((await send('PATCH', gitUrl(), { autoPull: false })).statusCode).toBe(200);
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    git(elsewhere, 'switch', '-q', 'develop');
+    git(elsewhere, 'reset', '-q', '--hard', 'origin/main~1');
+    commit(elsewhere, 'other.txt', 'o\n', 'feat: other on develop');
+    git(elsewhere, 'push', '-q', '-f', 'origin', 'develop');
+    expect((await send('POST', gitUrl('/fetch'))).statusCode).toBe(200);
+    const status = (await send('GET', gitUrl())).json() as GitPageStatus;
+    expect(status).toMatchObject({
+      autoPull: false,
+      sync: { state: 'idle' },
+      main: 'behind',
+      working: 'diverged',
+      release: { ok: false, reason: expect.stringContaining('Pull first') },
+    });
+    expect(status.checkedAt).not.toBeNull();
   });
 });
