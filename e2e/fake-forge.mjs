@@ -2,7 +2,7 @@
  * Fake Gitea for make e2e (see apps/core/src/test-fake-forge.ts, the unit-test twin).
  * REST under /api/v1 and git smart HTTP through `git http-backend` (CGI). Two debug routes without
  * auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of refs/heads/main
- * in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on it, as a push from elsewhere.
+ * (`main`) and of every branch (`heads`, by name) in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on it, as a push from elsewhere.
  * POST /_e2e/hold makes fetches (git-upload-pack) wait, GET /_e2e/held counts the waiting ones and
  * POST /_e2e/release lets them through: a clone that is running while the test looks around.
  */
@@ -105,18 +105,19 @@ createServer((req, res) => {
     if (req.method === 'GET' && head) {
       if (head[1].includes('..') || head[2].includes('..')) return json(res, 400, { message: 'bad name' });
       const dir = path.join(root, head[1], `${head[2]}.git`);
-      let main = null;
+      const heads = {};
       if (existsSync(dir)) {
-        try {
-          main =
-            execFileSync('git', ['--git-dir', dir, 'rev-parse', '--verify', '--quiet', 'refs/heads/main'], {
-              encoding: 'utf8',
-            }).trim() || null;
-        } catch {
-          main = null;
+        const refs = execFileSync(
+          'git',
+          ['--git-dir', dir, 'for-each-ref', '--format=%(objectname) %(refname:strip=2)', 'refs/heads'],
+          { encoding: 'utf8' },
+        );
+        for (const line of refs.split('\n').filter(Boolean)) {
+          const [sha, name] = line.split(' ');
+          heads[name] = sha;
         }
       }
-      return json(res, 200, { main });
+      return json(res, 200, { main: heads.main ?? null, heads });
     }
     const outside = /^\/_e2e\/commit\/([^/]+)\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'POST' && outside) {

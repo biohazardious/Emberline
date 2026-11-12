@@ -272,7 +272,10 @@ await step(
   async () => {
     const base = `/api/projects/${project.id}/repository`;
     const forgeMain = async () => (await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json()).main;
-    assert.equal((await api('PATCH', base, { keepMainPushed: true })).json.keepMainPushed, true);
+    // The default branch as the target; new opt-ins push to the integration branch (next step).
+    const opted = await api('PATCH', base, { keepMainPushed: true, pushTarget: 'default_branch' });
+    assert.equal(opted.json.keepMainPushed, true, opted.text);
+    assert.equal(opted.json.keepPushedBranch, 'main', opted.text);
     const run = await api('POST', '/api/runs', { projectId: project.id, prompt: 'e2e keep main pushed' });
     assert.equal(run.status, 201, run.text);
     await api('POST', `/api/runs/${run.json.id}/stop`);
@@ -304,6 +307,36 @@ await step(
     assert.equal(push.status, 409, push.text);
     assert.equal(push.json.error, 'main_diverged');
     assert.equal((await api('POST', `${base}/refresh`)).json.mainState, 'diverged');
+    await api('PATCH', base, { keepMainPushed: false });
+  },
+);
+
+await step(
+  'repository: Keep main pushed to the integration branch pushes a merge there and leaves main alone',
+  async () => {
+    const base = `/api/projects/${project.id}/repository`;
+    const forge = async () => await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json();
+    const mainBefore = (await forge()).main;
+    const opted = await api('PATCH', base, { keepMainPushed: true, pushTarget: 'integration_branch' });
+    assert.equal(opted.status, 200, opted.text);
+    assert.equal(opted.json.keepPushedBranch, 'emberline/integration', opted.text);
+    const run = await api('POST', '/api/runs', { projectId: project.id, prompt: 'e2e integration branch' });
+    assert.equal(run.status, 201, run.text);
+    await api('POST', `/api/runs/${run.json.id}/stop`);
+    const w = await api('PUT', `/api/projects/${project.id}/files/content`, {
+      targetId: run.json.id,
+      path: 'integrated.txt',
+      content: 'integrated.txt\n',
+    });
+    assert.equal(w.status, 200, w.text);
+    const s = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: run.json.id });
+    assert.equal(s.json?.ok, true, s.text);
+    const tip = (await api('GET', base)).json.mainTip.sha;
+    await until(
+      async () => (await forge()).heads['emberline/integration'] === tip,
+      'Keep main pushed never pushed the integration branch',
+    );
+    assert.equal((await forge()).main, mainBefore, 'main on the forge is left alone');
     await api('PATCH', base, { keepMainPushed: false });
   },
 );
