@@ -1,12 +1,13 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { rmTemp } from './test-rm.js';
+import { REPO_ROOT as ROOT, workspacePackages } from './test-workspace.js';
 
 // PROJECT.md §6 M1 guards that are not lint rules: package manifests (AC-1.5), the ban on
 // skipped tests (AC-1.11) and the hermetic test environment from test-setup.ts (AC-1.9).
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 const Manifest = z.object({
   name: z.string(),
@@ -16,25 +17,66 @@ const Manifest = z.object({
 type Manifest = z.infer<typeof Manifest>;
 
 function packageDirs(): string[] {
-  return ['apps', 'packages'].flatMap((group) =>
-    readdirSync(path.join(ROOT, group), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => `${group}/${entry.name}`),
-  );
+  return workspacePackages().map((pkg) => pkg.dir);
 }
 
 function manifest(dir: string): Manifest {
   return Manifest.parse(JSON.parse(readFileSync(path.join(ROOT, dir, 'package.json'), 'utf8')));
 }
 
+/** Every test file of a package wherever it sits (src/, scripts/, test/), outside installs and builds. */
 function testFiles(dir: string): string[] {
-  const src = path.join(dir, 'src');
-  return readdirSync(path.join(ROOT, src), { recursive: true, encoding: 'utf8' })
-    .filter((file) => /\.test\.tsx?$/.test(file))
-    .map((file) => path.join(src, file));
+  return readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules' || entry.name === 'dist') return [];
+    const file = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) return testFiles(file);
+    return /\.test\.tsx?$/.test(entry.name) ? [file] : [];
+  });
+}
+
+function withWorkspace(yaml: string, body: (root: string) => void): void {
+  const root = mkdtempSync(path.join(tmpdir(), 'emberline-workspace-'));
+  try {
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), yaml);
+    body(root);
+  } finally {
+    rmTemp(root);
+  }
 }
 
 const APACHE_PACKAGES = ['packages/protocol', 'packages/adapter-sdk'];
+
+describe('workspace package discovery', () => {
+  it('finds every package pnpm-workspace.yaml declares', () => {
+    expect(packageDirs()).toEqual([
+      'apps/core',
+      'apps/ptyd',
+      'apps/web',
+      'packages/adapter-claude',
+      'packages/adapter-codex',
+      'packages/adapter-gemini',
+      'packages/adapter-sdk',
+      'packages/hook',
+      'packages/protocol',
+    ]);
+  });
+
+  it('ignores a directory under a workspace glob that holds no package.json', () => {
+    // The Docker build's `pnpm deploy --legacy` leaves apps/out/core/node_modules/.bin behind.
+    withWorkspace("packages:\n  - 'apps/*'\n  - 'packages/*'\n", (root) => {
+      mkdirSync(path.join(root, 'apps/core'), { recursive: true });
+      writeFileSync(path.join(root, 'apps/core/package.json'), '{"name":"@emberline/core"}');
+      mkdirSync(path.join(root, 'apps/out/core/node_modules/.bin'), { recursive: true });
+      expect(workspacePackages(root)).toEqual([{ dir: 'apps/core', manifest: { name: '@emberline/core' } }]);
+    });
+  });
+
+  it('refuses a workspace glob it cannot expand instead of matching nothing', () => {
+    withWorkspace("packages:\n  - 'apps/**'\n", (root) => {
+      expect(() => workspacePackages(root)).toThrow(/not understood/);
+    });
+  });
+});
 
 describe('package manifests (AC-1.5)', () => {
   it('protocol depends on zod only', () => {

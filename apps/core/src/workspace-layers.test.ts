@@ -1,36 +1,15 @@
-import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { REPO_ROOT as ROOT, workspacePackages } from './test-workspace.js';
 
 // PROJECT.md §3.2 / AC-1.3, AC-1.4: the layering is enforced by `eslint.config.js`, and this
 // suite lints probe sources against that real config so a loosened rule fails the test gate.
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const LAYER_MESSAGE = 'Crosses a package layer boundary; see PROJECT.md §3.';
 const BROWSER_MESSAGE = 'apps/web runs in the browser; Node built-ins are not available.';
 
 const Manifest = z.object({ name: z.string() });
-
-interface WorkspacePackage {
-  readonly dir: string;
-  readonly name: string;
-}
-
-function workspacePackages(): WorkspacePackage[] {
-  return ['apps', 'packages'].flatMap((group) =>
-    readdirSync(path.join(ROOT, group), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        const dir = `${group}/${entry.name}`;
-        const manifest = Manifest.parse(
-          JSON.parse(readFileSync(path.join(ROOT, dir, 'package.json'), 'utf8')),
-        );
-        return { dir, name: manifest.name };
-      }),
-  );
-}
 
 /** The workspace imports each layer's production sources may use (PROJECT.md §3.2). */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
@@ -52,7 +31,10 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-const PACKAGES = workspacePackages();
+const PACKAGES = workspacePackages().map(({ dir, manifest }) => ({
+  dir,
+  name: Manifest.parse(manifest).name,
+}));
 
 let eslint: ESLint;
 
