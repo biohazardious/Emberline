@@ -1,7 +1,7 @@
-import { utils } from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { projects } from './db/schema.js';
 import { sshFingerprint } from './ssh-keys/known-hosts.js';
+import { ed25519KeyPair } from './ssh-keys/store.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -16,7 +16,8 @@ const call = async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payl
 
 /** A fresh ed25519 host key as the blob and its fingerprint. */
 const hostKey = () => {
-  const key = utils.generateKeyPairSync('ed25519').public.trim().split(' ')[1]!;
+  // ed25519KeyPair, not ssh2's generator: that drops a leading zero byte (1 key in 256 is malformed).
+  const key = ed25519KeyPair('host').publicKey.split(' ')[1]!;
   return { keyType: 'ssh-ed25519', key, fingerprint: sshFingerprint(key) };
 };
 

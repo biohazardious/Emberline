@@ -7,11 +7,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { Server, utils } from 'ssh2';
+import { Server } from 'ssh2';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Db, openDb } from '../db/index.js';
 import { projects } from '../db/schema.js';
-import { deleteKey, generateKey, keyForProject } from '../ssh-keys/store.js';
+import { deleteKey, ed25519KeyPair, generateKey, keyForProject } from '../ssh-keys/store.js';
 import { removeHostKey, trustHostKey } from '../ssh-keys/known-hosts.js';
 import { rmTemp } from '../test-rm.js';
 import { type GatewayGrant, GitGateway } from './gateway.js';
@@ -82,7 +82,7 @@ describe('a server that logs in but never answers the git command', () => {
   // sshd always answers an exec request; ssh2's own server need not: the client waits for a reply
   // that never comes, and only the idle limit ends the operation.
   it('runs into the idle limit, the connection closed', async () => {
-    const server = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private] }, (client) => {
+    const server = new Server({ hostKeys: [ed25519KeyPair('test').privateKey] }, (client) => {
       client.on('authentication', (ctx) => ctx.accept());
       client.on('ready', () =>
         client.on('session', (accept) => {
@@ -103,7 +103,7 @@ describe('a server that logs in but never answers the git command', () => {
       const started = Date.now();
       const opened = openSshUpstream({
         url: `ssh://git@127.0.0.1:${port}/app.git`,
-        privateKey: utils.generateKeyPairSync('ed25519').private,
+        privateKey: ed25519KeyPair('test').privateKey,
         service: 'git-upload-pack',
         protocolV2: false,
         signal: new AbortController().signal,
@@ -459,7 +459,7 @@ describe.skipIf(!SSHD)('the git gateway over ssh', () => {
   });
 
   it('a host trusted with another key fails with host_key_changed, showing the key offered', async () => {
-    const other = utils.generateKeyPairSync('ed25519').public.split(' ');
+    const other = ed25519KeyPair('other').publicKey.split(' ');
     trustHostKey(db, { host: '127.0.0.1', port, keyType: other[0]!, key: other[1]! });
     const e = await failure(viaGateway(grant('app'), (url) => ['ls-remote', '--', url]));
     expect(e.code).toBe('host_key_changed');
