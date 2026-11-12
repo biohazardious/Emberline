@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  AUTONOMOUS_EXECUTION_POLICY,
   buildEmberlineMcpConfig,
   buildHookSettings,
   buildLaunchSpec,
@@ -12,6 +13,8 @@ import {
   headlessModeProblem,
   nextStateFromHook,
   PERSONA_CATALOG,
+  personaBrief,
+  REPOSITORY_RULES,
   RUNNER_ENVIRONMENT,
   stateAfterExit,
   WATCHED_HOOKS,
@@ -56,6 +59,9 @@ describe('run settings', () => {
   });
 });
 
+/** What an attended (not autonomous) Claude run gets in its system prompt. */
+const ATTENDED_SYSTEM_PROMPT = `${RUNNER_ENVIRONMENT}\n\n${REPOSITORY_RULES}`;
+
 describe('buildLaunchSpec', () => {
   const base = { runId: 'r1', hookToken: 'tok', coreUrl: 'http://core:7420' };
 
@@ -65,7 +71,7 @@ describe('buildLaunchSpec', () => {
     expect(spec.args[0]).toBe('--settings');
     expect(JSON.parse(spec.args[1] ?? '')).toEqual(buildHookSettings('emberline-hook'));
     expect(spec.args.slice(2, 4)).toEqual(['--no-chrome', '--mcp-config']);
-    expect(spec.args.slice(5)).toEqual(['--append-system-prompt', RUNNER_ENVIRONMENT]);
+    expect(spec.args.slice(5)).toEqual(['--append-system-prompt', ATTENDED_SYSTEM_PROMPT]);
     expect(spec.env).toMatchObject({
       EMBERLINE_RUN_ID: 'r1',
       EMBERLINE_HOOK_TOKEN: 'tok',
@@ -89,7 +95,7 @@ describe('buildLaunchSpec', () => {
       '--permission-mode',
       'acceptEdits',
       '--append-system-prompt',
-      RUNNER_ENVIRONMENT,
+      ATTENDED_SYSTEM_PROMPT,
       '--resume',
       'sess-1',
       '--',
@@ -127,7 +133,7 @@ describe('buildLaunchSpec', () => {
   it('tells every Claude run about the runner, even without other system prompts', () => {
     const spec = buildLaunchSpec({ ...base, permissionMode: 'default', prompt: 'Flash the ESP32' });
     const promptIdx = spec.args.indexOf('--append-system-prompt');
-    expect(spec.args[promptIdx + 1]).toBe(RUNNER_ENVIRONMENT);
+    expect(spec.args[promptIdx + 1]).toBe(ATTENDED_SYSTEM_PROMPT);
     expect(RUNNER_ENVIRONMENT).toContain('emberline-sdk install');
     expect(RUNNER_ENVIRONMENT).toContain('xvfb-run');
   });
@@ -153,7 +159,7 @@ describe('buildLaunchSpec', () => {
       const modeIdx = spec.args.indexOf('--permission-mode');
       expect(modeIdx === -1 ? 'default' : spec.args[modeIdx + 1]).toBe(permissionMode);
       const promptIdx = spec.args.indexOf('--append-system-prompt');
-      expect(spec.args[promptIdx + 1]).toBe(`${RUNNER_ENVIRONMENT}\n\n## ACTIVE SKILL: Modern UI Craft`);
+      expect(spec.args[promptIdx + 1]).toBe(`${ATTENDED_SYSTEM_PROMPT}\n\n## ACTIVE SKILL: Modern UI Craft`);
     },
   );
 
@@ -501,5 +507,36 @@ describe('architect follow-up tickets', () => {
     const text = PERSONA_CATALOG.architect.systemPrompt;
     expect(text).toContain('only when your ticket asks for them');
     expect(text).not.toContain('You may also spawn follow-up specialist tickets');
+  });
+});
+
+describe('planning, verification and repository rules (factory lessons)', () => {
+  it('the planner checks existing tickets and lists Target Files', () => {
+    const text = PERSONA_CATALOG.product_owner.systemPrompt;
+    expect(text).toContain('check the existing open and done tickets');
+    expect(text).toContain('never create a second ticket for a change one already covers');
+    expect(text).toContain('`## Target Files`');
+  });
+
+  it('ui_ux verifies interaction and performance claims in a real browser', () => {
+    expect(PERSONA_CATALOG.ui_ux.systemPrompt).toContain(
+      'Verify any claim about interaction or performance (virtualised lists, scrolling, lazy loading, keyboard navigation) in that real browser, not only in happy-dom unit tests.',
+    );
+  });
+
+  it('every persona, and every Claude system prompt, carries the repository rules', () => {
+    for (const persona of Object.keys(PERSONA_CATALOG) as (keyof typeof PERSONA_CATALOG)[]) {
+      if (persona === 'coder') continue; // no brief: the system prompt carries them
+      expect(personaBrief(persona)?.rules).toContain(REPOSITORY_RULES);
+    }
+    expect(AUTONOMOUS_EXECUTION_POLICY).toContain(REPOSITORY_RULES);
+    expect(REPOSITORY_RULES).toContain('Never `git add -f`');
+    expect(REPOSITORY_RULES).toContain('Never write commit trailers');
+    expect(REPOSITORY_RULES).toContain('false positive');
+    const base = { runId: 'r1', hookToken: 'tok', coreUrl: 'http://core:7420' };
+    for (const permissionMode of ['default', 'auto'] as const) {
+      const spec = buildLaunchSpec({ ...base, permissionMode, prompt: 'x' });
+      expect(spec.args[spec.args.indexOf('--append-system-prompt') + 1]).toContain(REPOSITORY_RULES);
+    }
   });
 });

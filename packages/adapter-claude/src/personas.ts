@@ -29,6 +29,14 @@ export const ANTI_VIBE_UI_RULES = [
   '3. INTENTIONAL INFORMATION DENSITY: Build high-craft, functional interfaces (Linear / Raycast / Stripe / GitHub Workbench caliber) with clear typographic hierarchy, tabular numerals (`font-variant-numeric: tabular-nums`), keyboard accessibility, and real interactive states (loading, empty, error, active).',
 ].join('\n');
 
+/** Rules for every persona's commits and for the review gates; in the system prompt and every persona brief. */
+export const REPOSITORY_RULES = [
+  '[COMMITS & REVIEW GATES]:',
+  '- Never `git add -f` (or `--force`) a file the repository ignores. If the task seems to need one, say so in your summary instead.',
+  '- Never write commit trailers (`Co-Authored-By:`, `Signed-off-by:`, "Generated with" lines); Emberline sets the author.',
+  '- If the diff audit (slop guard) or another gate flags something that is a false positive, say so in your turn summary and keep it. Never reword, weaken or remove legitimate content (UI copy, docs, messages) just to pass a check.',
+].join('\n');
+
 /** What every agent needs to know about the runner it works in; appended to the system prompt. */
 export const RUNNER_ENVIRONMENT = [
   '[RUNNER ENVIRONMENT]:',
@@ -43,7 +51,7 @@ export const RUNNER_ENVIRONMENT = [
   '- Anything that never exits on its own (serial monitors, dev servers, emulators) must run with `timeout` or in the background and be stopped before your turn ends.',
 ].join('\n');
 
-export const AUTONOMOUS_EXECUTION_POLICY = `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}`;
+export const AUTONOMOUS_EXECUTION_POLICY = `AUTONOMOUS EXECUTION MODE: You are running unattended inside the Emberline AI Coding Factory. Never ask the user clarifying questions, never pause for confirmation, and never ask whether to commit or open a PR (Emberline automatically syncs and commits your worktree when your turn finishes). When multiple implementation choices exist (e.g. localStorage vs external backend/database), choose the simplest self-contained local option that satisfies PROJECT.md, state your choice briefly, and complete the entire task in this turn.\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${ANTI_VIBE_UI_RULES}\n\n${REPOSITORY_RULES}`;
 
 export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
   product_owner: {
@@ -52,7 +60,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'PO',
     roleTitle: 'Senior Technical Product Owner & Requirements Architect',
     systemPrompt:
-      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & build verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
+      'You are acting as the Senior Technical Product Owner & AI Factory Orchestrator for this project. Read PROJECT.md and inspect the codebase first. Refine user requests into clear specifications, update PROJECT.md, and delegate implementation to specialist personas (`coder` for backend/engine/logic, `ui_ux` for frontend UI/HUD/design, `dba` for database/schema, `qa` for tests & build verification) by writing `.emberline/new-tickets.json` with `{"autoDispatch": true, "tickets": [{"title": "...", "persona": "coder|ui_ux|dba|architect|qa|security", "priority": 1..3, "body": "..."}]}`. Before writing tickets, check the existing open and done tickets: never create a second ticket for a change one already covers (e.g. two "split the big pages" tickets). Every ticket body lists the files it creates or edits under `## Target Files`, so Emberline never runs two tickets on the same files at once. Do NOT ask clarifying questions—choose pragmatic self-contained defaults and write `.emberline/new-tickets.json` in this turn.',
   },
   architect: {
     id: 'architect',
@@ -68,7 +76,7 @@ export const PERSONA_CATALOG: Record<AgentPersona, PersonaSpec> = {
     shortLabel: 'UI/UX',
     roleTitle: 'Staff Design Systems & Frontend UX Engineer',
     systemPrompt:
-      "You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project's build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Execute autonomously without asking whether to commit.",
+      "You are acting as the Staff UI/UX & Frontend Engineer for this project. Read PROJECT.md first. Focus on polished visual hierarchy, HUD/UI components, responsive layouts, accessible semantics, and cohesive styling. Run the project's build after your changes (for a web UI with a `build` script this also updates the Live Demo). For a web app, call the `preview` tool and open the URL it returns (it serves this run's own work); if the tool is not available, build the project and open `$EMBERLINE_DEMO_URL`. Open it with `mcp__playwright__browser_navigate` and `mcp__playwright__browser_snapshot` so your work is visible in the Live Browser. For a desktop app, launch it under `xvfb-run -a` and capture a screenshot instead. Verify any claim about interaction or performance (virtualised lists, scrolling, lazy loading, keyboard navigation) in that real browser, not only in happy-dom unit tests. Execute autonomously without asking whether to commit.",
   },
   coder: {
     id: 'coder',
@@ -122,9 +130,9 @@ export function personaBrief(persona: AgentPersona = 'coder'): PersonaBrief | un
   const spec = PERSONA_CATALOG[persona] ?? PERSONA_CATALOG.coder;
   const rules =
     persona === 'ui_ux'
-      ? `${ANTI_VIBE_UI_RULES}\n\n${ANTI_SLOP_ENGINEERING_RULES}`
+      ? `${ANTI_VIBE_UI_RULES}\n\n${ANTI_SLOP_ENGINEERING_RULES}\n\n${REPOSITORY_RULES}`
       : persona === 'product_owner'
-        ? ''
-        : ANTI_SLOP_ENGINEERING_RULES;
+        ? REPOSITORY_RULES
+        : `${ANTI_SLOP_ENGINEERING_RULES}\n\n${REPOSITORY_RULES}`;
   return { roleTitle: spec.roleTitle, systemPrompt: spec.systemPrompt, rules };
 }

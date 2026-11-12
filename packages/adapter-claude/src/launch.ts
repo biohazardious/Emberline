@@ -1,6 +1,6 @@
 /** The command line and environment of a Claude Code session. */
 import { isAutonomousPermissionMode, type LaunchSpec } from '@emberline/adapter-sdk';
-import { AUTONOMOUS_EXECUTION_POLICY, RUNNER_ENVIRONMENT } from './personas.js';
+import { AUTONOMOUS_EXECUTION_POLICY, REPOSITORY_RULES, RUNNER_ENVIRONMENT } from './personas.js';
 import {
   buildEmberlineMcpConfig,
   buildHookSettings,
@@ -120,8 +120,10 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
     if (options.permissionMode && options.permissionMode !== 'default') {
       args.push('--permission-mode', options.permissionMode);
     }
+    // The autonomous policy carries REPOSITORY_RULES; an attended run gets them here.
+    const baseline = `${RUNNER_ENVIRONMENT}\n\n${REPOSITORY_RULES}`;
     const extra = options.extraSystemPrompt?.trim();
-    args.push('--append-system-prompt', extra ? `${RUNNER_ENVIRONMENT}\n\n${extra}` : RUNNER_ENVIRONMENT);
+    args.push('--append-system-prompt', extra ? `${baseline}\n\n${extra}` : baseline);
   }
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId);
   // `--` ends option parsing so a prompt starting with "-" is never read as a flag.
