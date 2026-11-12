@@ -288,7 +288,7 @@ All tooling runs in Docker; the source is bind-mounted and `node_modules` lives 
 ```bash
 make dev                 # ptyd + core + web dev servers -> http://localhost:5173
 make check               # lint + typecheck + test + build
-make e2e                 # isolated core + runner + ops stack and an end-to-end smoke test
+make e2e                 # isolated core + runner + ops stack: smoke test, then the Playwright ticket-to-merge suite
 make e2e-upgrade         # upgrade paths from 0.5/0.6/0.7 volumes, snapshot rollback drill
 make shell               # shell inside the toolbox
 make lock                # after editing a package.json

@@ -11,6 +11,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- `make e2e` now also runs a Playwright regression suite (`e2e/ui/run.mjs`) after the smoke test: it imports a project from a git URL through the wizard, runs tickets with a scripted agent, answers an Inbox question, checks that a blocking review comment keeps the merge gate closed until it is resolved, and waits out a usage limit until the run resumes by itself. CI runs it in the end-to-end step (10-minute limit) and uploads Playwright traces on failure.
 - CI now runs the upgrade paths (`make e2e-upgrade`, `e2e/upgrade-paths.sh`): it seeds data volumes as 0.5.2, 0.6.2 and 0.7.0 left them, starts the current images on each release's own compose file and fails if a migration ran without a snapshot or broke a seeded row. See "Upgrade paths checked in CI" under Upgrade notes.
 - A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
 - Codex and Gemini CLI have adapters of their own (`packages/adapter-codex`, `packages/adapter-gemini`); core reaches every CLI through one registry keyed by agent id.
