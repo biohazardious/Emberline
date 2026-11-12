@@ -1,0 +1,2 @@
+CREATE INDEX `quota_windows_open_idx` ON `quota_windows` (`resumed_at`,`resume_at`);--> statement-breakpoint
+CREATE INDEX `quota_windows_lane_idx` ON `quota_windows` (`agent`,`credential`,`pool`,`exhausted_at`);

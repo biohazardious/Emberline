@@ -111,8 +111,10 @@ const resumeChains = () => {
 ptyd.on('status', (status) => {
   app.log.info({ socket: config.ptydSocket }, `ptyd ${status}`);
   if (status === 'connected') {
-    reconciled = runs.reconcile();
-    void scheduler.tick();
+    // Frees the slots of sessions lost while core was down, then resumes due pauses and re-arms the rest.
+    reconciled = scheduler
+      .recover()
+      .catch((err: unknown) => app.log.error({ err }, 'scheduler recovery failed'));
     resumeChains();
   }
 });
