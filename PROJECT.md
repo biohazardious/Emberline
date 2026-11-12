@@ -74,7 +74,11 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   (source `hook | transcript | screen | user | system`). Types: `packages/protocol/src/api/{projects,tickets,runs}.ts`
   and `packages/adapter-sdk/src/index.ts`. Tables: `apps/core/src/db/schema.ts`.
 - **Scheduling:** `QuotaWindow` and scheduled jobs live in SQLite, so restarts keep every timer (`api/scheduler.ts`, `api/usage.ts`).
-- **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
+- **Review:** per-run diffs, line comments and review rounds (`api/review.ts`). `ReviewPage.tsx` and `ReviewView.tsx`
+  render an inline merge-gate blocking banner with comment anchor links (`reviewGate.ts`, `components/review/MergeGateBanner.tsx`),
+  a virtualised hierarchical file tree with rolled-up comment/blocking tabular counts (`reviewTree.ts`, `components/review/ReviewFileTree.tsx`),
+  keyboard navigation (`j`/`k` file, `n`/`p` comment, `c` add comment, `b` toggle blocking, `?` shortcut sheet via `reviewShortcuts.ts`),
+  and lazy LRU-bounded Monaco diff models (`components/review/monacoModelPool.ts`, `review-keyboard.css`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).
 - **Agent-written factory files:** `.emberline/new-tickets.json` / `tickets.json`, `roadmap-generated.json` and
