@@ -78,6 +78,11 @@ export interface CoreConfig {
   /** Claude Code transcripts (runner home, mounted read-only); only paths under it are read. */
   transcriptsDir: string;
   /**
+   * Days a `done` run keeps its full event log (EMBERLINE_EVENT_RETENTION_DAYS, default 90); older
+   * ones are compacted by runs/event-retention.ts. 0 keeps every event.
+   */
+  eventRetentionDays: number;
+  /**
    * The isolated Docker engine (compose service `docker`, `tcp://docker:2376`, mutual TLS) that runs
    * and worktree.yml commands get as `DOCKER_HOST` while it answers. Unset: no Docker, also when
    * `EMBERLINE_DOCKER_ENGINE=0` (the compose files default the host; core alone stays off without one).
@@ -133,6 +138,14 @@ function parsableHost(host: string): boolean {
   }
 }
 
+export const DEFAULT_EVENT_RETENTION_DAYS = 90;
+
+/** A whole number of days ≥ 0; anything else (unset, negative, fractional, text) is the default. */
+export function parseRetentionDays(raw: string | undefined): number {
+  const value = raw?.trim() ?? '';
+  return /^\d{1,5}$/.test(value) ? Number(value) : DEFAULT_EVENT_RETENTION_DAYS;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const port = Number(env.EMBERLINE_PORT ?? 7420);
   const engineSetting = env.EMBERLINE_DOCKER_ENGINE?.trim() ?? '';
@@ -181,6 +194,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     setupToken: env.EMBERLINE_SETUP_TOKEN?.trim() || undefined,
     allowedHosts: parseAllowedHosts(env.EMBERLINE_ALLOWED_HOSTS ?? '').hosts,
     transcriptsDir: env.EMBERLINE_TRANSCRIPTS_DIR ?? '/home/node/.claude/projects',
+    eventRetentionDays: parseRetentionDays(env.EMBERLINE_EVENT_RETENTION_DAYS),
     dockerHost: engineOff && bundled ? undefined : host,
     dockerEngineSwitchedOff: engineOff && (host === undefined || bundled),
     dockerEngineSettingInvalid: ['', '0', '1'].includes(engineSetting) ? undefined : engineSetting,

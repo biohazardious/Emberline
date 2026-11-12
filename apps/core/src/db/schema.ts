@@ -211,6 +211,8 @@ export const tickets = sqliteTable(
   },
   (t) => [
     uniqueIndex('tickets_project_number_idx').on(t.projectId, t.number),
+    // The board lists a project's tickets in position order without a sort step.
+    index('tickets_project_position_idx').on(t.projectId, t.position),
     // One ticket per issue: the guard that makes imports idempotent, also under concurrent imports.
     uniqueIndex('tickets_external_idx').on(t.projectId, t.externalSource, t.externalId),
   ],
@@ -267,7 +269,14 @@ export const runs = sqliteTable(
     /** Automatic handoffs so far in this ticket attempt (copied +1 to a successor). */
     handoffCount: integer('handoff_count').notNull().default(0),
   },
-  (t) => [index('runs_project_idx').on(t.projectId)],
+  (t) => [
+    // A project's runs by age (usage by day); its prefix serves every project_id lookup.
+    index('runs_project_created_idx').on(t.projectId, t.createdAt),
+    // A ticket's latest or active run: the board card and the review-ready check.
+    index('runs_ticket_created_idx').on(t.ticketId, t.createdAt),
+    // Scheduler sweeps by state, /metrics counts per state, and event retention's age cut-off.
+    index('runs_state_changed_idx').on(t.state, t.stateChangedAt),
+  ],
 );
 
 export const runEvents = sqliteTable(
@@ -293,6 +302,25 @@ export const runEvents = sqliteTable(
       .where(sql`${t.state} IS NOT NULL`),
   ],
 );
+
+/**
+ * What event retention (runs/event-retention.ts) removed from a finished run, so its usage totals
+ * survive the rows: tool calls counted from the deleted `PreToolUse` events and the transcript's token
+ * totals when it was readable (null: telemetry estimates from the tool calls). `throughEventId` is the
+ * newest event the last pass covered; a run resumed after it is compacted again once it ages out.
+ */
+export const runEventCompactions = sqliteTable('run_event_compactions', {
+  runId: text('run_id')
+    .primaryKey()
+    .references(() => runs.id, { onDelete: 'cascade' }),
+  compactedAt: integer('compacted_at', { mode: 'timestamp_ms' }).notNull(),
+  throughEventId: integer('through_event_id').notNull(),
+  eventsRemoved: integer('events_removed').notNull(),
+  toolCalls: integer('tool_calls').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cachedTokens: integer('cached_tokens'),
+});
 
 /**
  * Exhausted usage windows per lane (agent + credential + pool). A window with `resumedAt` null

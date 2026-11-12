@@ -7,7 +7,10 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDb } from './db/index.js';
+import { type Db, openDb } from './db/index.js';
+import { compactExpiredRunEvents, compactionOf } from './runs/event-retention.js';
+import { PRUNE_PROTECTED_EVENT_TYPES } from './runs/service.js';
+import { seedRunEvents } from './test-seed-events.js';
 import { rmTemp } from './test-rm.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../drizzle', import.meta.url));
@@ -243,5 +246,143 @@ describe('openDb', () => {
     );
     expect(db.db.all(sql.raw(`select line from review_comments where id = 'c2'`))).toEqual([{ line: null }]);
     db.close();
+  });
+
+  it('0028: hot board, inbox and scheduler lookups have composite indexes', () => {
+    const db = openDb(':memory:');
+    const indexes = (table: string) =>
+      (db.db.all(sql.raw(`pragma index_list(${table})`)) as { name: string }[]).map((i) => i.name);
+    expect(indexes('runs')).toEqual(
+      expect.arrayContaining([
+        'runs_project_created_idx',
+        'runs_ticket_created_idx',
+        'runs_state_changed_idx',
+      ]),
+    );
+    expect(indexes('runs')).not.toContain('runs_project_idx');
+    expect(indexes('tickets')).toContain('tickets_project_position_idx');
+    expect(indexes('run_event_compactions')).toEqual(
+      expect.arrayContaining([expect.stringContaining('autoindex')]),
+    );
+    db.close();
+  });
+});
+
+const DAY = 86_400_000;
+const SEEDED_AT = Date.UTC(2026, 0, 1);
+
+describe('event retention', () => {
+  let opened: ReturnType<typeof openDb>;
+  let db: Db;
+  const shape = { projects: 1, ticketsPerProject: 1, runsPerTicket: 5, eventsPerRun: 40 };
+  const eventsOf = (runId: string) =>
+    db.$client
+      .prepare(`select type, state, payload from run_events where run_id = ? order by id`)
+      .all(runId) as { type: string; state: string | null; payload: string | null }[];
+  const compact = (retentionDays: number, now = SEEDED_AT + 100 * DAY) =>
+    compactExpiredRunEvents(db, {
+      retentionDays,
+      protectedTypes: PRUNE_PROTECTED_EVENT_TYPES,
+      usageOf: () => null,
+      now,
+    });
+
+  beforeEach(() => {
+    opened = openDb(':memory:');
+    db = opened.db;
+    seedRunEvents(db, shape, SEEDED_AT);
+    // A successor's handoff note and the ticket's completion, as a quota handoff and ticket_complete leave them.
+    db.$client
+      .prepare(
+        `insert into run_events (run_id, ts, source, type, payload) values (?, ?, 'system', 'handoff_from', ?)`,
+      )
+      .run('p0-t0-r0', SEEDED_AT, JSON.stringify({ from: 'p0-t0-r9', note: 'Continue the migration' }));
+    db.$client
+      .prepare(`update tickets set completion = ? where id = 'p0-t0'`)
+      .run(JSON.stringify({ runId: 'p0-t0-r0', summary: 'S', handoff: 'H', blockers: [], at: '2026-01-01' }));
+  });
+  afterEach(() => opened.close());
+
+  it('compacts old done runs but keeps the summary, handoff note, state events and the last Stop', () => {
+    const before = eventsOf('p0-t0-r0');
+    const toolCalls = before.filter((e) => e.type === 'PreToolUse').length;
+    expect(toolCalls).toBeGreaterThan(0);
+
+    const result = compact(90);
+    // r0, r1, r2 are done; r3 failed and r4 waits for input.
+    expect(result).toMatchObject({ runs: 3, more: false });
+
+    const after = eventsOf('p0-t0-r0');
+    expect(after.map((e) => e.type)).toEqual([
+      'queued',
+      'PostToolUse',
+      'ticket_complete',
+      'Stop',
+      'handoff_from',
+    ]);
+    expect(after.find((e) => e.type === 'ticket_complete')?.payload).toContain('Handoff of p0-t0-r0');
+    expect(after.find((e) => e.type === 'handoff_from')?.payload).toContain('Continue the migration');
+    expect(after.filter((e) => e.state !== null).map((e) => e.state)).toEqual(['queued', 'working', 'done']);
+    expect(result.eventsRemoved).toBe(3 * (before.length - after.length));
+
+    expect(compactionOf(db, 'p0-t0-r0')).toMatchObject({
+      toolCalls,
+      eventsRemoved: before.length - after.length,
+      inputTokens: null,
+    });
+    const completion = db.$client.prepare(`select completion from tickets where id = 'p0-t0'`).get() as {
+      completion: string;
+    };
+    expect(JSON.parse(completion.completion)).toMatchObject({ summary: 'S', handoff: 'H' });
+  });
+
+  it('leaves young, failed and unfinished runs alone, and a second pass is a no-op', () => {
+    const failed = eventsOf('p0-t0-r3').length;
+    const waiting = eventsOf('p0-t0-r4').length;
+    expect(compact(90, SEEDED_AT + 30 * DAY)).toEqual({ runs: 0, eventsRemoved: 0, more: false });
+
+    compact(90);
+    expect(eventsOf('p0-t0-r3')).toHaveLength(failed);
+    expect(eventsOf('p0-t0-r4')).toHaveLength(waiting);
+    expect(compact(90)).toEqual({ runs: 0, eventsRemoved: 0, more: false });
+  });
+
+  it('is off at 0 days and works through a backlog in bounded passes', () => {
+    expect(compact(0)).toEqual({ runs: 0, eventsRemoved: 0, more: false });
+    const options = {
+      retentionDays: 90,
+      protectedTypes: PRUNE_PROTECTED_EVENT_TYPES,
+      usageOf: () => ({ inputTokens: 10, outputTokens: 5, cachedTokens: 1 }),
+      now: SEEDED_AT + 100 * DAY,
+      maxRuns: 2,
+    };
+    expect(compactExpiredRunEvents(db, options)).toMatchObject({ runs: 2, more: true });
+    expect(compactExpiredRunEvents(db, options)).toMatchObject({ runs: 1, more: false });
+    expect(compactionOf(db, 'p0-t0-r2')).toMatchObject({ inputTokens: 10, outputTokens: 5, cachedTokens: 1 });
+  });
+
+  it('compacts a resumed run again, adding to its totals, and drops them with the run', () => {
+    compact(90);
+    const first = compactionOf(db, 'p0-t0-r0');
+    const insert = db.$client.prepare(
+      `insert into run_events (run_id, ts, source, type, state) values ('p0-t0-r0', ?, 'hook', ?, ?)`,
+    );
+    insert.run(SEEDED_AT + DAY, 'PreToolUse', null);
+    insert.run(SEEDED_AT + DAY, 'PreToolUse', null);
+    insert.run(SEEDED_AT + DAY, 'Notification', null);
+    // A Stop without a transition: kept only as the newest one, the run's last turn.
+    insert.run(SEEDED_AT + DAY, 'Stop', null);
+    compact(90);
+    expect(compactionOf(db, 'p0-t0-r0')).toMatchObject({
+      toolCalls: (first?.toolCalls ?? 0) + 2,
+      eventsRemoved: (first?.eventsRemoved ?? 0) + 3,
+    });
+    expect(eventsOf('p0-t0-r0').filter((e) => e.type === 'Stop')).toEqual([
+      expect.objectContaining({ state: 'done' }),
+      expect.objectContaining({ state: null }),
+    ]);
+
+    db.$client.prepare(`delete from runs where id = 'p0-t0-r0'`).run();
+    expect(compactionOf(db, 'p0-t0-r0')).toBeUndefined();
   });
 });

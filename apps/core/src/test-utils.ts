@@ -100,6 +100,7 @@ export async function createTestApp(
     setupToken: TEST_SETUP_TOKEN,
     allowedHosts: [],
     transcriptsDir: path.join(dir, 'transcripts'),
+    eventRetentionDays: 0,
     previewPorts: DEFAULT_PREVIEW_PORTS,
     dockerCertPath: DEFAULT_DOCKER_CERT_PATH,
     ...overrides,

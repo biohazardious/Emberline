@@ -115,25 +115,26 @@ Ticket columns are `backlog`, `ready`, `in_progress`, `review` and `done`. A tic
 
 ### 3.7 Data model
 
-| Table                                  | Holds                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------- |
-| `settings`                             | Key/value settings, including provider keys and notification config          |
-| `sessions`                             | Login sessions (hashed tokens)                                               |
-| `forge_accounts`                       | One forge account per server host; the token is sealed at rest               |
-| `ssh_keys`, `ssh_host_keys`            | Global and per-project SSH keys (sealed) and host keys a person trusted      |
-| `projects`                             | Projects, default branch, workspace path                                     |
-| `project_settings`                     | Per-project settings as one JSON document (issue sync, wizard gates)         |
-| `project_worktree_config`              | The approved copy of each project's `.emberline/worktree.yml`                |
-| `tickets`                              | Tickets, column, priority, position                                          |
-| `ticket_dependencies`                  | `dependsOn` edges between tickets, removed with either end                   |
-| `issue_tombstones`                     | Imported issues whose ticket was deleted, so label sync skips them           |
-| `runs`                                 | Runs: agent, state, worktree, branch, ptyd session, agent session, routes    |
-| `run_events`                           | Hook, screen, transcript, user and system events per run                     |
-| `quota_windows`                        | Usage-limit windows: exhausted, reset and resume times, source               |
-| `scheduled_jobs`                       | Cron-style scheduled jobs                                                    |
-| `review_comments`, `review_file_views` | Line comments and per-file review state                                      |
-| `build_outputs`                        | Archived run deliverables (APKs, installers, firmware); they outlive the run |
-| `notification_log`                     | Paged attention occurrences, so none is paged twice                          |
+| Table                                  | Holds                                                                         |
+| -------------------------------------- | ----------------------------------------------------------------------------- |
+| `settings`                             | Key/value settings, including provider keys and notification config           |
+| `sessions`                             | Login sessions (hashed tokens)                                                |
+| `forge_accounts`                       | One forge account per server host; the token is sealed at rest                |
+| `ssh_keys`, `ssh_host_keys`            | Global and per-project SSH keys (sealed) and host keys a person trusted       |
+| `projects`                             | Projects, default branch, workspace path                                      |
+| `project_settings`                     | Per-project settings as one JSON document (issue sync, wizard gates)          |
+| `project_worktree_config`              | The approved copy of each project's `.emberline/worktree.yml`                 |
+| `tickets`                              | Tickets, column, priority, position                                           |
+| `ticket_dependencies`                  | `dependsOn` edges between tickets, removed with either end                    |
+| `issue_tombstones`                     | Imported issues whose ticket was deleted, so label sync skips them            |
+| `runs`                                 | Runs: agent, state, worktree, branch, ptyd session, agent session, routes     |
+| `run_events`                           | Hook, screen, transcript, user and system events per run                      |
+| `run_event_compactions`                | What event retention removed from an old `done` run: tool calls, token totals |
+| `quota_windows`                        | Usage-limit windows: exhausted, reset and resume times, source                |
+| `scheduled_jobs`                       | Cron-style scheduled jobs                                                     |
+| `review_comments`, `review_file_views` | Line comments and per-file review state                                       |
+| `build_outputs`                        | Archived run deliverables (APKs, installers, firmware); they outlive the run  |
+| `notification_log`                     | Paged attention occurrences, so none is paged twice                           |
 
 `apps/core/src/db/schema.ts` is the source of truth; migrations in `apps/core/drizzle` are generated from it
 and append-only. `apps/core/src/db-schema.test.ts` fails when the schema and the newest migration snapshot

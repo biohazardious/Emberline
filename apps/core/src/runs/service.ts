@@ -129,6 +129,14 @@ import { previewUrl } from './preview-url.js';
 import { type AttentionFacts, attachAttention, loadAttentionFacts } from './attention.js';
 import type { Db } from '../db/index.js';
 import { projects, runEvents, runs, tickets } from '../db/schema.js';
+import {
+  allCompactions,
+  compactExpiredRunEvents,
+  type CompactionResult,
+  compactionOf,
+  type RunEventCompaction,
+  storedUsage,
+} from './event-retention.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { accountForGitRemote } from '../forge/account-store.js';
 import { gatewayRemoteFor } from '../ssh-keys/remote.js';
@@ -838,10 +846,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         .all()
         .map((row) => [row.runId, row.n]),
     );
+    const compactions = allCompactions(this.db);
     return this.withAttention(
       rows.map((row) => ({
         ...toRun(row),
-        telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0),
+        telemetry: this.computeTelemetryForRow(row, toolCountByRun.get(row.id) ?? 0, compactions.get(row.id)),
       })),
     );
   }
@@ -893,7 +902,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }));
     const toolCalls = events.filter((e) => e.type === 'PreToolUse').length;
     const [withAttention] = this.withAttention([
-      { ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls) },
+      { ...toRun(row), telemetry: this.computeTelemetryForRow(row, toolCalls, compactionOf(this.db, id)) },
     ]);
     return {
       ...(withAttention as Run),
@@ -1034,7 +1043,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       .from(runEvents)
       .where(and(eq(runEvents.runId, id), eq(runEvents.type, 'PreToolUse')))
       .all().length;
-    return this.computeTelemetryForRow(row, toolCalls);
+    return this.computeTelemetryForRow(row, toolCalls, compactionOf(this.db, id));
   }
 
   /**
@@ -1084,13 +1093,19 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return [...buckets.values()];
   }
 
-  private computeTelemetryForRow(row: RunRow, toolCalls: number): RunTelemetry {
+  /** `liveToolCalls` counts the run's `PreToolUse` events; a compaction adds the ones retention removed. */
+  private computeTelemetryForRow(
+    row: RunRow,
+    liveToolCalls: number,
+    compaction?: RunEventCompaction,
+  ): RunTelemetry {
     const endMs = row.endedAt ? row.endedAt.getTime() : Date.now();
     const durationSec = Math.max(0, Math.round((endMs - row.createdAt.getTime()) / 1000));
+    const toolCalls = liveToolCalls + (compaction?.toolCalls ?? 0);
 
-    const usage = row.transcriptPath
-      ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir)
-      : null;
+    const usage =
+      (row.transcriptPath ? readTranscriptUsage(row.transcriptPath, this.config.transcriptsDir) : null) ??
+      storedUsage(compaction);
     if (usage && usage.inputTokens + usage.outputTokens > 0) {
       return {
         runId: row.id,
@@ -4282,6 +4297,20 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return over.length > PRUNE_RUNS_PER_PASS;
   }
 
+  /**
+   * Event retention (EMBERLINE_EVENT_RETENTION_DAYS): compacts the logs of `done` runs past the
+   * limit, keeping their summary, handoff note and usage totals (runs/event-retention.ts).
+   */
+  compactExpiredEvents(now = Date.now()): CompactionResult {
+    return compactExpiredRunEvents(this.db, {
+      retentionDays: this.config.eventRetentionDays,
+      protectedTypes: PRUNE_PROTECTED_EVENT_TYPES,
+      usageOf: (run) =>
+        run.transcriptPath ? readTranscriptUsage(run.transcriptPath, this.config.transcriptsDir) : null,
+      now,
+    });
+  }
+
   /** Records process exits and sessions that vanished (runner restart) for unfinished runs. */
   async reconcile(): Promise<void> {
     if (this.reconcilePass || this.ptyd.status !== 'connected') return;
@@ -4292,7 +4321,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         this.lastEventPruneAt = Date.now();
         try {
           // More runs over the cap: come back on the next reconcile instead of waiting out the interval.
-          if (this.pruneRunEvents()) this.lastEventPruneAt = 0;
+          const pruneLeft = this.pruneRunEvents();
+          const compactLeft = this.compactExpiredEvents().more;
+          if (pruneLeft || compactLeft) this.lastEventPruneAt = 0;
         } catch {
           // Pruning is housekeeping; it must never skip the rest of the reconcile.
         }
