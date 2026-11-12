@@ -108,13 +108,7 @@ export function ReviewFileTree({
   const isVirtualised = rows.length > VIRTUALISE_THRESHOLD;
   const windowSlice = useMemo(() => {
     if (!isVirtualised) {
-      return {
-        startIndex: 0,
-        endIndex: rows.length,
-        topSpacerPx: 0,
-        bottomSpacerPx: 0,
-        adjustedScrollTop: null,
-      };
+      return { startIndex: 0, endIndex: rows.length, topSpacerPx: 0, bottomSpacerPx: 0 };
     }
     return computeVirtualWindow({
       totalCount: rows.length,
@@ -122,16 +116,32 @@ export function ReviewFileTree({
       viewportHeight,
       rowHeight: ROW_HEIGHT_PX,
       overscan: 10,
-      ensureIndex: selectedRowIndex >= 0 ? selectedRowIndex : null,
     });
-  }, [isVirtualised, rows.length, scrollTop, viewportHeight, selectedRowIndex]);
+  }, [isVirtualised, rows.length, scrollTop, viewportHeight]);
 
+  // Scroll the selected row into view only when the selection moves (j/k, n/p, a gate link): a
+  // scroll by the user that takes it out of view is left alone. A selection inside a collapsed
+  // folder waits for the folder to open (`selectedRowIndex` turns valid one render later).
+  const revealPendingRef = useRef<string | null>(null);
   useEffect(() => {
-    if (windowSlice.adjustedScrollTop !== null && viewportRef.current) {
-      viewportRef.current.scrollTop = windowSlice.adjustedScrollTop;
-      setScrollTop(windowSlice.adjustedScrollTop);
+    revealPendingRef.current = selectedFile;
+  }, [selectedFile]);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el || !selectedFile || revealPendingRef.current !== selectedFile || selectedRowIndex < 0) return;
+    revealPendingRef.current = null;
+    const { adjustedScrollTop } = computeVirtualWindow({
+      totalCount: rows.length,
+      scrollTop: el.scrollTop,
+      viewportHeight: el.clientHeight > 0 ? el.clientHeight : viewportHeight,
+      rowHeight: ROW_HEIGHT_PX,
+      ensureIndex: selectedRowIndex,
+    });
+    if (adjustedScrollTop !== null) {
+      el.scrollTop = adjustedScrollTop;
+      setScrollTop(adjustedScrollTop);
     }
-  }, [windowSlice.adjustedScrollTop]);
+  }, [selectedFile, selectedRowIndex, rows.length, viewportHeight]);
 
   const visibleRows = useMemo(
     () => rows.slice(windowSlice.startIndex, windowSlice.endIndex),
