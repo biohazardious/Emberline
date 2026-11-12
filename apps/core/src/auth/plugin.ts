@@ -71,7 +71,7 @@ const presentedKey = (r: FastifyRequest): string | undefined => {
 };
 
 /**
- * Single-user auth (PROJECT.md §3.13).
+ * Single-user auth (docs/DESIGN.md §3.8).
  *
  * - Password hashed with argon2id, set once during first-run setup.
  * - HTTP-only, SameSite=Lax session cookie.

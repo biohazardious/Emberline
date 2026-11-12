@@ -1,5 +1,5 @@
 /**
- * Agent adapter contract (PROJECT.md §5.3).
+ * Agent adapter contract (docs/DESIGN.md §3.3).
  *
  * An adapter turns a generic "run" into a concrete agent CLI session hosted by ptyd and
  * translates whatever signals that CLI emits (hooks, transcripts, screen output) into the

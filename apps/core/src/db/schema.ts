@@ -172,7 +172,7 @@ export const issueTombstones = sqliteTable(
   (t) => [primaryKey({ columns: [t.projectId, t.externalSource, t.externalId] })],
 );
 
-/** Board tickets (PROJECT.md §5.4). The column mirrors the latest run while one is active. */
+/** Board tickets (docs/DESIGN.md §3.4). The column mirrors the latest run while one is active. */
 export const tickets = sqliteTable(
   'tickets',
   {

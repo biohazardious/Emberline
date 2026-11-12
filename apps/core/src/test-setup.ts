@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -10,27 +9,29 @@ import {
 } from './command-exec.js';
 import { installSecretsKey } from './secrets/box.js';
 
-setCommandExecutor(localCommandExecutor);
-setCommandCanceller(localCommandCanceller);
-// Core installs the key at start (secrets/startup.ts); every test gets its own random one.
-installSecretsKey(randomBytes(32));
-
-/*
- * Tests run commands in-process, so they inherit the environment of whatever runs vitest. Inside an
- * Emberline runner that is an agent's own run: its Docker engine and its signed-in Claude would leak
- * into "engine off" and "not signed in" cases. Each test starts from neither; a test that needs one
- * sets it itself.
- */
-for (const name of [
+// The suite often runs inside an Emberline runner, whose own run, Docker engine and provider
+// logins must not leak into what a test sees or into the commands it spawns.
+const INHERITED_ENV = [
   'DOCKER_HOST',
   'DOCKER_TLS_VERIFY',
   'DOCKER_CERT_PATH',
+  'DOCKER_CONTEXT',
   'EMBERLINE_COMPOSE_PROJECT',
+  'EMBERLINE_RUN_ID',
+  'EMBERLINE_HOOK_TOKEN',
+  'EMBERLINE_CORE_URL',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
-]) {
-  delete process.env[name];
-}
-process.env.EMBERLINE_RUNNER_HOME = mkdtempSync(path.join(tmpdir(), 'emberline-runner-home-'));
+];
+for (const name of INHERITED_ENV) delete process.env[name];
+// Core reads the runner's home (CLI logins) and tools volume; tests that need them create their own.
+const absent = path.join(tmpdir(), `emberline-test-absent-${process.pid}`);
+process.env.EMBERLINE_RUNNER_HOME = path.join(absent, 'home');
+process.env.EMBERLINE_TOOLS_DIR = path.join(absent, 'ai-tools');
+
+setCommandExecutor(localCommandExecutor);
+setCommandCanceller(localCommandCanceller);
+// Core installs the key at start (secrets/startup.ts); every test gets its own random one.
+installSecretsKey(randomBytes(32));

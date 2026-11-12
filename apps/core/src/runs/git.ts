@@ -55,7 +55,7 @@ export interface Workspace {
 }
 
 /**
- * Gives a run an isolated git worktree on a fresh branch (PROJECT.md §5.6).
+ * Gives a run an isolated git worktree on a fresh branch (docs/DESIGN.md §3.4).
  * Projects that are plain directories (no `.git`) run in place.
  */
 export async function prepareWorkspace(

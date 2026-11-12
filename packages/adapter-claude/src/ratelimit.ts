@@ -1,5 +1,5 @@
 /**
- * Usage-limit detection for Claude Code (PROJECT.md §5.5).
+ * Usage-limit detection for Claude Code (docs/DESIGN.md §3.5).
  *
  * Primary signal is the `StopFailure` hook (`error: "rate_limit"`); its `last_assistant_message`
  * carries the text the CLI shows. Older/other paths surface the same text in a `Stop` hook or
