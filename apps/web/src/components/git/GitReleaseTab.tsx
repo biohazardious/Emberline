@@ -1,6 +1,7 @@
 import {
   RELEASE_VERSION,
   type GitPageStatus,
+  type ReleaseDraft,
   type ReleaseJob,
   type StartReleaseBody,
 } from '@emberline/protocol';
@@ -48,28 +49,67 @@ function JobSteps({ job, status }: { job: ReleaseJob; status: GitPageStatus }) {
   );
 }
 
+interface ReleaseForm {
+  version: string;
+  notes: string;
+  /** The draft the fields were last filled from, and its notes: told apart from the person's edits. */
+  appliedAt: string | null;
+  appliedNotes: string;
+}
+
+const seedFrom = (draft: ReleaseDraft | null, suggestion: string): ReleaseForm => {
+  const ready = draft?.status === 'ready' ? draft : null;
+  return {
+    version: ready?.version ?? suggestion,
+    notes: ready?.notes ?? '',
+    appliedAt: ready?.at ?? null,
+    appliedNotes: ready?.notes ?? '',
+  };
+};
+
+const formKey = (projectId: string) => `emberline.git.release.${projectId}`;
+function readForm(projectId: string): ReleaseForm | null {
+  try {
+    const raw = window.sessionStorage.getItem(formKey(projectId));
+    return raw ? (JSON.parse(raw) as ReleaseForm) : null;
+  } catch {
+    return null;
+  }
+}
+function writeForm(projectId: string, form: ReleaseForm): void {
+  try {
+    window.sessionStorage.setItem(formKey(projectId), JSON.stringify(form));
+  } catch {
+    // Without storage the edits only last while the tab is open.
+  }
+}
+
 /** The release tab: what a release carries, the version and notes, the plan, and the job's progress. */
 export function GitReleaseTab({ projectId, status }: { projectId: string; status: GitPageStatus }) {
   const client = useQueryClient();
   const base = `/api/projects/${projectId}/git`;
   const { releaseJob: job, releaseDraft: draft, releaseSummary: summary } = status;
   const suggestion = suggestedVersion(status.latestTag);
-  const [version, setVersion] = useState(draft?.version ?? suggestion);
-  const [notes, setNotes] = useState(draft?.notes ?? '');
+  const [form, setForm] = useState<ReleaseForm>(() => readForm(projectId) ?? seedFrom(draft, suggestion));
+  const { version, notes } = form;
+  const [mode, setMode] = useState<StartReleaseBody['mode']>('publish');
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
   // Set when Retry answered `restart_needed`: the failed job is then replaced by a new start.
   const [restart, setRestart] = useState(false);
 
-  // A new draft replaces what is in the fields; the person's edits are theirs until then.
-  const draftAt = draft?.status === 'ready' ? draft.at : null;
+  // The person's edits outlive a tab switch.
+  useEffect(() => writeForm(projectId, form), [projectId, form]);
+
+  // A new draft fills the fields only while the person has not edited the notes; otherwise it waits
+  // behind "Use the new draft", so a draft that finishes late never overwrites their text.
+  const newDraft = draft?.status === 'ready' && draft.at !== form.appliedAt ? draft : null;
+  const untouched = form.notes === form.appliedNotes;
   useEffect(() => {
-    if (draftAt === null || !draft) return;
-    setVersion(draft.version ?? suggestion);
-    setNotes(draft.notes);
-    // Only a new draft re-seeds the fields.
+    if (newDraft && untouched) setForm(seedFrom(newDraft, suggestion));
+    // `suggestion` only matters when a draft names no version.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftAt]);
+  }, [newDraft?.at, untouched]);
   useEffect(() => setRestart(false), [job?.id]);
 
   const act = async (work: () => Promise<unknown>) => {
@@ -77,17 +117,22 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
     setProblem(null);
     try {
       await work();
-      await client.invalidateQueries({ queryKey: ['git', projectId] });
     } catch (e) {
-      setProblem(problemOf(e));
+      const p = problemOf(e);
+      if (e instanceof ApiRequestError && e.code === 'head_moved')
+        p.text = `${status.workingBranch} has new commits since this page loaded. Review the summary again before you release.`;
+      setProblem(p);
       if (e instanceof ApiRequestError && e.code === 'restart_needed') setRestart(true);
     } finally {
+      // After a refusal too: the page must show the tip the server now has.
+      await client.invalidateQueries({ queryKey: ['git', projectId] });
       setBusy(false);
     }
   };
 
   const working = status.workingBranch;
   const separate = working !== status.defaultBranch;
+  const separateMode = separate ? mode : 'publish';
   const versionText = version.trim();
   const versionOk = RELEASE_VERSION.test(versionText);
   const blocked =
@@ -178,7 +223,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
               className="input mono"
               aria-label="Version"
               value={version}
-              onChange={(e) => setVersion(e.target.value)}
+              onChange={(e) => setForm({ ...form, version: e.target.value })}
             />
           </label>
           {!versionOk && (
@@ -194,7 +239,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
               rows={10}
               aria-label="Release notes"
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
             />
           </label>
           <div className="git-release-actions">
@@ -217,12 +262,48 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
               The draft failed: {draft.error ?? 'no reason was given.'}
             </p>
           )}
+          {newDraft && (
+            <p className="small">
+              A new draft is ready.{' '}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setForm(seedFrom(newDraft, suggestion))}
+              >
+                Use the new draft
+              </button>
+            </p>
+          )}
           {stale && <p className="muted small">The draft was written for an older tip of {working}.</p>}
+
+          {separate && (
+            <fieldset className="git-release-mode">
+              <legend className="sr-only">What to do</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="release-mode"
+                  checked={mode === 'publish'}
+                  onChange={() => setMode('publish')}
+                />{' '}
+                Approve and publish
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="release-mode"
+                  checked={mode === 'promote_only'}
+                  onChange={() => setMode('promote_only')}
+                />{' '}
+                Promote only
+              </label>
+            </fieldset>
+          )}
 
           <section aria-label="What happens">
             <h3>What happens</h3>
             <ol>
-              {releasePlan(status, 'publish', versionOk ? versionText : null).map((l) => (
+              {releasePlan(status, separateMode, versionOk ? versionText : null).map((l) => (
                 <li key={l.name}>{l.text}</li>
               ))}
             </ol>
@@ -233,22 +314,11 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy || blocked !== null || !versionOk}
-              onClick={() => start('publish')}
+              disabled={busy || blocked !== null || (separateMode === 'publish' && !versionOk)}
+              onClick={() => start(separateMode)}
             >
-              Approve and publish
+              {separateMode === 'publish' ? 'Approve and publish' : 'Promote only'}
             </button>
-            {separate && (
-              <button
-                type="button"
-                className="btn"
-                disabled={busy || blocked !== null}
-                title={`Merge ${working} into ${status.defaultBranch} without a tag or a release`}
-                onClick={() => start('promote_only')}
-              >
-                Promote only
-              </button>
-            )}
           </div>
         </>
       )}

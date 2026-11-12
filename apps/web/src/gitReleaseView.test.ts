@@ -62,11 +62,13 @@ const job = (over: Partial<ReleaseJob> = {}, steps: Record<string, ReleaseStep['
 const B = '/api/projects/p1/git';
 const calls: string[] = [];
 let failRetry: unknown = null;
+let moved: unknown = null;
 const serve = () =>
   vi.mocked(api).mockImplementation(
     apiRoutes({
       [`POST ${B}/release`]: (body) => {
         calls.push(`start ${JSON.stringify(body)}`);
+        if (moved) throw moved;
         return {};
       },
       [`POST ${B}/release/draft`]: () => {
@@ -91,6 +93,8 @@ const lines = (root: HTMLElement) =>
 beforeEach(() => {
   calls.length = 0;
   failRetry = null;
+  moved = null;
+  window.sessionStorage.clear();
   serve();
 });
 afterEach(cleanup);
@@ -133,13 +137,100 @@ describe('the release tab', () => {
     expect(container.textContent).not.toContain('Promote only');
   });
 
-  it('plans a promote only without the tag, the notes and the release', async () => {
+  it('plans a promote only without the tag, the notes and the release, and sends that mode', async () => {
     const { container } = await show(status());
+    await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
+    expect(lines(container)).toEqual([
+      'Merge develop into main',
+      'Run the checks on main: build, test',
+      'Push main to origin',
+      'Bring develop up to date with main',
+    ]);
+    expect(() => getButton('Approve and publish')).toThrow();
     await click(getButton('Promote only'));
     await waitFor(() => expect(calls).toHaveLength(1));
-    // The plan of a promote only is shown by its own radio; the body carries the head.
     expect(calls[0]).toBe(`start ${JSON.stringify({ mode: 'promote_only', head: HEAD })}`);
-    expect(container.textContent).toContain('Promote only');
+  });
+
+  it('refetches after a head_moved refusal and then sends the new head', async () => {
+    moved = new ApiRequestError(409, 'head_moved', 'The branch moved.');
+    const { container, client, rerender } = await show(status());
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    await click(getButton('Approve and publish'));
+    await waitFor(() =>
+      expect(container.textContent).toContain('develop has new commits since this page loaded.'),
+    );
+    expect(container.textContent).toContain('Review the summary again before you release.');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['git', 'p1'] });
+    const NEW = 'c'.repeat(40);
+    moved = null;
+    await rerender(
+      createElement(GitReleaseTab, {
+        projectId: 'p1',
+        status: status({ releaseSummary: { head: NEW, commits: 5, tickets: 2, checks: [] } }),
+      }),
+    );
+    await click(getButton('Approve and publish'));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(JSON.parse(calls[1]!.slice(6)).head).toBe(NEW);
+  });
+
+  it('keeps the edited version and notes when the tab is left and opened again', async () => {
+    const first = await show(status());
+    await typeInto(first.container.querySelector('input[aria-label="Version"]')!, 'v2.0.0');
+    await typeInto(first.container.querySelector('textarea')!, 'My own notes');
+    await first.unmount();
+    const { container } = await show(status());
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('v2.0.0');
+    expect(container.querySelector('textarea')!.value).toBe('My own notes');
+  });
+
+  it('does not overwrite edited notes with a draft that finishes later', async () => {
+    const draft = {
+      status: 'ready',
+      head: HEAD,
+      baseTag: 'v0.8.0',
+      version: 'v0.9.0',
+      bump: 'minor',
+      notes: 'Late draft',
+      agent: 'claude',
+      error: null,
+      at: '2026-11-13T00:00:00Z',
+    } as const;
+    const { container, rerender } = await show(status());
+    await typeInto(container.querySelector('textarea')!, 'Mine');
+    await rerender(
+      createElement(GitReleaseTab, { projectId: 'p1', status: status({ releaseDraft: draft }) }),
+    );
+    expect(container.querySelector('textarea')!.value).toBe('Mine');
+    expect(container.textContent).toContain('A new draft is ready');
+    await click(getButton('Use the new draft'));
+    expect(container.querySelector('textarea')!.value).toBe('Late draft');
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('v0.9.0');
+    expect(container.textContent).not.toContain('A new draft is ready');
+  });
+
+  it('fills untouched notes from a draft that finishes later', async () => {
+    const { container, rerender } = await show(status());
+    await rerender(
+      createElement(GitReleaseTab, {
+        projectId: 'p1',
+        status: status({
+          releaseDraft: {
+            status: 'ready',
+            head: HEAD,
+            baseTag: null,
+            version: 'v0.9.0',
+            bump: 'minor',
+            notes: 'Fresh',
+            agent: null,
+            error: null,
+            at: '2026-11-13T00:00:00Z',
+          },
+        }),
+      }),
+    );
+    expect(container.querySelector('textarea')!.value).toBe('Fresh');
   });
 
   it('validates the version and sends the head with the notes', async () => {
@@ -206,6 +297,7 @@ describe('the release tab', () => {
     const { container } = await show(status({ release: { ok: false, reason: 'Nothing new to release.' } }));
     expect(container.textContent).toContain('Nothing new to release.');
     expect(getButton('Approve and publish').disabled).toBe(true);
+    await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
     expect(getButton('Promote only').disabled).toBe(true);
   });
 
