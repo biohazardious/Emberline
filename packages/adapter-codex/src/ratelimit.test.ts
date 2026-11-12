@@ -126,6 +126,44 @@ describe('Codex limits from the rollout transcript (second signal)', () => {
     };
     expect(rateLimitFromCodexHook('StopFailure', payload, UTC)).toBeUndefined();
   });
+
+  const excerpt = (line: string) => Buffer.from(line).toString('base64');
+
+  it('ignores a stale record, a window that has already reset and a record without a timestamp', () => {
+    const record = fixture('rollout-rate-limits.jsonl');
+    // Yesterday's record: the window was full then, and its reset (13:00) has long passed.
+    const yesterday = record.replace('2026-10-13T09:29:41.512Z', '2026-10-12T09:29:41.512Z');
+    expect(rateLimitFromCodexTranscript(yesterday, UTC)).toBeUndefined();
+    // Two hours old, with a reset still ahead: too old to state the limits at the failure.
+    const old = record.replace('2026-10-13T09:29:41.512Z', '2026-10-13T07:29:41.512Z');
+    expect(rateLimitFromCodexTranscript(old, UTC)).toBeUndefined();
+    // A fresh record whose full window reset a minute ago.
+    const reset = record.replace(
+      '"resets_at":1791896400',
+      `"resets_at":${Date.parse('2026-10-13T09:29:00Z') / 1000}`,
+    );
+    expect(rateLimitFromCodexTranscript(reset, UTC)).toBeUndefined();
+    const unstamped = record.replace('"timestamp":"2026-10-13T09:29:41.512Z",', '');
+    expect(rateLimitFromCodexTranscript(unstamped, UTC)).toBeUndefined();
+
+    const { message, reason } = hookFixture('hook-transcript-only.json');
+    const payload = { message, reason, transcript_tail: excerpt(yesterday) };
+    expect(rateLimitFromCodexHook('StopFailure', payload, UTC)).toBeUndefined();
+    expect(codexAdapter.nextState('working', 'StopFailure', payload, UTC)).toBe('waiting_input');
+  });
+
+  it('surfaces a sign-in failure even when the excerpt shows a full window', () => {
+    const transcript_tail = excerpt(fixture('rollout-rate-limits.jsonl'));
+    for (const text of [
+      'ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header',
+      'Error: Not logged in. Run `codex login` first.',
+    ]) {
+      const payload = { error: 'cli_exit', reason: text, message: text, transcript_tail };
+      expect(rateLimitFromCodexHook('StopFailure', payload, UTC)).toBeUndefined();
+      expect(transientErrorFromCodexHook('StopFailure', payload, UTC)).toBeUndefined();
+      expect(codexAdapter.nextState('working', 'StopFailure', payload, UTC)).toBe('waiting_input');
+    }
+  });
 });
 
 describe('Codex limits on screen (last signal)', () => {

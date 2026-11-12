@@ -46,8 +46,12 @@ describe('buildCodexLaunchSpec', () => {
 });
 
 describe('the wrapped codex run', () => {
-  /** Runs the launch script in a git repo with a fake codex and a hook that records each event. */
-  function run(fakeBody: string, prompt?: string, rollout?: string) {
+  /**
+   * Runs the launch script in a git repo with a fake codex and a hook that records each event.
+   * `rollout` (given the repo directory) is written before the run starts; the fake codex finds the
+   * session directory in `$SESSIONS` and a rate-limit record to append in `$RECORD`.
+   */
+  function run(fakeBody: string, prompt?: string, rollout?: (dir: string) => string) {
     const dir = mkdtempSync(path.join(tmpdir(), 'codex-launch-'));
     execFileSync('git', ['init', '-q', dir]);
     // Outside the repo, so the worktree watcher sees no changes.
@@ -58,15 +62,15 @@ describe('the wrapped codex run', () => {
     writeFileSync(hook, `#!/bin/sh\nprintf '%s %s\\n' "$1" "$(cat)" >> "${aux}/hooks.txt"\n`, {
       mode: 0o755,
     });
-    if (rollout) {
-      const day = path.join(aux, '.codex', 'sessions', '2026', '10', '13');
-      mkdirSync(day, { recursive: true });
-      writeFileSync(path.join(day, 'rollout-2026-10-13T09-12-00-0199.jsonl'), rollout);
-    }
+    const day = path.join(aux, '.codex', 'sessions', '2026', '10', '13');
+    mkdirSync(day, { recursive: true });
+    if (rollout) writeFileSync(path.join(day, 'rollout-2026-10-13T08-00-00-0198.jsonl'), rollout(dir));
+    const recordFile = path.join(aux, 'record.jsonl');
+    writeFileSync(recordFile, record);
     const spec = buildCodexLaunchSpec({ ...base, prompt, command: fake, hookCommand: hook });
     const res = spawnSync(spec.file, spec.args, {
       cwd: dir,
-      env: { PATH: process.env.PATH ?? '', HOME: aux, ...spec.env },
+      env: { PATH: process.env.PATH ?? '', HOME: aux, SESSIONS: day, RECORD: recordFile, ...spec.env },
       encoding: 'utf8',
       timeout: 15_000,
     });
@@ -80,6 +84,23 @@ describe('the wrapped codex run', () => {
     return { dir, status: res.status, hooks };
   }
 
+  const record = readFileSync(new URL('./fixtures/rollout-rate-limits.jsonl', import.meta.url), 'utf8');
+  const sessionMeta = (cwd: string) => `{"type":"session_meta","payload":{"id":"0199","cwd":"${cwd}"}}\n`;
+
+  /** A fake codex that writes a session rollout for `cwd` (shell), then fails like a dropped stream. */
+  const failingCodex = (cwd: string) =>
+    `printf '{"type":"session_meta","payload":{"id":"0199","cwd":"%s"}}\\n' "${cwd}" > "$SESSIONS/rollout-2026-10-13T09-12-00-0199.jsonl"; cat "$RECORD" >> "$SESSIONS/rollout-2026-10-13T09-12-00-0199.jsonl"; echo "ERROR: stream disconnected before completion"; exit 1`;
+
+  /** The limit core reads from the run's failure hook at 09:30 UTC. */
+  function failureLimit(hooks: string[]) {
+    const failure = hooks.find((line) => line.startsWith('StopFailure '));
+    const payload: unknown = JSON.parse(failure?.slice('StopFailure '.length) ?? '{}');
+    expect(payload).toMatchObject({ error: 'cli_exit' });
+    if (typeof payload !== 'object' || payload === null) throw new Error('no payload');
+    const now = new Date('2026-10-13T09:30:00Z');
+    return codexAdapter.rateLimitFromHook('StopFailure', { ...payload }, { now });
+  }
+
   it('the interactive UI trusts the repository root, quoted for its config syntax', () => {
     const { dir } = run('for a in "$@"; do printf "%s\\n" "$a"; done > "$PWD/args.txt"');
     const args = readFileSync(path.join(dir, 'args.txt'), 'utf8').split('\n');
@@ -89,26 +110,30 @@ describe('the wrapped codex run', () => {
     expect(args).toContain('check_for_update_on_startup=false');
   });
 
-  it('a failed run carries the newest rollout rate-limit record to the hook', () => {
-    const record = readFileSync(new URL('./fixtures/rollout-rate-limits.jsonl', import.meta.url), 'utf8');
-    const rollout = `{"type":"session_meta","payload":{"id":"0199"}}\n${record}{"type":"event_msg","payload":{"type":"agent_message"}}\n`;
-    const { status, hooks } = run(
-      'echo "ERROR: stream disconnected before completion"; exit 1',
-      'go',
-      rollout,
-    );
+  it("a failed run carries the latest rate-limit record of its own session's rollout", () => {
+    const { status, hooks } = run(failingCodex('$PWD'), 'go');
     expect(status).toBe(1);
-    const failure = hooks.find((line) => line.startsWith('StopFailure '));
-    const payload: unknown = JSON.parse(failure?.slice('StopFailure '.length) ?? '{}');
-    expect(payload).toMatchObject({ error: 'cli_exit' });
-    if (typeof payload !== 'object' || payload === null) throw new Error('no payload');
-    const now = new Date('2026-10-13T09:30:00Z');
-    expect(codexAdapter.rateLimitFromHook('StopFailure', { ...payload }, { now })).toEqual({
+    expect(failureLimit(hooks)).toEqual({
       message: 'Codex 5-hour limit reached',
       resetsAt: new Date('2026-10-13T13:00:00Z'),
       pool: '*',
     });
   }, 20_000);
+
+  it("never carries another run's rollout or one written before the run started", () => {
+    // A concurrent run in another directory writes its rollout while this one works.
+    const foreign = run(failingCodex('/workspaces/.worktrees/other/run'), 'go');
+    expect(foreign.status).toBe(1);
+    expect(failureLimit(foreign.hooks)).toBeUndefined();
+    // This run's directory, but a rollout from before the run (an earlier run in the same worktree).
+    const earlier = run(
+      'echo "ERROR: stream disconnected before completion"; exit 1',
+      'go',
+      (dir) => `${sessionMeta(dir)}${record}`,
+    );
+    expect(earlier.status).toBe(1);
+    expect(failureLimit(earlier.hooks)).toBeUndefined();
+  }, 40_000);
 
   it('a clean run reports completion through PostToolUse and Stop', () => {
     const { status, hooks } = run('echo done; exit 0', 'go');

@@ -7,9 +7,11 @@
  *      "... visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 14th, 2026 9:05 AM."
  *    Codex prints the reset in the runner's local time: "%-I:%M %p" the same day, else
  *    "%b %-d<st|nd|rd|th>, %Y %-I:%M %p". Older builds said "try again in 2 days 3 hours 15 minutes".
- * 2. Transcript: the same hook carries the session rollout's latest `rate_limits` record
+ * 2. Transcript: the same hook carries the run's own session rollout's latest `rate_limits` record
  *    (`~/.codex/sessions/.../rollout-*.jsonl`): a window at 100% gives the reset (`resets_at` epoch
- *    seconds; older builds `resets_in_seconds`) when the text has none.
+ *    seconds; older builds `resets_in_seconds`) when the text has none. Only a recent record with a
+ *    reset still ahead counts, and never over failure text that names a sign-in or other permanent
+ *    error: a full window then is not why the run died.
  * 3. Screen: the TUI's "■ You've hit your usage limit. ..." line.
  *
  * "Quota exceeded. Check your plan and billing details." (API `insufficient_quota`) and the credit
@@ -124,9 +126,14 @@ function windowLabel(minutes: number | undefined): string {
   return `${minutes}-minute`;
 }
 
+/** How old a rollout record may be and still state the account's limits at the failure. */
+export const CODEX_TRANSCRIPT_MAX_AGE_MS = 60 * 60_000;
+
 /**
  * A full window in a Codex rollout record (one JSONL line with `rate_limits`, as an `event_msg`
  * `token_count` payload or at the top level). When both windows are full, the later reset wins.
+ * A record without a timestamp, older than {@link CODEX_TRANSCRIPT_MAX_AGE_MS}, or whose full
+ * windows have already reset says nothing about now.
  */
 export function rateLimitFromCodexTranscript(
   line: string,
@@ -143,10 +150,15 @@ export function rateLimitFromCodexTranscript(
   const limits = payload.rate_limits;
   if (!isRecord(limits)) return undefined;
   const stamped = typeof parsed.timestamp === 'string' ? new Date(parsed.timestamp) : undefined;
-  const base = stamped && !Number.isNaN(stamped.getTime()) ? stamped : (options.now ?? new Date());
-  const full = [readWindow(limits.primary, base), readWindow(limits.secondary, base)]
-    .filter((w): w is RateLimitWindow => w !== undefined && w.usedPercent >= 100)
-    .sort((a, b) => (b.resetsAt?.getTime() ?? 0) - (a.resetsAt?.getTime() ?? 0));
+  if (!stamped || Number.isNaN(stamped.getTime())) return undefined;
+  const now = (options.now ?? new Date()).getTime();
+  if (now - stamped.getTime() > CODEX_TRANSCRIPT_MAX_AGE_MS) return undefined;
+  const full = [readWindow(limits.primary, stamped), readWindow(limits.secondary, stamped)]
+    .filter(
+      (w): w is RateLimitWindow & { resetsAt: Date } =>
+        w !== undefined && w.usedPercent >= 100 && w.resetsAt !== undefined && w.resetsAt.getTime() > now,
+    )
+    .sort((a, b) => b.resetsAt.getTime() - a.resetsAt.getTime());
   const window = full[0];
   if (!window) return undefined;
   return {
@@ -163,7 +175,9 @@ function poolFor(text: string, options: LimitOptions): string {
 
 /**
  * The usage limit a wrapper `StopFailure` reports: Codex's own wording or an explicit 429 in the
- * output, else a full window in the rollout excerpt. The output's reset time wins over the transcript's.
+ * output, else a full window in the rollout excerpt, unless the output names a permanent error
+ * (sign-in, bad request): that error is the failure to surface. The output's reset time wins over
+ * the transcript's.
  */
 export function rateLimitFromCodexHook(
   event: string,
@@ -174,6 +188,7 @@ export function rateLimitFromCodexHook(
   const text = joinFields(payload, WRAPPER_FAILURE_FIELDS);
   if (BILLING_PATTERN.test(text)) return undefined;
   const fromText = isCodexLimitText(text) || isGenericLimit(text);
+  if (!fromText && isPermanentErrorText(text)) return undefined;
   const fromTranscript = rateLimitFromCodexTranscript(transcriptTail(payload), options);
   if (!fromText) return fromTranscript;
   return {

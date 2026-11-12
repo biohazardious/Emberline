@@ -24,7 +24,9 @@ export interface WrappedCliOptions {
   /**
    * Shell whose last output line (e.g. the session transcript's latest rate-limit record) travels,
    * base64-encoded, in the failure hook's `transcript_tail` field: the transcript signal for CLIs
-   * whose transcripts core cannot read.
+   * whose transcripts core cannot read. It runs in the run's directory with `$RUN_STARTED` naming a
+   * file touched just before the CLI started (`find -newer "$RUN_STARTED"`), so it can keep to the
+   * run's own session instead of whatever another run on the runner wrote last.
    */
   transcriptProbe?: string;
   /** Provider credentials and settings for the run; merged first. */
@@ -56,6 +58,7 @@ export function buildWrappedCliLaunchSpec(options: WrappedCliOptions): LaunchSpe
     ? `TRANSCRIPT_TAIL=$( { ${options.transcriptProbe}; } 2>/dev/null | tail -n 1 | head -c ${TRANSCRIPT_TAIL_BYTES} | base64 | tr -d '\\n'); `
     : '';
   const transcriptField = options.transcriptProbe ? `,\\"transcript_tail\\":\\"$TRANSCRIPT_TAIL\\"` : '';
+  const runStarted = `/tmp/emberline-cli-${options.runId}.started`;
 
   const script = [
     // Merges the per-CLI config entries that pre-answer first-run questions (never blocks the run).
@@ -66,11 +69,13 @@ export function buildWrappedCliLaunchSpec(options: WrappedCliOptions): LaunchSpe
       ? `echo '{"tool_name":"${agent}","message":"Executing ${agent} CLI task"}' | ${hook} PreToolUse >/dev/null 2>&1 || true`
       : '',
     watcherSnippet,
+    options.transcriptProbe ? `RUN_STARTED="${runStarted}"; : > "$RUN_STARTED"` : '',
     wrappedExec,
     prompt ? `kill "$EMBERLINE_WATCH_PID" >/dev/null 2>&1 || true` : '',
     // On failure the hook gets the end of the output: the error (e.g. a quota message with its reset
     // time) is the last line, after whatever the CLI printed while it worked.
     `if [ "$STATUS" -eq 0 ]; then rm -f "${logFile}"; echo '{"tool_name":"${agent}","message":"Completed ${agent} CLI task"}' | ${hook} PostToolUse >/dev/null 2>&1 || true; echo '{}' | ${hook} Stop >/dev/null 2>&1 || true; else ERR_DETAIL=$(sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' "${logFile}" 2>/dev/null | tr '\\r' '\\n' | sed '/^[[:space:]]*$/d' | tail -n 6 | tr '\\n' ' ' | sed 's/["\\\\]/ /g' | tail -c 420); rm -f "${logFile}"; if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL="${agent} exited with code $STATUS"; fi; ${transcript}printf "\\n\\033[1;31m=== ❌ ${agent} exited with code %s ===\\033[0m\\n%s\\n" "$STATUS" "$ERR_DETAIL"; echo "{\\"error\\":\\"cli_exit\\",\\"reason\\":\\"$ERR_DETAIL\\",\\"message\\":\\"$ERR_DETAIL\\"${transcriptField}}" | ${hook} StopFailure >/dev/null 2>&1 || true; sleep 4; fi`,
+    options.transcriptProbe ? `rm -f "$RUN_STARTED"` : '',
     `exit $STATUS`,
   ]
     .filter(Boolean)

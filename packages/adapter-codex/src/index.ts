@@ -37,10 +37,15 @@ export interface CodexLaunchOptions {
 }
 
 /**
- * The newest session rollout's latest `rate_limits` record. Rate limits are per account, so the
- * newest rollout of any run on the runner states them.
+ * The latest `rate_limits` record of this run's own session rollout: one written since the run
+ * started (`$RUN_STARTED`, see the SDK wrapper) whose `session_meta` names the run's directory.
+ * Another run's rollout may belong to another credential, and an old one states limits that have
+ * long reset, so neither is read; when no rollout qualifies the probe prints nothing.
  */
-export const CODEX_TRANSCRIPT_PROBE = `ls -t "\${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -n 1 | xargs -r -d '\\n' grep -h '"rate_limits"'`;
+export const CODEX_TRANSCRIPT_PROBE = [
+  `find "\${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name 'rollout-*.jsonl' -newer "$RUN_STARTED" -exec ls -tr {} + 2>/dev/null`,
+  `while IFS= read -r f; do head -n 1 "$f" | grep -qF -e "\\"cwd\\":\\"$PWD\\"" -e "\\"cwd\\":\\"$(pwd -P)\\"" && grep -h '"rate_limits"' "$f"; done`,
+].join(' | ');
 
 export function buildCodexLaunchSpec(options: CodexLaunchOptions): LaunchSpec {
   const bin = options.command ?? (process.env.EMBERLINE_CODEX_COMMAND?.trim() || 'codex');
