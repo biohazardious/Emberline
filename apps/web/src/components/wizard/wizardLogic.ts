@@ -354,6 +354,16 @@ export function writableFiles(detect: ProjectDetectResponse | null): AdoptWriteF
   return ADOPT_FILES.filter((f) => !detect.detected.files[f] && detect.suggestions[f] !== undefined);
 }
 
+/** A writable file the repository's .gitignore ignores: writing it would force it into the repository. */
+export function ignoredFile(detect: ProjectDetectResponse | null, file: AdoptWriteFile): boolean {
+  return detect?.detected.ignored?.[file] === true;
+}
+
+/** The files adopt starts with ticked: the writable ones the repository does not ignore. */
+export function initiallyTickedFiles(detect: ProjectDetectResponse | null): AdoptWriteFile[] {
+  return writableFiles(detect).filter((f) => !ignoredFile(detect, f));
+}
+
 /** The repository's own worktree.yml can be approved: committed in HEAD, readable and schema-valid. */
 export function canApproveRepoWorktreeYml(detect: ProjectDetectResponse | null): boolean {
   const own = detect?.detected.worktreeYml;
@@ -605,7 +615,8 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
         presetId: null,
         choices: detectedChoices(a.detect, appType),
         dirty: [],
-        write: writableFiles(a.detect),
+        // A file the repository ignores starts unticked: ticking it is the person's explicit choice.
+        write: initiallyTickedFiles(a.detect),
         approveWorktreeYml: false,
         step: 'stack',
         furthest: Math.max(s.furthest, steps.indexOf('stack')),

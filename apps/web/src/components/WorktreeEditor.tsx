@@ -1,7 +1,8 @@
-import type {
-  Project,
-  ValidateWorktreeConfigResponse,
-  WorktreeConfigStatusResponse,
+import {
+  type Project,
+  type ValidateWorktreeConfigResponse,
+  WORKTREE_YML_IGNORED_NOTE,
+  type WorktreeConfigStatusResponse,
 } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -30,7 +31,8 @@ export function WorktreeEditor({
 }: {
   project: Project;
   status: WorktreeConfigStatusResponse | undefined;
-  onClose: () => void;
+  /** `note`: what the person should know about the save (the repository ignores the file). */
+  onClose: (note?: string) => void;
 }) {
   const queryClient = useQueryClient();
   const themeMode = useThemeMode();
@@ -79,7 +81,7 @@ export function WorktreeEditor({
       });
       queryClient.setQueryData(['api', statusUrl], saved);
       await refreshWorktreeConfigViews(queryClient, project.id);
-      onClose();
+      onClose(saved.ignoredByGitignore ? WORKTREE_YML_IGNORED_NOTE : undefined);
     } catch (err) {
       setFailure(worktreeSaveFailure(err));
     } finally {
@@ -163,7 +165,7 @@ export function WorktreeEditor({
         >
           {busy ? 'Saving…' : WORKTREE_SAVE_LABEL}
         </button>
-        <button type="button" className="btn btn-sm" disabled={busy} onClick={onClose}>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onClose()}>
           Cancel
         </button>
       </div>

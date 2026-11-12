@@ -19,6 +19,7 @@ import { runnerUnavailableCause } from '../command-exec.js';
 import { conflict, HttpError, RUNNER_NOT_REACHABLE, unavailable } from '../errors.js';
 import { readHeadWorktreeYml } from '../factory/detect.js';
 import { commitIdentityFor, gitIdentityArgs } from '../factory/commit-identity.js';
+import { gitIgnoredPaths } from '../factory/gitignore.js';
 import { mainWorkspaceBranchStrict, withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
 import { shortGitError } from '../repository/git.js';
@@ -232,6 +233,8 @@ export async function saveWorktreeConfig(
       await written.keep();
     }
     storeApproval(db, project.id, body.content, 'person');
-    return worktreeConfigStatus(db, project);
+    // Runs need the file in the repository, so it is committed even when ignored; the person is told.
+    const ignored = (await gitIgnoredPaths(project.path, [rel])).has(rel);
+    return { ...(await worktreeConfigStatus(db, project)), ...(ignored ? { ignoredByGitignore: true } : {}) };
   });
 }

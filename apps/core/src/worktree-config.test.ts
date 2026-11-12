@@ -1420,6 +1420,7 @@ describe('editing worktree.yml from Project settings', () => {
       approved: { content: NEXT, approvedBy: 'person' },
       head: { content: NEXT },
     });
+    expect(res.json()).not.toHaveProperty('ignoredByGitignore');
     const git = gitIn(project);
     expect(git('log', '-1', '--format=%s')).toBe('chore: edit .emberline/worktree.yml from project settings');
     expect(git('log', '-1', '--format=%an <%ae>')).toBe('Emberline AI Factory <factory@emberline.local>');
@@ -1669,12 +1670,18 @@ describe('editing worktree.yml from Project settings', () => {
     expect(res.statusCode).toBe(200);
     expect(git('show', '--name-only', '--format=', 'HEAD')).toBe(YML);
     const after = res.json() as WorktreeConfigStatusResponse;
-    expect(after).toMatchObject({ changed: false });
+    // The save says the repository ignores the file it had to commit; a plain read does not.
+    expect(after).toMatchObject({ changed: false, ignoredByGitignore: true });
     expect(after.approved!.sha256).toBe(after.head!.sha256);
-    // The file is tracked now: the next save works on it the same way.
+    expect(await status(project.id)).not.toHaveProperty('ignoredByGitignore');
+    // The file is tracked now (and still ignored): the next save works on it the same way.
     const again = await save(project.id, setupYml('echo again'), after.head!.sha256);
     expect(again.statusCode).toBe(200);
-    expect(again.json()).toMatchObject({ changed: false, head: { content: setupYml('echo again') } });
+    expect(again.json()).toMatchObject({
+      changed: false,
+      ignoredByGitignore: true,
+      head: { content: setupYml('echo again') },
+    });
     expect(existsSync(path.join(project.path, '.emberline', 'new-tickets.json'))).toBe(true);
   });
 

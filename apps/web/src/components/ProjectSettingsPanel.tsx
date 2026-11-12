@@ -153,7 +153,17 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
   const banner = worktreeBanner(status.data);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  if (!banner) return null;
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+  const closeEditor = (note?: string) => {
+    setEditing(false);
+    setSavedNote(note ?? null);
+  };
+  if (!banner)
+    return savedNote ? (
+      <p className="banner banner-warn worktree-banner" role="status">
+        {savedNote}
+      </p>
+    ) : null;
   if (banner.kind === 'unreadable') return <p className="muted worktree-note">{banner.title}.</p>;
   return (
     <section className="banner banner-warn worktree-banner" aria-label="worktree.yml review">
@@ -170,7 +180,7 @@ export function WorktreeConfigBanner({ project }: { project: Project }) {
         )}
       </div>
       {editing && worktreeEditAvailable(status.data) && (
-        <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />
+        <WorktreeEditor project={project} status={status.data} onClose={closeEditor} />
       )}
       {open && !editing && <WorktreeReviewBody project={project} banner={banner} onDone={status.refresh} />}
     </section>
@@ -185,6 +195,7 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const banner = worktreeBanner(status.data);
   const [editing, setEditing] = useState(false);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   const search = useSearch();
   const openedFromLink = useRef(false);
   useEffect(() => {
@@ -276,8 +287,20 @@ export function ProjectSettingsPanel({ project }: { project: Project }) {
           state.
         </p>
       )}
+      {savedNote && !editing && (
+        <p className="banner banner-warn" role="status">
+          {savedNote}
+        </p>
+      )}
       {editing && worktreeEditAvailable(status.data) ? (
-        <WorktreeEditor project={project} status={status.data} onClose={() => setEditing(false)} />
+        <WorktreeEditor
+          project={project}
+          status={status.data}
+          onClose={(note) => {
+            setEditing(false);
+            setSavedNote(note ?? null);
+          }}
+        />
       ) : (
         <>
           {!banner && <p className="muted">The approved .emberline/worktree.yml matches the repository.</p>}

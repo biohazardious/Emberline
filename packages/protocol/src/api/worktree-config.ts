@@ -142,8 +142,17 @@ export const WorktreeConfigStatusResponse = z.object({
    * says why. With an approval this counts as `changed`; runs keep the approved content.
    */
   unusable: z.boolean(),
+  /**
+   * Only in the answer to a save: the repository's .gitignore ignores .emberline/worktree.yml, and
+   * Emberline committed it anyway (runs read it from the repository).
+   */
+  ignoredByGitignore: z.boolean().optional(),
 });
 export type WorktreeConfigStatusResponse = z.infer<typeof WorktreeConfigStatusResponse>;
+
+/** What the editor says after a save when .gitignore ignores the file. */
+export const WORKTREE_YML_IGNORED_NOTE =
+  ".emberline/worktree.yml is ignored by this repository's .gitignore. Emberline committed it anyway, because runs read it from the repository; remove it from .gitignore to keep the two consistent.";
 
 /**
  * `POST /api/projects/:id/worktree-config/approve`: the sha256 of the HEAD content the person

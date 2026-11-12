@@ -10,6 +10,7 @@ import {
   choiceHint,
   draftOf,
   hasImportableFolders,
+  ignoredFile,
   initialWizardState,
   isNameConflict,
   isDirty,
@@ -56,6 +57,7 @@ const detectResponse = (o: Partial<ProjectDetectResponse['detected']> = {}): Pro
     commands: { setup: [], services: [] },
     files: { projectMd: false, claudeMd: true, agentsMd: false, worktreeYml: false },
     worktreeYml: null,
+    ignored: { projectMd: false, claudeMd: false, worktreeYml: false },
     ...o,
   },
   suggestions: { projectMd: '# P', worktreeYml: 'version: 1\n' },
@@ -268,6 +270,22 @@ describe('rail reachability', () => {
     expect(detected.step).toBe('stack');
     expect(isStepLocked(detected, 'import')).toBe(true);
     expect(previousStep(detected)).toBeNull();
+  });
+
+  it('leaves files the repository ignores unticked, and ticking one stays possible', () => {
+    const s = run([
+      { type: 'source', source: 'import_url' },
+      { type: 'go', step: 'repo' },
+      { type: 'field', field: 'repoUrl', value: 'https://github.com/acme/shop.git' },
+      { type: 'importCreated', projectId: 'p1' },
+    ]);
+    const detect = detectResponse({ ignored: { projectMd: false, claudeMd: false, worktreeYml: true } });
+    const detected = wizardReducer(s, { type: 'detected', detect });
+    expect(detected.write).toEqual(['projectMd']);
+    expect(ignoredFile(detect, 'worktreeYml')).toBe(true);
+    expect(ignoredFile(detect, 'projectMd')).toBe(false);
+    const ticked = wizardReducer(detected, { type: 'write', file: 'worktreeYml', on: true });
+    expect(ticked.write).toEqual(['projectMd', 'worktreeYml']);
   });
 
   it('returns to the repository step when an import is cancelled', () => {

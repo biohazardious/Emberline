@@ -32,6 +32,7 @@ import {
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
 import { importFileContents, inspectImportedProject } from './detect.js';
+import { gitIgnoredPaths } from './gitignore.js';
 import { gitIdentityArgs } from './commit-identity.js';
 import { mainWorkspaceBranch, withMainWorkspaceLock } from './merge.js';
 import { validateChoices } from './project-plan.js';
@@ -356,10 +357,12 @@ export async function planAdopt(
     worktreeConfig = 'existing';
     approvedWorktreeYml = own.content;
   }
+  const ignored = await gitIgnoredPaths(project.path, Object.keys(files));
   return {
     files,
     commitMessage: write.length > 0 ? ADOPT_COMMIT_MESSAGE : null,
     worktreeConfig,
+    ignored: Object.keys(files).filter((rel) => ignored.has(rel)),
     appType,
     choices: body.choices,
     approvedWorktreeYml,
@@ -443,7 +446,8 @@ export async function executeAdopt(
     const undo = await writeNewFiles(workspacesDir, project.path, plan.files);
     const inRepo = { cwd: project.path };
     try {
-      // -f: a repo that ignores .emberline/ still gets the file the person asked to commit.
+      // -f: a file the repository ignores is committed only when the person ticked it knowing so
+      // (the wizard leaves such files unticked and says why: `ignored`).
       await execGitFile(['add', '-f', '--', ...paths], inRepo);
       // A commit with paths takes only those paths, whatever else is staged.
       await execGitFile(

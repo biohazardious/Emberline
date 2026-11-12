@@ -120,12 +120,12 @@ export function registerProjectImportRoutes(
     async (request): Promise<AdoptPreviewResponse> => {
       const project = projectOr404(request.params.id);
       await assertNotCloning(clones, project.id);
-      const { files, commitMessage, worktreeConfig } = await planAdopt(
+      const { files, commitMessage, worktreeConfig, ignored } = await planAdopt(
         config.workspacesDir,
         project,
         AdoptProjectBody.parse(request.body ?? {}),
       );
-      return { files, commitMessage, worktreeConfig };
+      return { files, commitMessage, worktreeConfig, ignored };
     },
   );
 
@@ -203,6 +203,7 @@ export function registerProjectImportRoutes(
         files: result.files,
         commitMessage: result.commitMessage,
         worktreeConfig: result.worktreeConfig,
+        ignored: result.ignored,
         commitSha: result.commitSha,
         factoryTicketId,
         ...(warning ? { warning } : {}),

@@ -76,7 +76,8 @@ afterEach(async () => {
 
 /**
  * Detection may only read git objects: hardened `ls-tree` / `cat-file` (plus the hardening's own
- * `git config --list` safety check). No other process, no other git command.
+ * `git config --list` safety check), and `check-ignore --no-index` (matches the ignore rules, reads
+ * no index and runs nothing). No other process, no other git command.
  */
 function onlyGitObjectReads(list: readonly ExecRequest[]): boolean {
   const n = HARDENED_GIT_ARGS.length;
@@ -84,6 +85,7 @@ function onlyGitObjectReads(list: readonly ExecRequest[]): boolean {
     if (e.file !== RUNNER_BIN.git) return false;
     if (e.args[0] === '-C' && e.args[2] === 'config' && e.args[3] === '--list') return true;
     const hardened = HARDENED_GIT_ARGS.every((a, i) => e.args[i] === a);
+    if (hardened && e.args[n] === 'check-ignore') return e.args[n + 1] === '--no-index';
     return (
       hardened &&
       ['ls-tree', 'cat-file'].includes(e.args[n] ?? '') &&
@@ -476,6 +478,19 @@ describe('GET /api/projects/:id/detect', () => {
     expect(suggestions.claudeMd).toBeDefined();
   });
 
+  it('marks the missing files the repository ignores (git check-ignore)', async () => {
+    fixture('ign', { ...STATIC_SITE, '.gitignore': 'CLAUDE.md\n/.emberline/\n' });
+    const project = await imported('ign');
+    execs.length = 0;
+    const { detected, suggestions } = await detect(project.id);
+    expect(onlyGitObjectReads(execs)).toBe(true);
+    expect(detected.ignored).toEqual({ projectMd: false, claudeMd: true, worktreeYml: true });
+    expect(suggestions.claudeMd).toBeDefined();
+    fixture('plain', STATIC_SITE);
+    const plain = await detect((await imported('plain')).id);
+    expect(plain.detected.ignored).toEqual({ projectMd: false, claudeMd: false, worktreeYml: false });
+  });
+
   it('an invalid, oversized or symlinked worktree.yml comes back with errors', async () => {
     fixture('bad', { '.emberline/worktree.yml': 'version: 2\nsetup: nope\n' });
     const bad = (await detect((await imported('bad')).id)).detected.worktreeYml;
@@ -595,6 +610,23 @@ describe('POST /api/projects/:id/adopt', () => {
     expect(t.db.select().from(projectWorktreeConfig).all()).toEqual([]);
     expect(t.tickets.list(project.id)).toEqual([]);
     rmTemp(remote);
+  });
+
+  it('an ignored file is committed only when ticked, and the plan names it', async () => {
+    const dir = fixture('ign', { ...STATIC_SITE, '.gitignore': 'CLAUDE.md\n/.emberline/\n' });
+    const project = await imported('ign');
+    const preview = await api('POST', `/api/projects/${project.id}/adopt/preview`, {
+      write: ['projectMd', 'claudeMd'],
+    });
+    expect(preview.json()).toMatchObject({ ignored: ['CLAUDE.md'] });
+    const res = await adopt(project.id, { write: ['projectMd', 'claudeMd'] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((res.json() as AdoptProjectResponse).ignored).toEqual(['CLAUDE.md']);
+    // The person ticked it: it is forced in, the explicit choice.
+    expect(git(dir, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual([
+      'CLAUDE.md',
+      'PROJECT.md',
+    ]);
   });
 
   it('refuses to overwrite an existing file, naming it, and writes nothing', async () => {

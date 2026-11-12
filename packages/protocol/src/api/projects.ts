@@ -278,6 +278,13 @@ export const ProjectDetectResponse = z.object({
     }),
     /** Present when the repo has a `.emberline/worktree.yml`. */
     worktreeYml: ExistingWorktreeYml.nullable(),
+    /**
+     * The repository's .gitignore ignores the file (git check-ignore): adopt would force it into
+     * the repository, so the wizard leaves it unticked. Absent from cores before 0.8.0.
+     */
+    ignored: z
+      .object({ projectMd: z.boolean(), claudeMd: z.boolean(), worktreeYml: z.boolean() })
+      .default({ projectMd: false, claudeMd: false, worktreeYml: false }),
   }),
   /** Generated content, only for files the repo does not have. */
   suggestions: z.object({
@@ -340,8 +347,13 @@ export const AdoptPreviewResponse = z.object({
   commitMessage: z.string().nullable(),
   /** Which worktree.yml runs will use after adopt: Emberline's, the repo's (ticked) or none. */
   worktreeConfig: z.enum(['generated', 'existing']).nullable(),
+  /** Paths of `files` the repository ignores: committing them forces them into the repository. */
+  ignored: z.array(z.string()).default([]),
 });
 export type AdoptPreviewResponse = z.infer<typeof AdoptPreviewResponse>;
+
+/** What the wizard says next to a file the repository ignores. */
+export const IGNORED_FILE_NOTE = 'ignored by .gitignore — committing it forces it into the repository';
 
 export const AdoptProjectResponse = AdoptPreviewResponse.extend({
   project: Project,

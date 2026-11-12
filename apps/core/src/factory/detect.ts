@@ -32,6 +32,7 @@ import { detectPreviewCommand } from '../runs/preview-command.js';
 import { parseWorktreeYml } from '../worktree-config/load.js';
 import { generateClaudeInstructions, generateProjectBlueprint, renderWorktreeYml } from './blueprint.js';
 import { planGateSteps } from './demo.js';
+import { gitIgnoredPaths } from './gitignore.js';
 import { collectWorkspaceFiles, inspectWorkspaceProject } from './workspace-status.js';
 
 export type DetectedCommands = ProjectDetectResponse['detected']['commands'];
@@ -693,6 +694,7 @@ export async function detectProject(workspacesDir: string, project: Project): Pr
   for (const key of ['projectMd', 'claudeMd', 'worktreeYml'] as const) {
     if (!core.files[key]) suggestions[key] = contents[key];
   }
+  const ignored = await gitIgnoredPaths(project.path, Object.values(ADOPT_FILE_PATHS));
   return {
     detected: {
       appType: core.appType,
@@ -700,6 +702,11 @@ export async function detectProject(workspacesDir: string, project: Project): Pr
       commands: core.commands,
       files: core.files,
       worktreeYml: core.worktreeYml,
+      ignored: {
+        projectMd: ignored.has(ADOPT_FILE_PATHS.projectMd),
+        claudeMd: ignored.has(ADOPT_FILE_PATHS.claudeMd),
+        worktreeYml: ignored.has(ADOPT_FILE_PATHS.worktreeYml),
+      },
     },
     suggestions,
   };

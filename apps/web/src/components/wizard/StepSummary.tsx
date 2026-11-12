@@ -3,6 +3,7 @@ import {
   type AdoptPreviewResponse,
   getPreset,
   getProjectType,
+  IGNORED_FILE_NOTE,
   PROJECT_GATE_KEYS,
   type ProjectPreviewResponse,
   STACK_DIMENSIONS,
@@ -20,6 +21,7 @@ import {
   buildPreviewBody,
   canApproveRepoWorktreeYml,
   choiceLabel,
+  ignoredFile,
   isImport,
   type StepId,
   type WizardAction,
@@ -396,12 +398,18 @@ export function StepSummary({
                     <input
                       type="checkbox"
                       checked={state.write.includes(f)}
+                      aria-describedby={ignoredFile(detect, f) ? `wizard-ignored-${f}` : undefined}
                       onChange={(e) => dispatch({ type: 'write', file: f, on: e.target.checked })}
                     />
                     <span>
                       Write this file: <span className="mono">{path}</span>
                     </span>
                   </label>
+                  {ignoredFile(detect, f) && (
+                    <p className="field-warn" id={`wizard-ignored-${f}`}>
+                      {IGNORED_FILE_NOTE}
+                    </p>
+                  )}
                 </li>
               );
             })}
@@ -468,6 +476,13 @@ export function StepSummary({
                   <strong>Commit</strong>
                   The ticked files are committed on the checked-out branch as “{data.data.commitMessage}”. It
                   is a local commit, never pushed. Runs branch from HEAD, so they see the files.
+                  {data.data.ignored.length > 0 && (
+                    <>
+                      {' '}
+                      {data.data.ignored.join(', ')} {data.data.ignored.length === 1 ? 'is' : 'are'} ignored
+                      by .gitignore and committed anyway.
+                    </>
+                  )}
                 </>
               ) : (
                 <>Nothing is written or committed.</>
