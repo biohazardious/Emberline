@@ -1687,7 +1687,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // Layer 3 (M5): the agent's own session, or a resolver run on the same branch, takes the
       // conflict and the ticket stays in Review meanwhile. Otherwise the hold is for a person.
       if (!merged.ok && merged.autoFix) {
-        const resolution = await this.conflictLadder.escalate({
+        const { resolution } = await this.conflictLadder.escalate({
           run,
           conflicts: merged.conflicts,
           mainHead: merged.mainHead,

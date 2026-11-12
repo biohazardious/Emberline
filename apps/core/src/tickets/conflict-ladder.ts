@@ -31,6 +31,12 @@ type HealedMerge = SyncWorktreeResult & Pick<RunMerge, 'healFailure'>;
 
 export type LadderResolution = Exclude<SyncWorktreeResolution, 'auto_resolved'>;
 
+/** Who took a conflict up the ladder, and the resolver run when one was started. */
+export interface LadderOutcome {
+  resolution: LadderResolution;
+  resolverRunId: string | null;
+}
+
 /** One conflicting merge to escalate (after the deterministic heal, layer 2, did not land it). */
 export interface ConflictEscalation {
   run: Run;
@@ -134,13 +140,22 @@ export class ConflictLadder {
     return mainHead === null || !heads.includes(mainHead);
   }
 
-  /** Takes the conflict up the ladder; `manual` when nothing automatic took it (the caller holds it). */
-  async escalate(e: ConflictEscalation): Promise<LadderResolution> {
-    if (e.conflicts.length === 0) return 'manual';
+  /**
+   * Takes the conflict up the ladder; `manual` when nothing automatic took it (the caller holds it).
+   * `resolverRunId`: the resolver run it started, for `resolver_started`.
+   */
+  async escalate(e: ConflictEscalation): Promise<LadderOutcome> {
+    const manual = { resolution: 'manual', resolverRunId: null } as const;
+    if (e.conflicts.length === 0) return manual;
     const rung = this.plan(e.run, e.mainHead);
-    if (rung === 'agent') return (await this.askAgent(e)) ? 'agent_resolving' : 'manual';
-    if (rung === 'resolver') return (await this.startResolver(e)) ? 'resolver_started' : 'manual';
-    return 'manual';
+    if (rung === 'agent') {
+      return (await this.askAgent(e)) ? { resolution: 'agent_resolving', resolverRunId: null } : manual;
+    }
+    if (rung === 'resolver') {
+      const resolverRunId = await this.startResolver(e);
+      return resolverRunId ? { resolution: 'resolver_started', resolverRunId } : manual;
+    }
+    return manual;
   }
 
   /** Types the conflict follow-up into the live session; false when the run cannot take a prompt. */
@@ -190,9 +205,10 @@ export class ConflictLadder {
     return `You are the conflict resolver for this ticket. Its work is done and committed on this branch, but ${conflictResolutionPrompt(branch, conflicts)}${healSection(branch, healFailure)}${about}${this.deps.completionReminder(run, '\n\n')}`;
   }
 
-  /** Starts the resolver run (a handoff on the same worktree and branch); false when it could not start. */
-  private async startResolver(e: ConflictEscalation): Promise<boolean> {
+  /** Starts the resolver run (a handoff on the same worktree and branch); its id, null when it could not start. */
+  private async startResolver(e: ConflictEscalation): Promise<string | null> {
     const { run, conflicts, mainHead } = e;
+    let successorId: string;
     try {
       const successor = await this.deps.runs.handOff(run.id, this.deps.runs.currentRoute(run.id), {
         reason: RESOLVER_REASON,
@@ -204,15 +220,16 @@ export class ConflictLadder {
         unattended: 'factory',
       });
       this.deps.runs.note(run.id, 'conflict_resolver_started', { runId: successor.id, conflicts, mainHead });
+      successorId = successor.id;
     } catch (error) {
       this.deps.runs.note(run.id, 'conflict_resolver_failed', {
         conflicts,
         message: error instanceof Error ? error.message : String(error),
       });
-      return false;
+      return null;
     }
     await this.deps.scheduler.tick().catch(() => undefined);
-    return true;
+    return successorId;
   }
 
   /** Whether an agent may be working in the worktree: a run there holds a ticket slot (handoffs share it). */
@@ -243,7 +260,8 @@ export class ConflictLadder {
   /**
    * A person's close (`POST /api/projects/:id/sync-worktree`) whose merge conflicted: the same ladder
    * as the pipeline's, the deterministic heal first (when the factory setting is on). `merge` merges
-   * again once the heal landed. Returns the final merge and who resolves it.
+   * again once the heal landed. Returns the final merge (with the resolver run it started, if any)
+   * and who resolves it.
    */
   async afterPersonMerge(p: {
     run: Run;
@@ -283,7 +301,7 @@ export class ConflictLadder {
         : null;
     const result: HealedMerge = healed ?? first;
     if (result.ok) return { result, resolution: result.resolution ?? 'auto_resolved' };
-    const resolution = await this.escalate({
+    const { resolution, resolverRunId } = await this.escalate({
       run: this.deps.runs.getRun(run.id),
       conflicts: result.conflicts,
       mainHead: result.mainHead,
@@ -291,6 +309,6 @@ export class ConflictLadder {
       project,
     });
     const { healFailure: _healFailure, ...plain } = result;
-    return { result: plain, resolution };
+    return { result: { ...plain, resolverRunId }, resolution };
   }
 }

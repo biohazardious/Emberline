@@ -443,6 +443,7 @@ export async function syncWorktreeToMainWorkspace(params: {
     conflicts: [],
     alreadyMerged: false,
     resolution: null,
+    resolverRunId: null,
     autoResolved: [],
     summary,
     ...extra,

@@ -382,7 +382,7 @@ describe('M5 layer 3: escalation to an agent (AC-5.3, AC-5.4)', () => {
     expect(followups(runB)).not.toContain('conflicts in');
   });
 
-  it("AC-5.5 a person's close of a run that cannot take a prompt starts the resolver and says so", async () => {
+  it("AC-5.5 a person's close of a run that cannot take a prompt starts the resolver and names it", async () => {
     const { project, b, runB } = await conflictingPair(EDIT_EDIT);
     await endWithoutResume(runB);
     const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: runB.id });
@@ -391,6 +391,10 @@ describe('M5 layer 3: escalation to an agent (AC-5.3, AC-5.4)', () => {
     expect(body).toMatchObject({ ok: false, resolution: 'resolver_started', conflicts: ['app.js'] });
     const [note] = await noteOf(runB, 'conflict_resolver_started');
     expect(runsFor(b.id).map((r) => r.id)).toContain(note?.runId);
+    // The response names the resolver run itself, never the held source run.
+    expect(body.resolverRunId).toBe(note?.runId);
+    expect(body.resolverRunId).not.toBe(runB.id);
+    expect(body.runId).toBe(runB.id);
   });
 });
 
@@ -412,6 +416,7 @@ describe("M5 layer 2 on a person's close: the heal never works under an agent", 
     expect(SyncWorktreeResponse.parse(res.json())).toMatchObject({
       ok: false,
       resolution: 'manual',
+      resolverRunId: null,
       conflicts: ['Makefile'],
     });
     expect(await noteOf(runB, 'conflict_resolution_failed')).toEqual([

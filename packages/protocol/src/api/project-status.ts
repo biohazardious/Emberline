@@ -101,6 +101,8 @@ export const SyncWorktreeResponse = z.object({
    * resolver run was started), `manual` (left for a person). Null on a clean merge.
    */
   resolution: SyncWorktreeResolution.nullable().default(null),
+  /** The resolver run this close started (`resolution: 'resolver_started'`); null otherwise. */
+  resolverRunId: z.string().nullable().default(null),
   /** Files whose conflicts were resolved automatically (additive union). */
   autoResolved: z.array(z.string()).default([]),
   summary: z.string(),
