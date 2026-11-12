@@ -1,5 +1,6 @@
 import {
   type AgentId,
+  DEFAULT_COMMIT_IDENTITY,
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
   type FactorySettings,
@@ -98,6 +99,8 @@ export function SettingsPage({
     maxParallelTickets: '2',
     buildOutputsQuotaGb: '5',
     maxAutoRunsPerDay: 40,
+    commitName: DEFAULT_COMMIT_IDENTITY.name,
+    commitEmail: DEFAULT_COMMIT_IDENTITY.email,
   });
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
@@ -131,6 +134,8 @@ export function SettingsPage({
       maxAutoRunsPerDay: settings.maxAutoRunsPerProjectPerDay,
       maxParallelTickets: String(settings.maxParallelTicketsPerProject ?? 2),
       buildOutputsQuotaGb: String(settings.buildOutputsQuotaGb ?? 5),
+      commitName: settings.commitIdentity?.name ?? DEFAULT_COMMIT_IDENTITY.name,
+      commitEmail: settings.commitIdentity?.email ?? DEFAULT_COMMIT_IDENTITY.email,
     });
     setDefaultAgent(settings.defaultAgent);
     setEnabledProviders(settings.enabledProviders?.length ? settings.enabledProviders : ['claude']);
@@ -164,6 +169,7 @@ export function SettingsPage({
         maxAutoRunsPerProjectPerDay: autopilot.maxAutoRunsPerDay,
         maxParallelTicketsPerProject: clampParallel(autopilot.maxParallelTickets),
         buildOutputsQuotaGb: clampQuotaGb(autopilot.buildOutputsQuotaGb),
+        commitIdentity: { name: autopilot.commitName.trim(), email: autopilot.commitEmail.trim() },
         defaultAgent,
         enabledProviders,
         antigravityTermsAcknowledged: antigravityAck,

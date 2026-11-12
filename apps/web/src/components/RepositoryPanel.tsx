@@ -5,6 +5,7 @@ import type {
   ForgeOwnersResponse,
   Project,
   RepositoryStatus,
+  UpdateRepositoryBody,
 } from '@emberline/protocol';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
@@ -28,6 +29,7 @@ import { hostKeyOf, SSH_KEY_HREF } from '../sshKeys';
 import { HostKeyChangedNote, HostKeyTrust } from './HostKeyTrust';
 import { ImportRecovery } from './ImportRecovery';
 import { ProjectSshKey } from './ProjectSshKey';
+import { CommitIdentityFields } from './RepositoryCommitIdentity';
 
 type RepoForm = 'connect' | 'create' | 'actions';
 interface RepoError {
@@ -158,6 +160,8 @@ export function RepositoryPanel({ project }: { project: Project }) {
     const last = lastAction.current;
     if (last) void act(last.key, last.send);
   };
+  const saveSettings = (key: string, patch: UpdateRepositoryBody) =>
+    void act(key, () => api<RepositoryStatus>(base, 'PATCH', patch));
   const help = (form: RepoForm) =>
     error?.form === form ? <SshProblemHelp error={error} onTrusted={again} /> : null;
 
@@ -267,6 +271,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
             Keep main pushed pushes main after each merge into it. It never forces a push. Origin is read when
             you press Refresh, connect, create or push.
           </p>
+          <CommitIdentityFields s={s} busy={busy !== null} onSave={saveSettings} />
           <details className="repo-form">
             <summary>Connect an existing repository</summary>
             <form className="form" onSubmit={connect}>

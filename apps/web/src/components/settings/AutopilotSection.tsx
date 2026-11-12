@@ -326,6 +326,40 @@ export function AutopilotSection({
         </NumberSetting>
       </div>
 
+      <hr style={ST_HR} />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div>
+          <span className="eyebrow">Git</span>
+          <h3 style={{ margin: '4px 0 4px' }}>Commit identity</h3>
+          <p className="muted small">
+            Emberline&apos;s merges and the agents&apos; own commits are made as this author. A project can
+            use its own under Project settings → Repository.
+          </p>
+        </div>
+        <label className="field" style={{ maxWidth: 420 }}>
+          Name
+          <input
+            className="input"
+            value={draft.commitName}
+            maxLength={100}
+            autoComplete="off"
+            onChange={(e) => onChangeDraft({ commitName: e.target.value })}
+          />
+        </label>
+        <label className="field" style={{ maxWidth: 420 }}>
+          Email
+          <input
+            className="input mono"
+            type="email"
+            value={draft.commitEmail}
+            maxLength={254}
+            autoComplete="off"
+            onChange={(e) => onChangeDraft({ commitEmail: e.target.value })}
+          />
+        </label>
+      </div>
+
       <div style={ST_SAVE_ROW}>
         <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Saving…' : <>{ico(Save)} Save Auto-Pilot &amp; Theme Settings</>}

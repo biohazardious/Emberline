@@ -107,6 +107,9 @@ export interface AutopilotDraft {
   maxParallelTickets: string;
   buildOutputsQuotaGb: string;
   maxAutoRunsPerDay: number;
+  /** Who Emberline's and the agents' commits are made as. */
+  commitName: string;
+  commitEmail: string;
 }
 
 export interface ApiKeyDraft {

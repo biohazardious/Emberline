@@ -58,6 +58,11 @@ export function lastPushText(s: RepositoryStatus): string | null {
   return s.lastMainPushError ? `Main isn't pushed: ${s.lastMainPushError}` : null;
 }
 
+/** The commit identity in `Name <email>` form. */
+export function identityText(identity: { name: string; email: string }): string {
+  return `${identity.name} <${identity.email}>`;
+}
+
 /** The owner selected once the owners are read: the chosen one while it is still offered, else the first. */
 export function ownerAfterLoad(current: string, owners: readonly ForgeOwner[]): string {
   return owners.some((o) => o.id === current) ? current : (owners[0]?.id ?? '');
