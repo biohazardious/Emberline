@@ -1,6 +1,7 @@
 import type { Run } from '@emberline/protocol';
 import { Link } from 'wouter';
 import { useRuns } from '../../hooks/liveData';
+import { overlapWaitingFor, overlapWaitingLabel } from '../../ticketDeps';
 import { HoldRecovery } from '../HoldRecovery';
 import { modeHint, PermissionModePicker } from '../PermissionModePicker';
 import { HandoffMenu } from '../QuotaLanes';
@@ -64,6 +65,7 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
   const {
     t: ticket,
     run,
+    conflictFallback,
     title,
     view: viewTab,
     setView: setViewTab,
@@ -121,7 +123,15 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
       {run && <HandoffMenu run={run} />}
       {run && <AttemptChain run={run} />}
       {run && <RunFailureBanner run={run} />}
-      {run && <HoldRecovery key={run.id} run={run} onDiscard={discard} onMerge={accept} />}
+      {run && (
+        <HoldRecovery
+          key={run.id}
+          run={run}
+          onDiscard={discard}
+          onMerge={accept}
+          conflictFallback={conflictFallback}
+        />
+      )}
       {/* The Events tab shows these itself, next to the final answer. */}
       {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
       {queued && (
@@ -216,6 +226,10 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
               <span className="muted small" role={confirmStart ? 'alert' : undefined}>
                 {confirmStart ? 'Still waiting for ' : 'Waiting for '}
                 {ticket.blockedBy.map((b) => b.key).join(', ')}. Starting now skips the wait.
+              </span>
+            ) : overlapWaitingFor(ticket) ? (
+              <span className="muted small">
+                {overlapWaitingLabel(overlapWaitingFor(ticket)!)}. Starting manually runs in parallel.
               </span>
             ) : (
               <span />

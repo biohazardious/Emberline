@@ -247,6 +247,24 @@ export function AutopilotSection({
         </GateToggle>
 
         <GateToggle
+          checked={draft.autoResolveAdditiveConflicts}
+          onChange={(autoResolveAdditiveConflicts) => onChangeDraft({ autoResolveAdditiveConflicts })}
+          title="Auto-resolve additive merge conflicts"
+        >
+          Merge both sides automatically when main and the ticket branch only added lines at the same spot and
+          the build gate passes.
+        </GateToggle>
+
+        <GateToggle
+          checked={draft.serializeOverlappingTickets}
+          onChange={(serializeOverlappingTickets) => onChangeDraft({ serializeOverlappingTickets })}
+          title="Don't run tickets that edit the same files at the same time"
+        >
+          Defer starting a <code>Ready</code> ticket whose target files overlap an active run&apos;s branch
+          until that run merges or is held.
+        </GateToggle>
+
+        <GateToggle
           checked={draft.autoMoveToDone}
           onChange={(autoMoveToDone) => onChangeDraft({ autoMoveToDone })}
           title="Auto-Move Verified Factory Tickets to Done"

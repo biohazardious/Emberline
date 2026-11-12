@@ -6,6 +6,7 @@ import type {
   Project,
   ProjectCheckpoint,
   ProjectStatusSummary,
+  RunDetail,
   SyncWorktreeResponse,
   SystemStatus,
   Ticket,
@@ -37,11 +38,13 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { builtLine, shouldAutoBuild, staleBadge } from '../demoFreshness';
 import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
+import { findResolverRunId, syncWorktreeOutcome } from '../syncResolution';
+import { toastInfo } from '../toast';
 import { useApi } from '../hooks/useApi';
 import { startableCount } from '../ticketDeps';
 import { LiveBrowserStudio } from './LiveBrowserStudio';
@@ -174,7 +177,12 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
   const [autoDispatch, setAutoDispatch] = useState(true);
   const [submittingFactory, setSubmittingFactory] = useState(false);
   const [startingPipeline, setStartingPipeline] = useState(false);
-  const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string }>();
+  const [banner, setBanner] = useState<{
+    kind: 'ok' | 'info' | 'err';
+    text: string;
+    href?: string;
+    linkLabel?: string;
+  }>();
   const [blockedSync, setBlockedSync] = useState<{ runId: string; count: number }>();
   // The run's worktree is gone and its work is not in main: its ticket may still move to Done unmerged.
   const [missingSync, setMissingSync] = useState<{ ticketId: string }>();
@@ -452,8 +460,26 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       );
       await statusPoll.refresh();
       await checkpointsPoll.refresh();
-      if (res.ok) setSelectedTargetId('main');
-      setBanner({ kind: res.ok ? 'ok' : 'err', text: res.summary });
+      let resolverRunId: string | null = null;
+      if (!res.ok && res.resolution === 'resolver_started') {
+        const detail = await api<RunDetail>(`/api/runs/${res.runId}`).catch(() => null);
+        resolverRunId = findResolverRunId(undefined, detail, res.runId);
+      }
+      const outcome = syncWorktreeOutcome(res, { resolverRunId });
+      if (outcome.kind === 'merged') {
+        setSelectedTargetId('main');
+        if (res.resolution === 'auto_resolved') toastInfo(outcome.toast);
+        setBanner({ kind: 'ok', text: outcome.toast });
+      } else if (outcome.kind === 'resolving') {
+        setBanner({
+          kind: 'info',
+          text: outcome.text,
+          href: outcome.href,
+          linkLabel: outcome.linkLabel,
+        });
+      } else {
+        setBanner({ kind: 'err', text: res.summary });
+      }
     } catch (e) {
       const blocking = reviewBlockedCount(e);
       const missing = worktreeMissing(e);
@@ -834,24 +860,32 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
 
       {banner && (
         <div
-          className={`banner ${banner.kind === 'ok' ? 'banner-ok' : 'banner-error'}`}
+          className={`banner ${banner.kind === 'ok' ? 'banner-ok' : banner.kind === 'info' ? 'banner-info sync-resolution-banner' : 'banner-error'}`}
           role={banner.kind === 'err' ? 'alert' : 'status'}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 8,
           }}
         >
           <span>{banner.text}</span>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={() => setBanner(undefined)}
-            aria-label="Close"
-          >
-            <X className="icon" aria-hidden />
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {banner.href && banner.linkLabel && (
+              <Link href={banner.href} className="btn btn-sm">
+                {banner.linkLabel}
+              </Link>
+            )}
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setBanner(undefined)}
+              aria-label="Close"
+            >
+              <X className="icon" aria-hidden />
+            </button>
+          </span>
         </div>
       )}
 

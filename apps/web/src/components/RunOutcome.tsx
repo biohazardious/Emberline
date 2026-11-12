@@ -122,3 +122,133 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
     </section>
   );
 }
+
+export type ConflictEventType =
+  'conflict_auto_resolved' | 'conflict_heal_failed' | 'conflict_resolver_started';
+
+export interface ConflictEventInfo {
+  type: ConflictEventType;
+  summary: string;
+  files: string[];
+  unresolved: string[];
+  commitSha: string | null;
+  mainHead: string | null;
+  resolverRunId: string | null;
+  gateFailure: string | null;
+}
+
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** Extracts structured conflict detail and file lists for M5 run timeline events. */
+export function conflictEventInfo(type: string, payload: unknown): ConflictEventInfo | null {
+  if (
+    type !== 'conflict_auto_resolved' &&
+    type !== 'conflict_heal_failed' &&
+    type !== 'conflict_resolver_started'
+  ) {
+    return null;
+  }
+  const rec = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const filesFromPayload = readStringList(rec.files);
+  const conflictsFromPayload = readStringList(rec.conflicts);
+  const unresolved = readStringList(rec.unresolved);
+  const files =
+    filesFromPayload.length > 0
+      ? filesFromPayload
+      : conflictsFromPayload.length > 0
+        ? conflictsFromPayload
+        : unresolved;
+  const commitSha = readNonEmptyString(rec.commitSha);
+  const mainHead = readNonEmptyString(rec.mainHead);
+  const resolverRunId = readNonEmptyString(rec.runId);
+  const gateFailure = readNonEmptyString(rec.gateFailure);
+  const message = readNonEmptyString(rec.message);
+
+  if (type === 'conflict_auto_resolved') {
+    const countLabel = files.length > 0 ? ` in ${files.length} ${files.length === 1 ? 'file' : 'files'}` : '';
+    const shaLabel = commitSha ? ` (${commitSha.slice(0, 7)})` : '';
+    return {
+      type,
+      summary: message ?? `Auto-resolved additive conflicts${countLabel}${shaLabel}`,
+      files,
+      unresolved,
+      commitSha,
+      mainHead,
+      resolverRunId,
+      gateFailure,
+    };
+  }
+
+  if (type === 'conflict_heal_failed') {
+    const fallback =
+      files.length > 0
+        ? `Could not auto-resolve ${files.length} ${files.length === 1 ? 'file' : 'files'}`
+        : 'Could not auto-resolve merge conflicts';
+    return {
+      type,
+      summary: message ?? fallback,
+      files,
+      unresolved,
+      commitSha,
+      mainHead,
+      resolverRunId,
+      gateFailure,
+    };
+  }
+
+  const countLabel =
+    files.length > 0
+      ? ` for ${files.length} ${files.length === 1 ? 'conflicted file' : 'conflicted files'}`
+      : '';
+  const headLabel = mainHead ? ` against ${mainHead.slice(0, 7)}` : '';
+  return {
+    type,
+    summary: message ?? `Started resolver run${countLabel}${headLabel}`,
+    files,
+    unresolved,
+    commitSha,
+    mainHead,
+    resolverRunId,
+    gateFailure,
+  };
+}
+
+/** Structured file list and summary rendered inside a run timeline item for conflict events. */
+export function ConflictEventDetail({ info }: { info: ConflictEventInfo }) {
+  const unresolvedSet = new Set(info.unresolved);
+  const showPartialUnresolved = info.unresolved.length > 0 && info.unresolved.length < info.files.length;
+  return (
+    <div className="conflict-event-detail">
+      <p className="event-detail mono">{info.summary}</p>
+      {info.files.length > 0 && (
+        <ul className="conflict-event-files mono small" aria-label="Conflicted files">
+          {info.files.map((file) => (
+            <li key={file} className="conflict-event-file">
+              <code>{file}</code>
+              {showPartialUnresolved && unresolvedSet.has(file) && (
+                <span className="muted"> (unresolved)</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {info.gateFailure && <ExpandableText text={info.gateFailure} />}
+    </div>
+  );
+}

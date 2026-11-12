@@ -3,7 +3,13 @@ import { Check, Coins, Wrench } from 'lucide-react';
 import { type DragEvent, type FormEvent, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { issueHref } from '../issueImport';
-import { waitingLabel, waitingTitle } from '../ticketDeps';
+import {
+  overlapWaitingFor,
+  overlapWaitingLabel,
+  overlapWaitingTitle,
+  waitingLabel,
+  waitingTitle,
+} from '../ticketDeps';
 import { timeAgo } from '../time';
 import { PERSONA_LIST, PersonaBadge } from './PersonaBadge';
 import { RunStatePill } from './RunStatePill';
@@ -146,6 +152,7 @@ export function TicketCard({
 }) {
   const live = run && !run.endedAt;
   const shortBranch = run?.branch?.replace(/^emberline\//, '');
+  const overlapWait = overlapWaitingFor(ticket);
   const activate = (range: boolean) => (selection ? selection.onToggle(range) : onOpen());
   return (
     <>
@@ -184,6 +191,16 @@ export function TicketCard({
         {waitingLabel(ticket.blockedBy) && (
           <span className="card-waiting mono" title={waitingTitle(ticket.blockedBy)}>
             {waitingLabel(ticket.blockedBy)}
+          </span>
+        )}
+        {overlapWait && (
+          <span
+            className="card-waiting card-overlap-wait mono"
+            tabIndex={0}
+            title={overlapWaitingTitle(overlapWait)}
+            aria-label={overlapWaitingTitle(overlapWait).replace(/\n/g, ', ')}
+          >
+            {overlapWaitingLabel(overlapWait)}
           </span>
         )}
         {run && (

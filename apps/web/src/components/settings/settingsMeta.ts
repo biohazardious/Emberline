@@ -95,6 +95,8 @@ export interface AutopilotDraft {
   autoPickupReady: boolean;
   autoPickupBacklog: boolean;
   autoSyncToMain: boolean;
+  autoResolveAdditiveConflicts: boolean;
+  serializeOverlappingTickets: boolean;
   selfHealingBuildGate: boolean;
   antiSlopGate: boolean;
   secretGuardGate: boolean;
