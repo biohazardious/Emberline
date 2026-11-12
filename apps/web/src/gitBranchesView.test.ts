@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { GitBranch, GitPageStatus } from '@emberline/protocol';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiRequestError } from './api';
 import type * as ApiModule from './api';
@@ -113,6 +113,8 @@ describe('GitBranchesTab', () => {
     expect(has(rowOf(container, 'feature/busy'), 'Delete')).toBe(false);
     expect(has(rowOf(container, 'develop'), 'Make this the working branch')).toBe(false);
     expect(has(rowOf(container, 'feature/wip'), 'Make this the working branch')).toBe(true);
+    await click(getButton('2 run branches'));
+    expect(has(rowOf(container, 'emberline/run-1'), 'Make this the working branch')).toBe(false);
   });
 
   it('sends remote=1 only when Also delete on origin is ticked', async () => {
@@ -146,5 +148,20 @@ describe('GitBranchesTab', () => {
     await waitFor(() => expect(container.textContent).toContain('Backups (kept by Match origin)'));
     await click(getButton('Compare'));
     await waitFor(() => expect(container.textContent).toContain('3 ahead, 2 behind'));
+  });
+
+  it('keeps the dialog focus through a re-render and closes on Escape', async () => {
+    const { container, rerender } = await render();
+    await waitFor(() => expect(container.textContent).toContain('feature/done'));
+    await click(getButton('Delete', rowOf(container, 'feature/done')));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const box = dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    box.focus();
+    await rerender(createElement(GitBranchesTab, { projectId: 'p1', status: { ...status } }));
+    expect(document.activeElement).toBe(box);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });

@@ -121,7 +121,7 @@
   white-space: nowrap;
 }
 .git-add {
-  color: var(--success, #2a9d4a);
+  color: var(--ok, #2a9d4a);
 }
 .git-del {
   color: var(--danger, #d64545);
@@ -163,4 +163,35 @@
 .git-compare-head {
   justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-decoration: none;
+}
+.chip-working {
+  color: var(--accent);
+}
+.chip-main {
+  color: var(--info);
+}
+.chip-tag {
+  color: var(--ok);
+}
+.chip-origin {
+  color: var(--violet);
+}
+.chip-backup {
+  color: var(--warn);
+}
+.chip-run {
+  color: var(--muted);
+  background: var(--surface-2);
 }

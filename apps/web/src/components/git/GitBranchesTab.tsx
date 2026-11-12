@@ -47,13 +47,16 @@ function DeleteDialog({
   const dialogRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // Mount-only: a parent re-render must not move the focus. `onClose` is read through a ref.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     cancelRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        closeRef.current();
       } else trapTab(dialogRef.current, e);
     };
     window.addEventListener('keydown', onKey);
@@ -61,7 +64,7 @@ function DeleteDialog({
       window.removeEventListener('keydown', onKey);
       opener?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   const confirm = async () => {
     setBusy(true);
@@ -103,7 +106,7 @@ function DeleteDialog({
         )}
         {problem && <GitProblemBanner problem={problem} />}
         <div className="request-dialog-actions">
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void confirm()}>
+          <button type="button" className="btn danger" disabled={busy} onClick={() => void confirm()}>
             {busy ? 'Deleting…' : 'Delete'}
           </button>
           <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onClose}>
@@ -258,7 +261,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
             options={compareOptions}
             onPick={(other) => setPair({ base: other, head: b.name })}
           />
-          {!isWorking && (
+          {!isWorking && b.kind !== 'run' && (
             <button
               type="button"
               className="btn btn-sm"
