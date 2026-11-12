@@ -7,7 +7,7 @@ E2E  := docker compose -p $(E2E_PROJECT) -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password e2e-upgrade up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci supply-chain e2e backup reset-password e2e-upgrade up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -43,6 +43,9 @@ attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 
 ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
+
+supply-chain: ## Release gate: allowed install scripts + pnpm audit --prod against scripts/supply-chain/audit-allowlist.json
+	$(RUN) pnpm supply-chain
 
 e2e: ## End-to-end smoke test, then the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), on an isolated core + runner + ops stack (port 7498, removed afterwards)
 	@set -e; ws=$$(mktemp -d); chmod 777 $$ws; \
