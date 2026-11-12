@@ -4,8 +4,9 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
-import { apiRoutes, cleanup, click, renderDom, waitFor } from './domRender';
+import { apiRoutes, cleanup, click, deferred, renderDom, waitFor } from './domRender';
 import { GitCommitsTab } from './components/git/GitCommitsTab';
+import { GitDiffView } from './components/git/GitDiffView';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -13,7 +14,8 @@ vi.mock('./api', async (importOriginal) => ({
 }));
 // Monaco does not run in a DOM test; the stand-in shows which file it was given.
 vi.mock('./components/MonacoDiff', () => ({
-  MonacoDiff: (p: { filePath: string }) => createElement('div', { 'data-testid': 'diff' }, p.filePath),
+  MonacoDiff: (p: { filePath: string; modified: string }) =>
+    createElement('div', { 'data-testid': 'diff', 'data-modified': p.modified }, p.filePath),
 }));
 
 const sha = (n: number) => String(n).repeat(40);
@@ -70,6 +72,12 @@ beforeEach(() => {
         message: 'subject 1\n\nbody',
         parents: [],
         files: [file('a.ts'), file('b.ts')],
+      }),
+      [`GET ${B}/${sha(2)}`]: () => ({
+        sha: sha(2),
+        message: 'subject 2\n\nbody',
+        parents: [],
+        files: [file('a.ts')],
       }),
       [`GET ${B}/${sha(1)}/file?path=a.ts`]: () => ({
         path: 'a.ts',
@@ -135,5 +143,48 @@ describe('GitCommitsTab', () => {
     await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Load more')!);
     await waitFor(() => expect(container.textContent).toContain('subject 3'));
     expect(calls).toEqual(['cursor=50']);
+  });
+
+  it('goes back to the newest commit when the working branch changes', async () => {
+    const { container, rerender } = await render();
+    await waitFor(() => expect(container.textContent).toContain('subject 1\n\nbody'));
+    await click(container.querySelectorAll('.commit-row-main')[1]!);
+    await waitFor(() =>
+      expect(container.querySelector('.git-commit-message')?.textContent).toContain('subject 2'),
+    );
+    await rerender(
+      createElement(GitCommitsTab, { projectId: 'p1', status: { workingBranch: 'next' } as GitPageStatus }),
+    );
+    await waitFor(() =>
+      expect(container.querySelector('.git-commit-message')?.textContent).toContain('subject 1'),
+    );
+  });
+});
+
+describe('GitDiffView', () => {
+  const diffOf = (modified: string) => ({
+    path: 'a.ts',
+    original: '',
+    modified,
+    binary: false,
+    truncated: false,
+  });
+
+  it('does not show the previous source diff for the same path', async () => {
+    const first = vi.fn(async () => diffOf('first'));
+    const gate = deferred<ReturnType<typeof diffOf>>();
+    const second = vi.fn(() => gate.promise);
+    const { container, rerender } = await renderDom(
+      createElement(GitDiffView, { files: [file('a.ts')], loadFile: first }),
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="diff"]')?.getAttribute('data-modified')).toBe('first'),
+    );
+    await rerender(createElement(GitDiffView, { files: [file('a.ts')], loadFile: second }));
+    expect(container.querySelector('[data-testid="diff"]')).toBeNull();
+    gate.resolve(diffOf('second'));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="diff"]')?.getAttribute('data-modified')).toBe('second'),
+    );
   });
 });

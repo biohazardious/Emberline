@@ -19,7 +19,8 @@ export function GitDiffView({
   loadFile: (path: string) => Promise<GitFileDiff>;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [diff, setDiff] = useState<GitFileDiff | null>(null);
+  // The diff remembers the loader that read it: the same path in another commit or compare is not it.
+  const [loaded, setLoaded] = useState<{ source: typeof loadFile; diff: GitFileDiff } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The Review page keeps no stored preference, only side by side as its starting view.
   const sideBySide = true;
@@ -44,7 +45,7 @@ export function GitDiffView({
     setError(null);
     loadFile(current).then(
       (d) => {
-        if (!stale) setDiff(d);
+        if (!stale) setLoaded({ source: loadFile, diff: d });
       },
       (e: unknown) => {
         if (!stale) setError(errorMessage(e));
@@ -56,7 +57,7 @@ export function GitDiffView({
   }, [current, loadFile]);
 
   if (files.length === 0) return <p className="muted">No files changed.</p>;
-  const shown = diff !== null && diff.path === current ? diff : null;
+  const shown = loaded?.source === loadFile && loaded.diff.path === current ? loaded.diff : null;
 
   return (
     <div className="git-diff">

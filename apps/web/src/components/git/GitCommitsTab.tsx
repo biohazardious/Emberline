@@ -9,21 +9,30 @@ import { GitDiffView } from './GitDiffView';
 
 export function GitCommitsTab({ projectId, status }: { projectId: string; status: GitPageStatus }) {
   const base = `/api/projects/${projectId}/git/commits`;
-  const [picked, setPicked] = useState<string | null>(null);
+  // The pick belongs to the branch it was made on: a new working branch starts at its newest commit.
+  const [pick, setPick] = useState<{ branch: string; sha: string } | null>(null);
+  const picked = pick?.branch === status.workingBranch ? pick.sha : null;
   const list = useInfiniteQuery({
     queryKey: ['git', projectId, 'commits', status.workingBranch],
     initialPageParam: null as number | null,
     queryFn: ({ pageParam }) =>
       api<GitCommitsPage>(pageParam === null ? base : `${base}?cursor=${pageParam}`),
     getNextPageParam: (last) => last.nextCursor,
+    // A refetch would re-read every loaded page by offset; Load more and the status refresh are enough.
+    refetchOnWindowFocus: false,
   });
-  const commits = list.data?.pages.flatMap((p) => p.commits) ?? [];
+  // Offset cursors can repeat a commit when new ones land between two pages.
+  const commits = [
+    ...new Map((list.data?.pages ?? []).flatMap((p) => p.commits).map((c) => [c.sha, c])).values(),
+  ];
   const sha = picked ?? commits[0]?.sha ?? null;
 
   const detail = useQuery({
     queryKey: ['git', projectId, 'commit', sha],
     queryFn: () => api<GitCommitDetail>(`${base}/${sha}`),
     enabled: sha !== null,
+    // A commit never changes.
+    staleTime: Infinity,
   });
   const loadFile = useCallback(
     (path: string) => api<GitFileDiff>(`${base}/${sha}/file?path=${encodeURIComponent(path)}`),
@@ -55,7 +64,7 @@ export function GitCommitsTab({ projectId, status }: { projectId: string; status
                 type="button"
                 className="commit-row-main"
                 aria-current={c.sha === sha ? 'true' : undefined}
-                onClick={() => setPicked(c.sha)}
+                onClick={() => setPick({ branch: status.workingBranch, sha: c.sha })}
               >
                 <span className="commit-subject">{c.subject}</span>
                 <span className="commit-meta">
