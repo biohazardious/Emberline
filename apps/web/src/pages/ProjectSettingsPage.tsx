@@ -1,5 +1,6 @@
 import type { Project } from '@emberline/protocol';
 import { Link } from 'wouter';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 import { useApi } from '../hooks/useApi';
 
@@ -23,11 +24,25 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
           </div>
         </div>
       </header>
-      {project ? (
-        <ProjectSettingsPanel project={project} />
-      ) : (
-        !projects.loading && <p className="muted">No such project.</p>
+      {Boolean(projects.error && !projects.data) && (
+        <ViewErrorBanner
+          label="Could not load project settings"
+          error={projects.error}
+          onRetry={projects.refresh}
+        />
       )}
+      {projects.loading && !projects.data && !projects.error ? (
+        <ViewLoadingState label="Loading project settings…" />
+      ) : project ? (
+        <ProjectSettingsPanel project={project} />
+      ) : !projects.error ? (
+        <div className="empty">
+          <p>No such project.</p>
+          <Link href="/" className="btn btn-sm">
+            Back to dashboard
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

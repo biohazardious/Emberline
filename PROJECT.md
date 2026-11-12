@@ -21,10 +21,10 @@ The design rationale (principles, topology, scheduler, review, data model, auth,
 ## 2. Technology Stack
 
 - **Language & runtime:** TypeScript 5 (strict, `NodeNext` modules) on Node.js ≥ 22.12, a pnpm 10 workspace.
-- **Frontend:** React 19 + Vite, with TanStack Query, wouter, xterm.js and Monaco. A single-page app that covers the board, the terminals and the diff review.
+- **Frontend:** React 19 + Vite, with TanStack Query, wouter, xterm.js and Monaco. A single-page app that covers the board, the terminals and the diff review, with route- and pane-scoped `ErrorBoundary` isolation (`components/ErrorBoundary.tsx`), async loading/retry banners, and client-side search/filter domain modules (`boardFilter.ts`, `runFilter.ts`, `roadmapFilter.ts`).
 - **Backend:** Fastify (REST + `@fastify/websocket`) in `apps/core`, plus `apps/ptyd`, a node-pty host behind a Unix-socket RPC, so agents outlive core restarts.
 - **Database:** SQLite through better-sqlite3 and Drizzle ORM (WAL mode, SQL migrations in `apps/core/drizzle`). It is one embedded file for a single-user install and needs no server.
-- **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`. No CSS framework.
+- **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`, error/filter UI primitives in `apps/web/src/error-filter.css`, and responsive workbench breakpoints in `apps/web/src/responsive.css`. No CSS framework.
 - **Testing:** Vitest for unit and integration tests across all packages. `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack.
 - **Authentication:** A single admin account with an argon2id password set through a one-time setup token. HTTP-only session cookies, plus a per-login key sent as the CSRF header and the WebSocket subprotocol (DESIGN §3.8).
 - **Wire contracts:** zod schemas in `packages/protocol` validate every boundary: REST bodies, WebSocket events, hook payloads, ptyd RPC and `.emberline/worktree.yml`.
