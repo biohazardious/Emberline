@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { rmTemp } from '../test-rm.js';
 import { maskNonCode } from './code-mask.js';
-import { auditWorktreeSlop } from './slop-guard.js';
+import { auditWorktreeSlop, FALSE_POSITIVE_NOTE } from './slop-guard.js';
 
 describe('maskNonCode', () => {
   const tsx = (s: string) => maskNonCode(s, { jsx: true });
@@ -103,5 +103,14 @@ describe('auditWorktreeSlop: literals and JSX text', () => {
       'debug_leftover:5',
       'type_evasion:6',
     ]);
+    const report = await auditWorktreeSlop({ runId: 'r', workspacePath: dir });
+    expect(report.autoFixPrompt).toContain(FALSE_POSITIVE_NOTE);
+  });
+
+  it('a leaked secret gets no false-positive way out', async () => {
+    writeFileSync(path.join(dir, '.env'), 'OPENAI_API_KEY="sk-proj-1234567890abcdefghijklmnop"\n'); // gitleaks:allow (fake key)
+    const report = await auditWorktreeSlop({ runId: 'r', workspacePath: dir });
+    expect(report.secretLeakCount).toBeGreaterThan(0);
+    expect(report.autoFixPrompt).not.toContain(FALSE_POSITIVE_NOTE);
   });
 });

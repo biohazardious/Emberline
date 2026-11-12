@@ -408,6 +408,10 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
   };
 }
 
+/** Ends every gate feedback prompt: a false positive is reported, never "fixed" by weakening content. */
+export const FALSE_POSITIVE_NOTE =
+  'If an item is a false positive (legitimate content, such as UI copy or docs that name a pattern), leave it as it is and say so in your turn summary; never reword, weaken or remove legitimate content just to pass this check.';
+
 const SCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 /** JSX is read in these; a `.ts` file's `<T>` is a type. */
 const JSX_EXTENSIONS = new Set(['.tsx', '.jsx', '.js']);
@@ -679,6 +683,8 @@ export async function auditWorktreeSlop(params: {
           secretLeakCount > 0
             ? 'CRITICAL: Immediately remove all hardcoded secrets/tokens/keys and any tracked `.env` or private key files. Move configuration to `process.env.<NAME>`, document safe placeholders in `.env.example`, and ensure `.env` is listed in `.gitignore` before finishing.'
             : 'Please clean up every item listed above, verify the project still builds and passes tests cleanly, and do not leave any new TODOs, `any` casts, or debug leftovers.',
+          // A leaked secret is never the agent's to wave through.
+          ...(secretLeakCount > 0 ? [] : [FALSE_POSITIVE_NOTE]),
         ].join('\n')
       : null;
 
@@ -841,6 +847,7 @@ export async function runCrossProviderCritic(params: {
             ),
           '',
           'Please resolve each critic finding above and verify the build and tests pass.',
+          FALSE_POSITIVE_NOTE,
         ].join('\n')
       : null;
 
