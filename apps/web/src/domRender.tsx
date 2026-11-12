@@ -10,6 +10,22 @@ import { type api, ApiRequestError } from './api';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/**
+ * vitest 4 puts only part of happy-dom's window on the global, and the browser dialogs are not in
+ * it. Tests spy on them (`vi.spyOn(window, 'confirm')`); unspied, they answer as a person who
+ * dismisses the dialog.
+ */
+if (typeof window !== 'undefined') {
+  const dialogs: Record<string, () => unknown> = {
+    alert: () => undefined,
+    confirm: () => false,
+    prompt: () => null,
+  };
+  const win = window as unknown as Record<string, unknown>;
+  for (const [name, answer] of Object.entries(dialogs))
+    if (typeof win[name] !== 'function') win[name] = answer;
+}
+
 /** A cache of its own per test; a failed request is not retried. */
 export const testQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 

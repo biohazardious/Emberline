@@ -1,17 +1,4 @@
 {
   "$comment": "Accepted advisories: high/critical in `pnpm audit --prod`, critical in `pnpm audit --dev`. Each entry: GHSA id, the affected package, why it does not affect Emberline, and an expiry date (YYYY-MM-DD) after which the gate fails until it is fixed or re-reviewed. See SECURITY.md, Supply chain.",
-  "advisories": [
-    {
-      "id": "GHSA-5gmw-xhrv-c9v3",
-      "package": "tinypool",
-      "reason": "Dev only (vitest 3's worker pool; never in an image). The gadget needs a prototype pollution in the test process first, and the tests run only this repository's code on its own fixtures. Fixed in tinypool 2.1.2, which no vitest 3 release takes; Vitest 4+ drops tinypool. Upgrade vitest before the expiry.",
-      "expires": "2027-01-31"
-    },
-    {
-      "id": "GHSA-85c8-ppgw-ccpr",
-      "package": "tinypool",
-      "reason": "Dev only (vitest 3's worker pool; never in an image). Needs a prototype pollution in the test process and a caller-supplied run() options object; the tests run only this repository's code on its own fixtures. Fixed in tinypool 2.1.2, which no vitest 3 release takes; Vitest 4+ drops tinypool. Upgrade vitest before the expiry.",
-      "expires": "2027-01-31"
-    }
-  ]
+  "advisories": []
 }
