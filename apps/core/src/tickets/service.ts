@@ -28,6 +28,7 @@ import {
   StartTicketBody as StartTicketBodySchema,
   type Ticket,
   type TicketExport,
+  type TicketOverlapWait,
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
@@ -56,6 +57,7 @@ import { applyBulkTicketAction, isLiveRun } from './bulk.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import { columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
+import { BranchFootprints, type BusyFootprint, busyFootprint, claimedPaths, overlapWait } from './overlap.js';
 import {
   type CreatedDraft,
   dependentIds,
@@ -93,7 +95,7 @@ import {
   worktreeCommandsGate,
   worktreeYmlGate,
 } from '../runs/gates.js';
-import { type MergeHeal, mergeRunBranch } from '../runs/worktree.js';
+import { type MergeHeal, mergeRunBranch, mergeTarget } from '../runs/worktree.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
@@ -196,6 +198,7 @@ interface DispatchOptions {
 export const toTicket = (
   row: TicketRow,
   deps: { dependsOn: string[]; blockedBy: Blocker[] } = { dependsOn: [], blockedBy: [] },
+  waitingOn: TicketOverlapWait | null = null,
 ): Ticket => ({
   id: row.id,
   projectId: row.projectId,
@@ -221,7 +224,7 @@ export const toTicket = (
           triage: row.externalTriage,
         }
       : null,
-  waitingOn: null,
+  waitingOn,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -316,6 +319,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /** Finished runs waiting out the settle window before their pipeline (R8). */
   private readonly settlingRuns = new Map<string, NodeJS.Timeout>();
   private readonly pipelineSettleMs: number;
+  /** Files each busy run's branch changed, cached per branch tip (overlap-aware dispatch). */
+  private readonly branchFootprints = new BranchFootprints();
+  /** Per project: ready tickets a dispatch deferred for overlap -> the ticket they wait for. */
+  private readonly overlapDeferred = new Map<string, Map<string, string>>();
   /**
    * After an upgrade from a version that kept no pipeline marks: the runs whose checks the upgrade's
    * restart may have cut off, with their state time. The first start of this version takes them
@@ -372,6 +379,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ) {
         this.ticketRunFailed(run, run.projectId);
       }
+      // After the settle wait above was set: a finished turn still counts until merged or held.
+      if (stateChanged && run.projectId && !this.busyForOverlap(run)) this.releaseOverlapWaits(run.projectId);
     });
     // A prompt typed into the agent's session that it has not answered yet: the ticket is worked on
     // again. One the CLI took and finished before it was recorded changed the state, which decided.
@@ -1211,6 +1220,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (chain) this.chainOn(projectId);
 
     const started: { ticket: Ticket; run: Run }[] = [];
+    const serialize = fSettings.serializeOverlappingTickets;
+    if (serialize) await this.refreshBranchFootprints(projectId);
     for (const next of queue) {
       if (next.blockedBy.length > 0) continue;
       if (this.busyTicketRuns(projectId) >= fSettings.maxParallelTicketsPerProject) break;
@@ -1220,6 +1231,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         break;
       }
       if (this.runs.activeRunForTicket(next.id) || this.startingTickets.has(next.id)) continue;
+      // M5 layer 1: wait for a busy run that edits the same files; a lower-priority ticket may fill the slot.
+      // Recomputed per ticket: a run started earlier in this pass counts with its claims.
+      const wait = serialize ? overlapWait(next, this.overlapFootprints(projectId)) : null;
+      if (wait) {
+        this.deferForOverlap(next, wait.ticketId);
+        continue;
+      }
       try {
         started.push(
           await this.start(next.id, { permissionMode: 'auto', persona: next.persona }, { unattended: true }),
@@ -1280,6 +1298,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       if (left > 0) this.pipelineRuns.set(run.id, left);
       else this.pipelineRuns.delete(run.id);
       this.releasePipelinePending(run.id);
+      // Merged or held: the tickets that waited for its files may start now.
+      if (run.projectId && !this.overlapBusyRuns(run.projectId).some((r) => r.id === run.id)) {
+        this.releaseOverlapWaits(run.projectId);
+      }
     }
   }
 
@@ -1884,7 +1906,106 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
 
   private withDependencies(rows: TicketRow[]): Ticket[] {
     const deps = this.dependenciesOf(rows.map((r) => r.id));
-    return rows.map((row) => toTicket(row, deps.get(row.id)));
+    const waits = this.overlapWaits(rows, deps);
+    return rows.map((row) => toTicket(row, deps.get(row.id), waits.get(row.id) ?? null));
+  }
+
+  /**
+   * `waitingOn` of the unblocked `ready` rows: the first busy ticket whose footprint their claims
+   * overlap. Uses the cached branch footprints only, so a list call never runs git.
+   */
+  private overlapWaits(
+    rows: TicketRow[],
+    deps: Map<string, TicketDependencies>,
+  ): Map<string, TicketOverlapWait> {
+    const waits = new Map<string, TicketOverlapWait>();
+    const candidates = rows.filter(
+      (r) => r.status === 'ready' && (deps.get(r.id)?.blockedBy.length ?? 0) === 0,
+    );
+    if (candidates.length === 0 || !getFactorySettings(this.db).serializeOverlappingTickets) return waits;
+    const busyByProject = new Map<string, BusyFootprint[]>();
+    for (const row of candidates) {
+      let busy = busyByProject.get(row.projectId);
+      if (!busy) {
+        busy = this.overlapFootprints(row.projectId);
+        busyByProject.set(row.projectId, busy);
+      }
+      const wait = overlapWait(row, busy);
+      if (wait) waits.set(row.id, wait);
+    }
+    return waits;
+  }
+
+  /**
+   * Whether the run still counts for overlap: it holds a slot, or its finished turn is still settling
+   * or going through the pipeline (its branch is not merged or held yet).
+   */
+  private busyForOverlap(run: Run): boolean {
+    if (!run.ticketId || run.handedOffTo) return false;
+    return occupiesTicketSlot(run.state) || this.settlingRuns.has(run.id) || this.pipelineRuns.has(run.id);
+  }
+
+  private overlapBusyRuns(projectId: string): Run[] {
+    return this.runs.list().filter((r) => r.projectId === projectId && this.busyForOverlap(r));
+  }
+
+  /** The busy runs' footprints: their tickets' claims ∪ the cached files their branches changed. */
+  private overlapFootprints(projectId: string): BusyFootprint[] {
+    const busy = this.overlapBusyRuns(projectId);
+    if (busy.length === 0) return [];
+    const ids = [...new Set(busy.map((r) => r.ticketId as string))];
+    const byId = new Map(
+      this.db
+        .select({ id: tickets.id, key: tickets.key, body: tickets.body })
+        .from(tickets)
+        .where(inArray(tickets.id, ids))
+        .all()
+        .map((row) => [row.id, row]),
+    );
+    const footprints: BusyFootprint[] = [];
+    for (const run of busy) {
+      const ticket = byId.get(run.ticketId as string);
+      if (!ticket) continue;
+      const paths = busyFootprint(claimedPaths(ticket.body), this.branchFootprints.changed(run.id));
+      footprints.push({ ticketId: ticket.id, key: ticket.key, paths });
+    }
+    return footprints;
+  }
+
+  /** Reads what each busy run's branch changed against the merge target (cached per branch tip). */
+  private async refreshBranchFootprints(projectId: string): Promise<void> {
+    const busy = this.overlapBusyRuns(projectId);
+    this.branchFootprints.retain(new Set(busy.map((r) => r.id)));
+    const projectRow = this.project(projectId);
+    const inWorktree = busy.filter((r) => r.worktreePath && r.worktreePath !== projectRow.path);
+    if (inWorktree.length === 0) return;
+    const target = await mergeTarget(projectRow).catch(() => projectRow.defaultBranch);
+    await Promise.all(inWorktree.map((r) => this.branchFootprints.refresh(r, target)));
+  }
+
+  /** Notes the deferral and shows it on the card (once per ticket waited for). */
+  private deferForOverlap(ticket: Ticket, waitsFor: string): void {
+    let deferred = this.overlapDeferred.get(ticket.projectId);
+    if (!deferred) {
+      deferred = new Map();
+      this.overlapDeferred.set(ticket.projectId, deferred);
+    }
+    if (deferred.get(ticket.id) === waitsFor) return;
+    deferred.set(ticket.id, waitsFor);
+    this.publishTickets([ticket.id]);
+  }
+
+  /**
+   * A busy run of the project was merged, held or ended: tickets deferred for overlap get another
+   * dispatch (only those, unless the project chains) and their cards drop or update `waitingOn`.
+   */
+  private releaseOverlapWaits(projectId: string): void {
+    const deferred = this.overlapDeferred.get(projectId);
+    if (!deferred || deferred.size === 0) return;
+    const ids = [...deferred.keys()];
+    this.overlapDeferred.delete(projectId);
+    this.publishTickets(ids);
+    this.dispatchUnblocked(projectId, ids);
   }
 
   /** Resolves the batch's refs/keys (or the default tiers), stores the edges and notes the outcome on the run (if any). */
