@@ -77,6 +77,12 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).
+- **Agent-written factory files:** `.emberline/new-tickets.json` / `tickets.json`, `roadmap-generated.json` and
+  `brainstorm-suggestions.json` are contracts in `packages/protocol/src/api/agent-files.ts` (`NewTicketsFile`,
+  `GeneratedRoadmapFile`, `BrainstormSuggestionsFile`). Core reads them with `parseAgentFile`
+  (`apps/core/src/factory/agent-files.ts`, `safeParse`, no casts). A file that fails is renamed to `*.rejected.json`
+  and `TicketService` emits a `notice` (`ProjectNotice`, the `project_notice` event on `/api/events`) naming the
+  first zod issue, which the web shows as a toast.
 
 Every value that crosses a process boundary is parsed with its zod schema on arrival. New contracts go into
 `packages/protocol` first, then core and web consume them.

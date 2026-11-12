@@ -1,5 +1,6 @@
 import {
   ClientPresenceMessage,
+  type ProjectNotice,
   type Run,
   type SchedulerState,
   type ServerEvent,
@@ -38,11 +39,13 @@ export function registerEventRoutes(
     const onTicket = (ticket: Ticket) => send({ type: 'ticket', ticket });
     const onTicketRemoved = (t: { id: string; projectId: string }) => send({ type: 'ticket_removed', ...t });
     const onScheduler = (state: SchedulerState) => send({ type: 'scheduler', scheduler: state });
+    const onNotice = (notice: ProjectNotice) => send({ type: 'project_notice', notice });
 
     runs.on('run', onRun);
     runs.on('removed', onRunRemoved);
     tickets.on('ticket', onTicket);
     tickets.on('removed', onTicketRemoved);
+    tickets.on('notice', onNotice);
     scheduler.on('state', onScheduler);
 
     // A bad message is ignored; the socket stays open.
@@ -62,6 +65,7 @@ export function registerEventRoutes(
       runs.off('removed', onRunRemoved);
       tickets.off('ticket', onTicket);
       tickets.off('removed', onTicketRemoved);
+      tickets.off('notice', onNotice);
       scheduler.off('state', onScheduler);
     });
   });

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '../api';
 import { ticketEventRecomputesAttention } from '../attention';
+import { toastError } from '../toast';
 import { upsert, useEvents } from './useEvents';
 
 /** Query keys of the data `/api/events` keeps live. */
@@ -45,6 +46,11 @@ export function LiveEvents(): null {
           break;
         case 'scheduler':
           client.setQueryData(liveKeys.scheduler, event.scheduler);
+          break;
+        case 'project_notice':
+          toastError(
+            `An agent's ${event.notice.file} was ignored (${event.notice.issue}). It is kept as ${event.notice.rejectedAs}.`,
+          );
           break;
       }
     },
