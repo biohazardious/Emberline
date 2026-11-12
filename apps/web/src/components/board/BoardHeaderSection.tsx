@@ -20,20 +20,20 @@ export function BoardHeaderSection({
   onRetry?: () => void | Promise<void>;
 }) {
   const {
-    pid: projectId,
-    proj: project,
+    projectId,
+    project,
     tickets,
     canSeed,
-    bulk,
-    auto: autoStart,
-    flipAuto,
-    demo: demoPanelOpen,
-    flipDemo,
-    openBp,
-    openImp,
-    back,
-    patch,
-    setErr,
+    bulkSelection,
+    autoStart,
+    toggleAutoStart,
+    demoPanelOpen,
+    toggleDemoPanel,
+    openBlueprint,
+    openImport,
+    goBack,
+    patchTicket,
+    setError,
   } = ctx;
   const [seeding, setSeeding] = useState(false);
 
@@ -51,12 +51,12 @@ export function BoardHeaderSection({
 
   const seedTickets = async () => {
     setSeeding(true);
-    setErr(undefined);
+    setError(undefined);
     try {
       const res = await api<{ created: Ticket[] }>(`/api/projects/${projectId}/seed-tickets`, 'POST');
-      for (const t of res.created) patch(t);
+      for (const t of res.created) patchTicket(t);
     } catch (err) {
-      setErr(errorMessage(err));
+      setError(errorMessage(err));
     } finally {
       setSeeding(false);
     }
@@ -69,7 +69,7 @@ export function BoardHeaderSection({
           type="button"
           className="btn btn-ghost btn-sm"
           aria-label="Back to the previous page"
-          onClick={back}
+          onClick={goBack}
         >
           ←
         </button>
@@ -87,12 +87,17 @@ export function BoardHeaderSection({
             <button
               type="button"
               className={`btn btn-sm${demoPanelOpen ? ' btn-primary' : ''}`}
-              onClick={flipDemo}
+              onClick={toggleDemoPanel}
               title="View Project Status, Sync Worktrees & Play Live Demo"
             >
               {ico(Play)} Live Demo &amp; Status
             </button>
-            <button type="button" className="btn btn-sm" onClick={openBp} title="Open PROJECT.md Blueprint">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={openBlueprint}
+              title="Open PROJECT.md Blueprint"
+            >
               PROJECT.md
             </button>
           </>
@@ -114,7 +119,7 @@ export function BoardHeaderSection({
           className={`chip-toggle${autoStart ? ' active' : ''}`}
           aria-pressed={autoStart}
           title="When enabled, dragging a card into In progress automatically starts a Claude run"
-          onClick={flipAuto}
+          onClick={toggleAutoStart}
         >
           <span className="dot" />
           Auto-dispatch on In progress
@@ -123,10 +128,10 @@ export function BoardHeaderSection({
           <button
             id="board-select-mode"
             type="button"
-            className={`chip-toggle${bulk.active ? ' active' : ''}`}
-            aria-pressed={bulk.active}
+            className={`chip-toggle${bulkSelection.active ? ' active' : ''}`}
+            aria-pressed={bulkSelection.active}
             title="Pick several tickets to move, reprioritise, reassign or delete them at once"
-            onClick={() => bulk.setActive(!bulk.active)}
+            onClick={() => bulkSelection.setActive(!bulkSelection.active)}
           >
             {ico(ListChecks)} Select
           </button>
@@ -135,14 +140,14 @@ export function BoardHeaderSection({
           <button
             type="button"
             className="btn btn-sm"
-            onClick={openImp}
+            onClick={openImport}
             title="Import issues from the project's GitHub, GitLab or Gitea remote"
           >
             Import issues
           </button>
         )}
         {project && <BoardExportMenu projectId={project.id} columns={BOARD_COLUMNS} tickets={tickets} />}
-        <QuickAdd projectId={projectId} onCreated={patch} onError={setErr} />
+        <QuickAdd projectId={projectId} onCreated={patchTicket} onError={setError} />
       </div>
     </header>
   );

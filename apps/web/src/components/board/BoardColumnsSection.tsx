@@ -24,29 +24,29 @@ export function BoardColumnsSection({
   onRetryProject?: () => void | Promise<void>;
 }) {
   const {
-    pid: projectId,
-    proj: project,
+    projectId,
+    project,
     tickets,
-    allCols: allColumns,
-    visCols: visibleColumns,
-    colCounts: columnCounts,
-    runs: latestRun,
-    auto: autoStart,
-    bulk,
+    allColumns,
+    visibleColumns,
+    columnCounts,
+    latestRun,
+    autoStart,
+    bulkSelection,
     onBulkApplied,
     filter,
     filterActive,
-    filteredShown,
+    filteredCount,
     updateFilter,
-    err: error,
-    blocked: blockedDrop,
-    missing: missingDrop,
-    resolving: resolvingNotice,
-    clrBlocked,
-    clrMissing,
-    clrResolving,
-    move,
-    open,
+    error,
+    blockedDrop,
+    missingDrop,
+    resolvingNotice,
+    clearBlockedDrop,
+    clearMissingDrop,
+    clearResolvingNotice,
+    moveTicket,
+    openTicket,
   } = ctx;
   const [dragId, setDragId] = useState<string>();
   const [drop, setDrop] = useState<DropTarget>();
@@ -57,7 +57,7 @@ export function BoardColumnsSection({
     const target = drop;
     setDragId(undefined);
     setDrop(undefined);
-    if (ticket && target) void move(ticket, target);
+    if (ticket && target) void moveTicket(ticket, target);
   };
 
   return (
@@ -77,7 +77,7 @@ export function BoardColumnsSection({
           {error}
         </div>
       )}
-      {resolvingNotice && <SyncResolutionBanner notice={resolvingNotice} onDismiss={clrResolving} />}
+      {resolvingNotice && <SyncResolutionBanner notice={resolvingNotice} onDismiss={clearResolvingNotice} />}
       {blockedDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
           <span>
@@ -86,11 +86,11 @@ export function BoardColumnsSection({
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void move(blockedDrop.ticket, blockedDrop.target, { force: true })}
+            onClick={() => void moveTicket(blockedDrop.ticket, blockedDrop.target, { force: true })}
           >
             Merge anyway
           </button>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={clrBlocked}>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={clearBlockedDrop}>
             Cancel
           </button>
         </div>
@@ -104,11 +104,11 @@ export function BoardColumnsSection({
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void move(missingDrop.ticket, missingDrop.target, { skipMerge: true })}
+            onClick={() => void moveTicket(missingDrop.ticket, missingDrop.target, { skipMerge: true })}
           >
             Move to Done without merging
           </button>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={clrMissing}>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={clearMissingDrop}>
             Cancel
           </button>
         </div>
@@ -119,18 +119,18 @@ export function BoardColumnsSection({
           tickets={tickets ?? []}
           latestRunByTicket={latestRun}
           filter={filter}
-          shown={filteredShown}
+          shown={filteredCount}
           onChange={updateFilter}
         />
       )}
 
-      {bulk.active && (
+      {bulkSelection.active && (
         <BoardBulkBar
           projectId={projectId}
           columns={BOARD_COLUMNS}
-          selection={bulk.selection}
+          selection={bulkSelection.selection}
           onApplied={onBulkApplied}
-          onExit={() => bulk.setActive(false)}
+          onExit={() => bulkSelection.setActive(false)}
         />
       )}
 
@@ -143,7 +143,7 @@ export function BoardColumnsSection({
       ) : (
         <>
           <MobileColumnNav columns={BOARD_COLUMNS} counts={columnCounts} />
-          {filterActive && filteredShown === 0 && (tickets?.length ?? 0) > 0 && (
+          {filterActive && filteredCount === 0 && (tickets?.length ?? 0) > 0 && (
             <div className="empty board-filter-empty">
               <p>No tickets match the current search or filters.</p>
               <button type="button" className="btn btn-sm" onClick={() => updateFilter(EMPTY_BOARD_FILTER)}>
@@ -188,14 +188,14 @@ export function BoardColumnsSection({
                         auto
                       </span>
                     )}
-                    {bulk.active && list.length > 0 && (
+                    {bulkSelection.active && list.length > 0 && (
                       <button
                         type="button"
                         className="btn btn-xs btn-ghost board-col-select"
-                        aria-label={`${bulk.columnSelected(list.map((t) => t.id)) ? 'Unselect' : 'Select'} every shown ticket in ${col.label}`}
-                        onClick={() => bulk.toggleColumn(list.map((t) => t.id))}
+                        aria-label={`${bulkSelection.columnSelected(list.map((t) => t.id)) ? 'Unselect' : 'Select'} every shown ticket in ${col.label}`}
+                        onClick={() => bulkSelection.toggleColumn(list.map((t) => t.id))}
                       >
-                        {bulk.columnSelected(list.map((t) => t.id)) ? 'None' : 'All'}
+                        {bulkSelection.columnSelected(list.map((t) => t.id)) ? 'None' : 'All'}
                       </button>
                     )}
                     <span className="board-count mono">
@@ -213,14 +213,14 @@ export function BoardColumnsSection({
                         dragging={dragId === ticket.id}
                         dropBefore={drop?.beforeId === ticket.id && dragId !== ticket.id}
                         selection={
-                          bulk.active
+                          bulkSelection.active
                             ? {
-                                selected: bulk.isSelected(ticket.id),
-                                onToggle: (range) => bulk.toggle(ticket.id, range),
+                                selected: bulkSelection.isSelected(ticket.id),
+                                onToggle: (range) => bulkSelection.toggle(ticket.id, range),
                               }
                             : undefined
                         }
-                        onOpen={() => open(ticket.id)}
+                        onOpen={() => openTicket(ticket.id)}
                         onDragStart={(e) => {
                           e.dataTransfer.effectAllowed = 'move';
                           e.dataTransfer.setData('text/plain', ticket.key);

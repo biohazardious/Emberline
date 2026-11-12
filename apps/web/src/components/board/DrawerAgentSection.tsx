@@ -63,23 +63,23 @@ function AttemptChain({ run }: { run: Run }) {
 
 export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
   const {
-    t: ticket,
+    ticket,
     run,
     conflictFallback,
     title,
-    view: viewTab,
-    setView: setViewTab,
-    mode,
-    setMode,
-    follow: followUp,
-    setFollow: setFollowUp,
-    busy,
-    confirm: confirmStart,
-    start,
-    send,
-    runAct,
-    discard,
-    accept,
+    viewTab,
+    setViewTab,
+    permissionMode,
+    setPermissionMode,
+    followUp,
+    setFollowUp,
+    busyAction,
+    confirmStart,
+    startRun,
+    sendFollowUp,
+    runAction,
+    onDiscard,
+    onAccept,
   } = ctx;
   const live = Boolean(run && !run.endedAt);
   const queued = run?.state === 'queued';
@@ -127,8 +127,8 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
         <HoldRecovery
           key={run.id}
           run={run}
-          onDiscard={discard}
-          onMerge={accept}
+          onDiscard={onDiscard}
+          onMerge={onAccept}
           conflictFallback={conflictFallback}
         />
       )}
@@ -140,8 +140,8 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
           <button
             id="drawer-cancel"
             className="btn btn-sm btn-ghost"
-            disabled={!!busy}
-            onClick={() => void runAct('stop')}
+            disabled={!!busyAction}
+            onClick={() => void runAction('stop')}
           >
             Cancel
           </button>
@@ -157,8 +157,8 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
           <button
             id="drawer-resume"
             className="btn btn-sm"
-            disabled={!!busy}
-            onClick={() => void runAct('resume')}
+            disabled={!!busyAction}
+            onClick={() => void runAction('resume')}
           >
             Resume now
           </button>
@@ -194,7 +194,7 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
             value={followUp}
             onChange={(e) => setFollowUp(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && followUp.trim()) void send();
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && followUp.trim()) void sendFollowUp();
             }}
           />
           <div className="run-form-foot">
@@ -206,20 +206,20 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
             <button
               id="drawer-send"
               className="btn btn-sm btn-primary"
-              disabled={!followUp.trim() || !!busy}
-              onClick={() => void send()}
+              disabled={!followUp.trim() || !!busyAction}
+              onClick={() => void sendFollowUp()}
             >
-              {busy === 'send' ? 'Sending…' : live ? 'Send' : 'Continue'}
+              {busyAction === 'send' ? 'Sending…' : live ? 'Send' : 'Continue'}
             </button>
           </div>
         </div>
       )}
       {!live && (
         <div className="run-form drawer-form">
-          <PermissionModePicker value={mode} onChange={setMode} />
+          <PermissionModePicker value={permissionMode} onChange={setPermissionMode} />
           <p className="muted small">
-            {modeHint(mode)}. Works on its own branch and worktree; queued if all slots are busy or the quota
-            is exhausted.
+            {modeHint(permissionMode)}. Works on its own branch and worktree; queued if all slots are busy or
+            the quota is exhausted.
           </p>
           <div className="run-form-foot">
             {ticket.blockedBy.length > 0 ? (
@@ -237,10 +237,10 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
             <button
               id="drawer-start"
               className={`btn btn-sm ${run?.resumable && run.state !== 'failed' ? '' : 'btn-primary'}`}
-              disabled={!!busy || !title.trim()}
-              onClick={start}
+              disabled={!!busyAction || !title.trim()}
+              onClick={startRun}
             >
-              {busy === 'start'
+              {busyAction === 'start'
                 ? 'Starting…'
                 : confirmStart && ticket.blockedBy.length > 0
                   ? 'Start anyway'

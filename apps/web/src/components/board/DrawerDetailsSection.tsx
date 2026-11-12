@@ -12,37 +12,37 @@ import type { DrawerCtx } from './boardMeta';
 
 export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
   const {
-    t: ticket,
-    all: allTickets,
+    ticket,
+    allTickets,
     title,
     setTitle,
     body,
     setBody,
-    prio: priority,
-    setPrio,
+    priority,
+    setPriority,
     persona,
     setPersona,
-    setMode,
+    setPermissionMode,
     dirty,
-    busy,
-    setBusy,
+    busyAction,
+    setBusyAction,
     save,
-    changed,
-    move,
+    onChanged,
+    onMove,
   } = ctx;
   const [depError, setDepError] = useState<string>();
   const byId = new Map(allTickets.map((t) => [t.id, t]));
   const candidates = dependencyCandidates(ticket, allTickets);
 
   const setDependsOn = async (next: string[]) => {
-    setBusy('deps');
+    setBusyAction('deps');
     setDepError(undefined);
     try {
-      changed(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { dependsOn: next }));
+      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { dependsOn: next }));
     } catch (e) {
       setDepError(errorMessage(e));
     } finally {
-      setBusy(undefined);
+      setBusyAction(undefined);
     }
   };
 
@@ -51,7 +51,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
       <TaskTemplateBar
         onSelect={(tpl) => {
           setPersona(tpl.persona);
-          setMode(tpl.permissionMode);
+          setPermissionMode(tpl.permissionMode);
           if (!title.trim()) setTitle(tpl.titlePlaceholder);
           setBody(tpl.promptTemplate);
         }}
@@ -121,7 +121,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
               role="radio"
               aria-checked={priority === value}
               className={priority === value ? 'active' : ''}
-              onClick={() => setPrio(value)}
+              onClick={() => setPriority(value)}
             >
               {label}
             </button>
@@ -130,10 +130,10 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
         <button
           id="drawer-save"
           className="btn btn-sm"
-          disabled={!dirty || !!busy || !title.trim()}
+          disabled={!dirty || !!busyAction || !title.trim()}
           onClick={() => void save()}
         >
-          {busy === 'save' ? 'Saving…' : 'Save'}
+          {busyAction === 'save' ? 'Saving…' : 'Save'}
         </button>
       </div>
 
@@ -165,7 +165,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
                   type="button"
                   className="icon-btn"
                   aria-label={`Remove dependency ${dep?.key ?? id}`}
-                  disabled={!!busy}
+                  disabled={!!busyAction}
                   onClick={() => void setDependsOn(ticket.dependsOn.filter((d) => d !== id))}
                 >
                   {ico(X)}
@@ -178,7 +178,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
           id="drawer-dep-add"
           className="input"
           value=""
-          disabled={!!busy || candidates.length === 0}
+          disabled={!!busyAction || candidates.length === 0}
           onChange={(e) => e.target.value && void setDependsOn([...ticket.dependsOn, e.target.value])}
         >
           <option value="">{candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}</option>
@@ -206,7 +206,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
             role="radio"
             aria-checked={ticket.status === c.status}
             className={ticket.status === c.status ? 'active' : ''}
-            onClick={() => move(c.status)}
+            onClick={() => onMove(c.status)}
           >
             {c.label}
           </button>
