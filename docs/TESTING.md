@@ -30,10 +30,12 @@ engine) is absent; they run in the `make ci` stage.
 | Worktree config and gates               | `apps/core/src/worktree-config.test.ts`, `project-gates*.test.ts`                              |
 | Compose and container previews          | `apps/core/src/compose-preview.test.ts`, `container-preview.test.ts`, `agent-preview.test.ts`  |
 | Authentication and route coverage       | `apps/core/src/auth-coverage.test.ts`, `session-binding.test.ts`                               |
-| Wire contracts                          | `packages/protocol/src`                                                                        |
+| Wire contracts                          | `packages/protocol/src` (`ptyd.test.ts`, `hooks.test.ts` for the frame and hook schemas)       |
 | PTY host and framing                    | `apps/ptyd/src/{server,session,framing,drop}.test.ts`                                          |
 | Hooks and MCP server                    | `packages/hook/src/mcp-server.test.ts`                                                         |
 | Web UI domain logic                     | `apps/web/src/*.test.ts` (board filter, selection, attention, error boundaries, answer dialog) |
+| Layer lint (AC-1.3, 1.4)                | `apps/core/src/m1-layers.test.ts` (ESLint API against the real `eslint.config.js`)             |
+| Manifests, hermetic env, no skips       | `apps/core/src/m1-guards.test.ts` (AC-1.5, 1.9, 1.11)                                          |
 | Whole stack                             | `e2e/smoke.mjs`                                                                                |
 
 ## Adding tests
