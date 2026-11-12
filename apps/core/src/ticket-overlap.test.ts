@@ -104,12 +104,39 @@ describe('hot shared paths', () => {
 
 describe('glob overlap', () => {
   it('matches globs against paths', () => {
-    expect(globToRegExp('apps/**').test('apps/x/y/z.ts')).toBe(true);
-    expect(globToRegExp('apps/*/a.ts').test('apps/x/a.ts')).toBe(true);
-    expect(globToRegExp('apps/*/a.ts').test('apps/x/y/a.ts')).toBe(false);
-    expect(globToRegExp('**/a.ts').test('a.ts')).toBe(true);
-    expect(globToRegExp('src/*.{ts,tsx}').test('src/v.tsx')).toBe(true);
-    expect(globToRegExp('src/?.ts').test('src/ab.ts')).toBe(false);
+    expect(globToRegExp('apps/**')?.test('apps/x/y/z.ts')).toBe(true);
+    expect(globToRegExp('apps/*/a.ts')?.test('apps/x/a.ts')).toBe(true);
+    expect(globToRegExp('apps/*/a.ts')?.test('apps/x/y/a.ts')).toBe(false);
+    expect(globToRegExp('**/a.ts')?.test('a.ts')).toBe(true);
+    expect(globToRegExp('src/*.{ts,tsx}')?.test('src/v.tsx')).toBe(true);
+    expect(globToRegExp('src/?.ts')?.test('src/ab.ts')).toBe(false);
+  });
+
+  it('reads wildcards inside {…} alternatives as globs, nested too', () => {
+    const glob = globToRegExp('src/{*.ts,*.tsx}');
+    expect(glob?.test('src/a.ts')).toBe(true);
+    expect(glob?.test('src/a.tsx')).toBe(true);
+    expect(glob?.test('src/a.js')).toBe(false);
+    expect(glob?.test('src/x/a.ts')).toBe(false);
+    expect(globToRegExp('{apps,packages/{hook,ptyd}}/**/?.ts')?.test('packages/ptyd/src/a.ts')).toBe(true);
+    expect(globToRegExp('src/{a,b')?.test('src/{a,b')).toBe(true);
+  });
+
+  it('reads [...] classes as one non-slash character, negated with ! or ^', () => {
+    expect(globToRegExp('src/[ab].ts')?.test('src/b.ts')).toBe(true);
+    expect(globToRegExp('src/[ab].ts')?.test('src/c.ts')).toBe(false);
+    expect(globToRegExp('src/[!ab].ts')?.test('src/c.ts')).toBe(true);
+    expect(globToRegExp('src/[^ab].ts')?.test('src/a.ts')).toBe(false);
+    expect(globToRegExp('src[/]a.ts')?.test('src/a.ts')).toBe(false);
+    expect(globToRegExp('src/[]x].ts')?.test('src/].ts')).toBe(true);
+    expect(globToRegExp('src/[a.ts')?.test('src/[a.ts')).toBe(true);
+  });
+
+  it('never throws on a glob it cannot read, and compares it by its literal prefix instead', () => {
+    expect(globToRegExp('src/[z-a].ts')).toBeNull();
+    expect(pathsOverlap('src/[z-a].ts', 'src/anything.ts')).toBe(true);
+    expect(pathsOverlap('src/[z-a].ts', 'lib/a.ts')).toBe(false);
+    expect(pathsOverlap('src/{*.ts,*.tsx}', 'src/a.tsx')).toBe(true);
   });
 
   it('compares paths, globs and pairs of globs', () => {
@@ -281,6 +308,25 @@ describe('overlap-aware dispatch (AC-5.6)', () => {
     await expect.poll(() => runsFor(waiting.id).length, { timeout: 10_000 }).toBe(1);
     expect((await listTickets(project.id)).find((x) => x.id === waiting.id)?.waitingOn).toBeNull();
     await waitFile(`token-${runsFor(waiting.id)[0]?.id}`);
+  });
+
+  it('lists the board when a ticket claims globs regex syntax cannot read', async () => {
+    const project = await createProject();
+    const busy = await busyRunThatChanged(project.id, ['src/a.ts']);
+    const odd = await createTicket(project.id, {
+      title: 'Odd globs',
+      status: 'ready',
+      body: '## Target Files\n- `src/{*.ts,*.tsx}`\n- `src/[z-a].ts`\n',
+    });
+    // Dispatch reads the busy branch's footprint; the list then compares against it.
+    expect(await t.tickets.dispatchNextReadyTicket(project.id)).toEqual([]);
+    const res = await api('GET', `/api/projects/${project.id}/tickets`);
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Ticket[]).find((x) => x.id === odd.id)?.waitingOn).toEqual({
+      ticketId: busy.ticket.id,
+      key: busy.ticket.key,
+      paths: ['src/{*.ts,*.tsx}', 'src/[z-a].ts'],
+    });
   });
 
   it('never defers a ticket that claims only PROJECT.md', async () => {

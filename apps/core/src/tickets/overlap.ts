@@ -137,13 +137,23 @@ export function isHotPath(pattern: string): boolean {
   return HOT_BASENAMES.has(base);
 }
 
-const escapeRegExp = (s: string) => s.replace(/[.+^$()|\\]/g, '\\$&');
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Inside a regex character class only these are special. */
+const escapeClassChar = (c: string) => (/[\\\]^[-]/.test(c) ? `\\${c}` : c);
 
-/** A glob as an anchored regular expression: `**` spans directories, `*`/`?` stay within one. */
-export function globToRegExp(glob: string): RegExp {
+/** Thrown inside the translator only; globToRegExp turns it into null. */
+class UnparsableGlob extends Error {}
+
+/**
+ * Translates `glob` from `start` until the end or, inside braces, an unnested `,` or `}`.
+ * Returns the regex source and the index it stopped at.
+ */
+function translateGlob(glob: string, start: number, inBraces: boolean): { source: string; end: number } {
   let out = '';
-  for (let i = 0; i < glob.length; i++) {
+  let i = start;
+  for (; i < glob.length; i++) {
     const c = glob[i] as string;
+    if (inBraces && (c === ',' || c === '}')) break;
     if (c === '*' && glob[i + 1] === '*') {
       const slashAfter = glob[i + 2] === '/';
       out += slashAfter ? '(?:.*/)?' : '.*';
@@ -151,26 +161,78 @@ export function globToRegExp(glob: string): RegExp {
     } else if (c === '*') out += '[^/]*';
     else if (c === '?') out += '[^/]';
     else if (c === '{') {
-      const end = glob.indexOf('}', i);
-      if (end === -1) out += '\\{';
+      const alternatives = translateBraces(glob, i);
+      if (alternatives === null) out += '\\{';
       else {
-        out += `(?:${glob
-          .slice(i + 1, end)
-          .split(',')
-          .map(escapeRegExp)
-          .join('|')})`;
-        i = end;
+        out += alternatives.source;
+        i = alternatives.end;
       }
     } else if (c === '[') {
-      const end = glob.indexOf(']', i);
-      if (end === -1) out += '\\[';
+      const cls = translateClass(glob, i);
+      if (cls === null) out += '\\[';
       else {
-        out += glob.slice(i, end + 1).replace(/\\/g, '\\\\');
-        i = end;
+        out += cls.source;
+        i = cls.end;
       }
     } else out += escapeRegExp(c);
   }
-  return new RegExp(`^${out}$`);
+  return { source: out, end: i };
+}
+
+/** `{a,b*}` at `open` as `(?:a|b[^/]*)`, each alternative a glob of its own; null when never closed. */
+function translateBraces(glob: string, open: number): { source: string; end: number } | null {
+  const alternatives: string[] = [];
+  let i = open + 1;
+  for (;;) {
+    const part = translateGlob(glob, i, true);
+    alternatives.push(part.source);
+    if (part.end >= glob.length) return null;
+    if (glob[part.end] === '}') return { source: `(?:${alternatives.join('|')})`, end: part.end };
+    i = part.end + 1;
+  }
+}
+
+/**
+ * `[a-z]`, `[!x]` or `[^x]` at `open` as a regex class that never matches `/`; null when never
+ * closed (the `[` is then literal). A reversed range (`[z-a]`) makes the whole glob unparsable.
+ */
+function translateClass(glob: string, open: number): { source: string; end: number } | null {
+  let i = open + 1;
+  const negated = glob[i] === '!' || glob[i] === '^';
+  if (negated) i++;
+  const first = i;
+  let body = '';
+  for (; i < glob.length; i++) {
+    const c = glob[i] as string;
+    if (c === ']' && i > first) break;
+    const to = glob[i + 2];
+    if (glob[i + 1] === '-' && to !== undefined && to !== ']') {
+      if (c > to) throw new UnparsableGlob(`range ${c}-${to} is out of order`);
+      body += `${escapeClassChar(c)}-${escapeClassChar(to)}`;
+      i += 2;
+    } else body += escapeClassChar(c);
+  }
+  if (i >= glob.length) return null;
+  return { source: negated ? `[^/${body}]` : `(?!/)[${body}]`, end: i };
+}
+
+/**
+ * A glob as an anchored regular expression: `**` spans directories, `*`/`?` stay within one, `{a,b}`
+ * alternatives are globs themselves, `[...]` classes never match `/`. Null when the glob cannot be
+ * read as one (a reversed class range); callers then compare it by its literal prefix. Never throws:
+ * a claimed path is agent-written text, and the board must survive any of it.
+ */
+export function globToRegExp(glob: string): RegExp | null {
+  try {
+    return new RegExp(`^${translateGlob(glob, 0, false).source}$`);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a literal path can be a file the glob names; by literal prefix when the glob is unparsable. */
+function globMatches(glob: string, file: string): boolean {
+  return globToRegExp(glob)?.test(file) ?? file.startsWith(literalPrefix(glob));
 }
 
 /**
@@ -181,8 +243,8 @@ export function pathsOverlap(a: string, b: string): boolean {
   const aGlob = GLOB_CHARS.test(a);
   const bGlob = GLOB_CHARS.test(b);
   if (!aGlob && !bGlob) return a === b;
-  if (aGlob && !bGlob) return globToRegExp(a).test(b);
-  if (!aGlob && bGlob) return globToRegExp(b).test(a);
+  if (aGlob && !bGlob) return globMatches(a, b);
+  if (!aGlob && bGlob) return globMatches(b, a);
   const pa = literalPrefix(a);
   const pb = literalPrefix(b);
   return pa.startsWith(pb) || pb.startsWith(pa);
