@@ -307,6 +307,44 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     return { url: data.html_url ?? `${remote.repoWebUrl}/releases/tag/${input.tag}` };
   }
 
+  /**
+   * The forge's release for `tag`, or null when it has none: how Retry finds a release whose
+   * creation went through though its answer was lost. Same account and path as createRelease.
+   */
+  async findRelease(projectId: string, tag: string): Promise<{ url: string } | null> {
+    const { remote, token } = await this.projectRemote(projectId);
+    const gitlab = remote.provider === 'gitlab';
+    const github = remote.provider === 'github';
+    const url = gitlab
+      ? `${remote.apiBaseUrl}/projects/${encodeURIComponent(remote.repoPath)}/releases/${encodeURIComponent(tag)}`
+      : `${remote.apiBaseUrl}/repos/${remote.repoPath}/releases/tags/${encodeURIComponent(tag)}`;
+    const res = await forgeFetch(this.fetch, url, {
+      method: 'GET',
+      headers: {
+        ...(gitlab
+          ? { 'PRIVATE-TOKEN': token }
+          : github
+            ? { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }
+            : { Authorization: `token ${token}` }),
+        'User-Agent': 'Emberline-Core',
+      },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const label = gitlab ? 'GitLab' : github ? 'GitHub' : 'Gitea';
+      throw new HttpError(
+        res.status,
+        'forge_error',
+        `${label} release lookup failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    }
+    const data = await readJson<{ html_url?: string; _links?: { self?: string } }>(res);
+    return gitlab
+      ? { url: data._links?.self ?? `${remote.repoWebUrl}/-/releases/${tag}` }
+      : { url: data.html_url ?? `${remote.repoWebUrl}/releases/tag/${tag}` };
+  }
+
   private recordedPullRequest(runId: string): ForgePullRequest | null {
     const events = this.db
       .select()

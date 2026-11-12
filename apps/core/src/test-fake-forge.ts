@@ -195,8 +195,22 @@ export async function startFakeForge(
           return json(res, 400, { message: 'invalid JSON' });
         }
         const [, owner, repo] = release as unknown as [string, string, string];
+        if (forge.releases.some((r) => r.owner === owner && r.repo === repo && r.tag_name === body.tag_name))
+          return json(res, 409, { message: 'release tag already exists' });
         forge.releases.push({ owner, repo, tag_name: body.tag_name, name: body.name, body: body.body });
         return json(res, 201, { html_url: `${forge.url}/${owner}/${repo}/releases/tag/${body.tag_name}` });
+      }
+      const byTag =
+        req.method === 'GET'
+          ? /^\/api\/v1\/repos\/([^/]+)\/([^/]+)\/releases\/tags\/([^/]+)$/.exec(url.pathname)
+          : null;
+      if (byTag) {
+        const [, owner, repo, tag] = byTag as unknown as [string, string, string, string];
+        const found = forge.releases.find(
+          (r) => r.owner === owner && r.repo === repo && r.tag_name === decodeURIComponent(tag),
+        );
+        if (!found) return json(res, 404, { message: 'not found' });
+        return json(res, 200, { html_url: `${forge.url}/${owner}/${repo}/releases/tag/${found.tag_name}` });
       }
       json(res, 404, { message: 'not found' });
     })();

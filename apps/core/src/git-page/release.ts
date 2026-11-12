@@ -79,7 +79,7 @@ const INTERRUPTED =
 /** What a release needs from the rest of core. */
 export interface ReleaseDeps {
   repository: Pick<RepositoryService, 'remoteAction' | 'readOrigin' | 'recordPush'>;
-  forge: Pick<ForgeService, 'createRelease'>;
+  forge: Pick<ForgeService, 'createRelease' | 'findRelease'>;
   /** Docker for the checks' own worktree (RunService's job helpers). */
   runs: Pick<RunService, 'dockerEnvForJob' | 'teardownJobWorktree'>;
   /** Where core keeps worktrees; the checks get their own there. */
@@ -136,6 +136,8 @@ async function onlyFromOrigin(mainPath: string, main: string, previous: string |
   );
 }
 
+const ORIGIN_MOVED_AFTER_CHECKS = "Origin's main moved after the checks; Retry checks it again.";
+
 const mainMoved = (main: string) =>
   `${main} moved during the release (something else changed it here), so Emberline stopped. Start the release again once ${main} is where you want it.`;
 
@@ -183,7 +185,7 @@ async function mergeTree(
 }
 
 /** What a version tag looks like to describe: `v1.2.3` or `1.2.3` (RELEASE_VERSION allows both). */
-export const VERSION_TAG_MATCH = ['--match', 'v[0-9]*.[0-9]*.[0-9]*', '--match', '[0-9]*.[0-9]*.[0-9]*'];
+export const VERSION_TAG_MATCH = ['--match', 'v[0-9]*', '--match', '[0-9]*.[0-9]*.[0-9]*'];
 
 /** The most recent version tag in `ref`'s history, else null. */
 export async function latestVersionTag(mainPath: string, ref: string): Promise<string | null> {
@@ -285,6 +287,7 @@ export class ReleaseJobs {
         startedAt: new Date().toISOString(),
         finishedAt: null,
         previousMain: mainTip,
+        checked: null,
         promoteOid: null,
         releaseCommit: null,
         releaseUrl: null,
@@ -315,6 +318,8 @@ export class ReleaseJobs {
       const stopped = this.current(projectId);
       if (stopped?.state !== 'failed')
         throw conflict('There is no stopped release to retry.', 'nothing_to_retry');
+      if (stepOf(stopped, 'push_main').detail === ORIGIN_MAIN_MOVED_START_AGAIN)
+        throw conflict(ORIGIN_MAIN_MOVED_START_AGAIN, 'restart_needed');
       const job: ReleaseJob = {
         ...stopped,
         state: 'running',
@@ -324,6 +329,14 @@ export class ReleaseJobs {
           s.status === 'failed' ? { ...s, status: 'pending', detail: null } : s,
         ),
       };
+      // Checks that ran on another commit than main names now say nothing about it: they run again.
+      const checks = stepOf(job, 'checks');
+      if (
+        !finished(job, 'changelog') &&
+        (checks.status === 'done' || checks.status === 'skipped') &&
+        (await localTip(project.path, project.defaultBranch)) !== job.checked
+      )
+        Object.assign(checks, { status: 'pending', detail: null });
       this.write(projectId, job);
       this.launch(project, job, true);
       return job;
@@ -669,9 +682,10 @@ export class ReleaseJobs {
   }
 
   /**
-   * The commit main must name for the next step: the one this release left. Before the release made
+   * For the checks: the commit main must name, the one this release left. Before the release made
    * any commit (a skipped promote, or one taken back after a rejected push), main may have taken in
-   * origin's commits by a Pull, when the working branch is not main; the release starts from there.
+   * origin's commits by a Pull, when the working branch is not main; the release goes on from there,
+   * checked. Every later step needs exactly the commit the checks ran on (`job.checked`).
    */
   private async pinnedMain(ctx: JobContext, mainTip: string | null): Promise<string | null> {
     const { project, main, job } = ctx;
@@ -691,7 +705,10 @@ export class ReleaseJobs {
     const expected = await this.pinnedMain(ctx, await localTip(project.path, main));
     if (!expected) return failed(mainMoved(main));
     const checks = approvedChecks(this.db, project.id);
-    if (!checks) return skipped(NO_CHECKS);
+    if (!checks) {
+      ctx.job.checked = expected;
+      return skipped(NO_CHECKS);
+    }
     const dir = await this.worktreeAt(ctx, expected);
     const result = await (this.deps.buildWorkspaceDemo ?? buildWorkspaceDemo)({
       db: this.db,
@@ -706,7 +723,32 @@ export class ReleaseJobs {
       await this.removeWorktree(ctx);
       return failed(result.output.slice(-CHECK_OUTPUT_KEPT).trim() || 'The checks failed.');
     }
+    ctx.job.checked = expected;
     return done();
+  }
+
+  /**
+   * Main as the checks saw it, for the steps after them; else the failure. Main moved on only by
+   * origin's commits (a Pull during the checks): the checks are to run again on it, by Retry.
+   */
+  private async checkedMain(ctx: JobContext, mainTip: string | null): Promise<string | Outcome> {
+    const { project, main, job } = ctx;
+    const expected = expectedMain(job);
+    if (expected && mainTip === expected && expected === job.checked) return expected;
+    const made = finished(job, 'promote') || finished(job, 'changelog');
+    if (
+      expected &&
+      mainTip &&
+      !made &&
+      job.working !== main &&
+      (await onlyFromOrigin(project.path, main, expected, mainTip))
+    ) {
+      Object.assign(stepOf(job, 'checks'), { status: 'pending', detail: null });
+      return failed(ORIGIN_MOVED_AFTER_CHECKS);
+    }
+    if (expected && mainTip === expected)
+      return failed('The checks did not run on this commit of main; Retry runs them.');
+    return failed(mainMoved(main));
   }
 
   /** The notes as a new section of main's CHANGELOG.md, in a commit that changes only that file. */
@@ -718,8 +760,8 @@ export class ReleaseJobs {
     if (job.releaseCommit && mainTip && (await isAncestorCommit(mainPath, job.releaseCommit, mainTip)))
       return done();
     job.releaseCommit = null;
-    const expected = await this.pinnedMain(ctx, mainTip);
-    if (!expected) return failed(mainMoved(main));
+    const expected = await this.checkedMain(ctx, mainTip);
+    if (typeof expected !== 'string') return expected;
     const entry = (await realGit(['ls-tree', '-z', expected, '--', 'CHANGELOG.md'], mainPath)).stdout.split(
       '\0',
     )[0];
@@ -771,6 +813,9 @@ export class ReleaseJobs {
     const { project, main, job } = ctx;
     const expected = expectedMain(job);
     if (!expected) return failed(`${main} has no commits here.`);
+    // Only what the checks ran on goes out: that commit, or the release commit made right on it.
+    if (expected !== job.checked && !(finished(job, 'changelog') && expected === job.releaseCommit))
+      return failed('The checks did not run on this commit of main; Retry runs them.');
     const result = await this.deps.repository.remoteAction(project.id, async (ws) => {
       const has = await withMainWorkspaceLock(ws.path, async () => {
         const tip = await localTip(ws.path, main);
@@ -790,7 +835,9 @@ export class ReleaseJobs {
         !read.error &&
         read.main !== null &&
         (await isAncestorCommit(ws.path, expected, read.main));
-      return contained ? ('contained' as const) : pushed;
+      if (!contained) return pushed;
+      await this.deps.repository.recordPush(project.id, ws, main, read.main!);
+      return 'contained' as const;
     });
     if (result === 'gone')
       return failed(
@@ -906,6 +953,17 @@ export class ReleaseJobs {
       job.releaseUrl = url;
       return done();
     } catch (error) {
+      // "Already exists" (GitHub 422, GitLab and Gitea 409): one made before, whose answer was lost.
+      if (
+        error instanceof HttpError &&
+        error.code === 'forge_error' &&
+        [409, 422].includes(error.statusCode)
+      ) {
+        const found = await this.deps.forge.findRelease(project.id, tag);
+        if (!found) throw error;
+        job.releaseUrl = found.url;
+        return done(`The forge had this release already.`);
+      }
       if (!(error instanceof HttpError) || error.code !== 'forge_account_missing') throw error;
       const origin = (await originUrls(project.path)).fetch;
       const host = (origin && parseForgeRemote(origin)?.host) || 'origin';

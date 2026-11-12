@@ -404,6 +404,7 @@ describe('release', () => {
     const head = await developWithTickets();
     const jobs = jobsWith({
       forge: {
+        findRelease: async () => null,
         createRelease: async () => {
           throw new HttpError(409, 'forge_account_missing', 'No forge account.');
         },
@@ -453,6 +454,7 @@ describe('release', () => {
     let fail = true;
     const jobs = jobsWith({
       forge: {
+        findRelease: async () => null,
         createRelease: async (id, input) => {
           if (fail) throw new HttpError(502, 'forge_error', 'Gitea release failed (502): bad gateway');
           return t.forge.createRelease(id, input);
@@ -487,6 +489,7 @@ describe('release', () => {
     const head = await developWithTickets();
     const jobs = jobsWith({
       forge: {
+        findRelease: async () => null,
         createRelease: async () => {
           throw new HttpError(502, 'forge_error', 'down');
         },
@@ -592,6 +595,9 @@ describe('release', () => {
     expect(git(projectPath, 'rev-parse', 'main')).toBe(head);
     expect(git(projectPath, 'status', '--porcelain')).toBe('');
     expect(has(bare, 'refs/tags/v0.2.0')).toBe('');
+    // Retry cannot redo it on top of origin's commits: it says to start again.
+    const retried = await refusal(svc.retryRelease(projectId));
+    expect(retried.code).toBe('restart_needed');
 
     expect((await svc.pull(projectId, { auto: false })).state).toBe('pulled');
     const pulled = git(projectPath, 'rev-parse', 'main');
@@ -664,6 +670,86 @@ describe('release', () => {
     expect(git(bare, 'log', '-1', '--format=%s', 'main')).toBe('chore(release): v0.2.0');
     expect(git(bare, 'log', '--format=%s', 'main')).toContain('feat: merged on the forge');
     git(projectPath, 'merge-base', '--is-ancestor', 'main', 'develop');
+  });
+
+  it('a Pull during the checks stops the release before the CHANGELOG, and Retry checks the new main first', async () => {
+    commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: log');
+    commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    git(projectPath, 'branch', 'develop');
+    git(projectPath, 'push', '-q', bare, 'develop');
+    expect((await send('POST', gitUrl('/working-branch'), { branch: 'develop' })).statusCode).toBe(200);
+    const head = git(projectPath, 'rev-parse', 'develop');
+    approveChecks();
+    const ranOn: string[] = [];
+    let svc: GitPageService | null = null;
+    const jobs = jobsWith({
+      build: async (p) => {
+        ranOn.push(git(p.workspacePath, 'rev-parse', 'HEAD'));
+        if (ranOn.length === 1) {
+          // A PR merged on the forge, and a Pull brings it into main while the checks run.
+          const elsewhere = cloneOf(bare);
+          commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+          git(elsewhere, 'push', '-q', 'origin', 'main');
+          expect((await svc!.pull(projectId, { auto: false })).state).toBe('pulled');
+        }
+        return okBuild();
+      },
+    });
+    svc = serviceWith(jobs);
+    await svc.startRelease(projectId, publish(head));
+    await jobs.idle();
+    let job = storedJob();
+    expect(job.state).toBe('failed');
+    expect(job.steps.find((s) => s.name === 'changelog')).toMatchObject({
+      status: 'failed',
+      detail: "Origin's main moved after the checks; Retry checks it again.",
+    });
+    expect(job.steps.find((s) => s.name === 'checks')!.status).toBe('pending');
+    expect(has(projectPath, 'refs/tags/v0.2.0')).toBe('');
+    const pulledMain = git(projectPath, 'rev-parse', 'main');
+    expect(ranOn).toEqual([head]);
+
+    await svc.retryRelease(projectId);
+    await jobs.idle();
+    job = storedJob();
+    expect(job.state).toBe('done');
+    // The checks ran again on the pulled main, and the release commit sits right on it.
+    expect(ranOn).toEqual([head, pulledMain]);
+    expect(job.checked).toBe(pulledMain);
+    expect(git(bare, 'log', '-1', '--format=%P', 'refs/tags/v0.2.0^{commit}')).toBe(pulledMain);
+  });
+
+  it('Retry after the forge made the release but its answer was lost finds it and records its URL', async () => {
+    const head = await developWithTickets();
+    let lost = true;
+    const jobs = jobsWith({
+      forge: {
+        findRelease: (id, tag) => t.forge.findRelease(id, tag),
+        createRelease: async (id, input) => {
+          const made = await t.forge.createRelease(id, input);
+          if (lost) {
+            lost = false;
+            throw new HttpError(502, 'forge_error', 'Gitea release failed (502): the answer was lost');
+          }
+          return made;
+        },
+      },
+    });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    expect(storedJob().steps.find((s) => s.name === 'forge_release')!.status).toBe('failed');
+    expect(forge.releases).toHaveLength(1);
+    await jobs.retry(projectId);
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('done');
+    expect(job.releaseUrl).toBe(`${forge.url}/alice/app/releases/tag/v0.2.0`);
+    expect(job.steps.find((s) => s.name === 'forge_release')!.detail).toBe(
+      'The forge had this release already.',
+    );
+    expect(job.steps.find((s) => s.name === 'sync_working')!.status).toBe('done');
+    expect(forge.releases).toHaveLength(1);
   });
 
   it('a take-back that fails says why instead of "Pull, then Retry"', async () => {

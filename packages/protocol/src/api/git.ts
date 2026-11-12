@@ -157,6 +157,8 @@ export const ReleaseJob = z.object({
   startedAt: z.string(),
   finishedAt: z.string().nullable(),
   previousMain: z.string().nullable(),
+  /** The commit the checks last ran on (or found nothing to check at); null before they did. */
+  checked: z.string().nullable(),
   promoteOid: z.string().nullable(),
   releaseCommit: z.string().nullable(),
   releaseUrl: z.string().nullable(),

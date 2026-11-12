@@ -131,3 +131,73 @@ describe('createRelease', () => {
     }
   });
 });
+
+describe('findRelease', () => {
+  const answer = (reply: unknown, status = 200) => {
+    const calls: { url: string; method: string; headers: Record<string, string> }[] = [];
+    t.forgeFetch.current = async (url, init) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? 'GET',
+        headers: init?.headers as Record<string, string>,
+      });
+      return new Response(JSON.stringify(reply), { status, headers: { 'content-type': 'application/json' } });
+    };
+    return calls;
+  };
+
+  it('GitHub: reads the release by tag and returns html_url; a 404 is null', async () => {
+    project('g', 'https://github.com/acme/widget.git');
+    seedForgeAccount(t.db, { provider: 'github', serverUrl: 'https://github.com', token: 'gh-tok' });
+    const calls = answer({ html_url: 'https://github.com/acme/widget/releases/tag/v1.2.3' });
+    expect(await t.forge.findRelease('g', 'v1.2.3')).toEqual({
+      url: 'https://github.com/acme/widget/releases/tag/v1.2.3',
+    });
+    expect(calls).toEqual([
+      {
+        url: 'https://api.github.com/repos/acme/widget/releases/tags/v1.2.3',
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: 'Bearer gh-tok' }),
+      },
+    ]);
+    answer({ message: 'Not Found' }, 404);
+    expect(await t.forge.findRelease('g', 'v1.2.3')).toBeNull();
+  });
+
+  it('GitLab: reads the release by tag with the encoded project path and returns _links.self', async () => {
+    project('l', 'https://gitlab.com/acme/widget.git');
+    seedForgeAccount(t.db, { provider: 'gitlab', serverUrl: 'https://gitlab.com', token: 'gl-tok' });
+    const calls = answer({ _links: { self: 'https://gitlab.com/acme/widget/-/releases/v1.2.3' } });
+    expect(await t.forge.findRelease('l', 'v1.2.3')).toEqual({
+      url: 'https://gitlab.com/acme/widget/-/releases/v1.2.3',
+    });
+    expect(calls).toEqual([
+      {
+        url: 'https://gitlab.com/api/v4/projects/acme%2Fwidget/releases/v1.2.3',
+        method: 'GET',
+        headers: expect.objectContaining({ 'PRIVATE-TOKEN': 'gl-tok' }),
+      },
+    ]);
+    answer({ message: '404 Not found' }, 404);
+    expect(await t.forge.findRelease('l', 'v1.2.3')).toBeNull();
+  });
+
+  it('Gitea: reads the release by tag from the fake forge; another failure is an error', async () => {
+    const forge = await startFakeForge({ token: 'gt-tok', username: 'alice' });
+    try {
+      project('e', `${forge.url}/alice/app.git`);
+      seedForgeAccount(t.db, { provider: 'gitea', serverUrl: forge.url, token: 'gt-tok', username: 'alice' });
+      expect(await t.forge.findRelease('e', 'v1.2.3')).toBeNull();
+      await t.forge.createRelease('e', input);
+      expect(await t.forge.findRelease('e', 'v1.2.3')).toEqual({
+        url: `${forge.url}/alice/app/releases/tag/v1.2.3`,
+      });
+      // Creating it again is "already exists".
+      await expect(t.forge.createRelease('e', input)).rejects.toMatchObject({ statusCode: 409 });
+      answer({ message: 'boom' }, 500);
+      await expect(t.forge.findRelease('e', 'v1.2.3')).rejects.toMatchObject({ code: 'forge_error' });
+    } finally {
+      await forge.close();
+    }
+  });
+});
