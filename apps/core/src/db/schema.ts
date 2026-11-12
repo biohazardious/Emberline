@@ -327,24 +327,33 @@ export const runEventCompactions = sqliteTable('run_event_compactions', {
  * pauses dispatch on its lane until `resumeAt`; timers are derived from these rows, so they
  * survive restarts.
  */
-export const quotaWindows = sqliteTable('quota_windows', {
-  id: text('id').primaryKey(),
-  /** Lane the window blocks; pool `*` blocks every pool of the agent + credential. */
-  agent: text('agent').notNull().default('claude'),
-  credential: text('credential').notNull().default('login'),
-  pool: text('pool').notNull().default('*'),
-  /** Approximate window start (reset - 5h) when the reset time is known. */
-  startedAt: integer('started_at', { mode: 'timestamp_ms' }),
-  exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),
-  resetsAt: integer('resets_at', { mode: 'timestamp_ms' }),
-  resumeAt: integer('resume_at', { mode: 'timestamp_ms' }).notNull(),
-  /** hook | screen | probe */
-  source: text('source').notNull(),
-  message: text('message'),
-  /** Run whose limit opened the window. */
-  runId: text('run_id'),
-  resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
-});
+export const quotaWindows = sqliteTable(
+  'quota_windows',
+  {
+    id: text('id').primaryKey(),
+    /** Lane the window blocks; pool `*` blocks every pool of the agent + credential. */
+    agent: text('agent').notNull().default('claude'),
+    credential: text('credential').notNull().default('login'),
+    pool: text('pool').notNull().default('*'),
+    /** Approximate window start (reset - 5h) when the reset time is known. */
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    exhaustedAt: integer('exhausted_at', { mode: 'timestamp_ms' }).notNull(),
+    resetsAt: integer('resets_at', { mode: 'timestamp_ms' }),
+    resumeAt: integer('resume_at', { mode: 'timestamp_ms' }).notNull(),
+    /** hook | screen | probe */
+    source: text('source').notNull(),
+    message: text('message'),
+    /** Run whose limit opened the window. */
+    runId: text('run_id'),
+    resumedAt: integer('resumed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [
+    // Open pauses (`resumed_at is null`) by their resume time: the scheduler's every pass and its re-armed timer.
+    index('quota_windows_open_idx').on(t.resumedAt, t.resumeAt),
+    // A limit hit looks up its lane's open and latest window.
+    index('quota_windows_lane_idx').on(t.agent, t.credential, t.pool, t.exhaustedAt),
+  ],
+);
 
 /** Recurring cron jobs that automatically spawn agent runs on a schedule (Phase 2.2). */
 export const scheduledJobs = sqliteTable(

@@ -28,6 +28,7 @@ import type { PtydBridge } from '../ptyd-bridge.js';
 import { providerAdapter } from '../runs/providers.js';
 import { currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
+import { MAX_TIMER_MS, nextWakeAt } from './next-wake.js';
 
 type WindowRow = typeof quotaWindows.$inferSelect;
 
@@ -92,10 +93,15 @@ interface SchedulerEvents {
  *   queue; handed-off successors go before other queued runs.
  * - A run hit by a temporary provider error also waits as `rate_limited`, without opening a window,
  *   and is retried once its own `autoRetryAt` has passed.
- * All state lives in SQLite; `tick()` derives everything from it, so restarts lose nothing.
+ * All state lives in SQLite; `tick()` derives everything from it, so restarts lose nothing. After
+ * every pass a timer is re-armed for the next stored resume time, so a pause ends on time without
+ * relying on the periodic tick; `recover()` is the start-up path after a crash or restart.
  */
 export class Scheduler extends EventEmitter<SchedulerEvents> {
   private timer?: NodeJS.Timeout;
+  /** Fires at the next stored resume (or retry) time; re-armed after every pass. */
+  private wakeTimer?: NodeJS.Timeout;
+  private readonly detach: (() => void)[] = [];
   private disposed = false;
   private ticking?: Promise<void>;
   private tickAgain = false;
@@ -121,27 +127,36 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     super();
     this.setMaxListeners(0);
     this.options = { ...DEFAULT_SCHEDULER_OPTIONS, ...options };
-    runs.on('rateLimited', (run, info) => {
+    const onRateLimited = (run: Run, info: RateLimitInfo | undefined) => {
       // A failure (e.g. the DB) is noted on the run instead of escaping as an unhandled rejection.
       this.onRateLimited(run, info).catch((error: unknown) =>
         this.runs.note(run.id, 'rate_limit_failed', {
           message: error instanceof Error ? error.message : String(error),
         }),
       );
-    });
-    runs.on('run', (run, stateChanged) => {
+    };
+    const onRun = (run: Run, stateChanged: boolean) => {
       // A rate-limited run whose process exited still waits: only an end state frees its memory.
       if (run.state === 'done' || run.state === 'failed') this.forgetSkipped(run.id);
       if (stateChanged) {
         this.fallbackChecked.delete(run.id);
         this.kick();
       }
-    });
-    runs.on('removed', (id) => {
+    };
+    const onRemoved = (id: string) => {
       this.forgetSkipped(id);
       this.fallbackChecked.delete(id);
       this.kick();
-    });
+    };
+    runs.on('rateLimited', onRateLimited);
+    runs.on('run', onRun);
+    runs.on('removed', onRemoved);
+    // A disposed scheduler (a restart in the same process) must not react to the runs any more.
+    this.detach.push(
+      () => runs.off('rateLimited', onRateLimited),
+      () => runs.off('run', onRun),
+      () => runs.off('removed', onRemoved),
+    );
   }
 
   start(): void {
@@ -153,6 +168,18 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
   dispose(): void {
     this.disposed = true;
     clearInterval(this.timer);
+    clearTimeout(this.wakeTimer);
+    for (const off of this.detach.splice(0)) off();
+  }
+
+  /**
+   * Crash-safe start-up: releases the slots of runs whose sessions ptyd no longer reports (the
+   * runs' reconcile notes their end), then one pass resumes every run whose reset has passed and
+   * re-arms the timer for the resets still ahead. Every input is read from SQLite.
+   */
+  async recover(): Promise<void> {
+    await this.runs.reconcile();
+    await this.tick();
   }
 
   /** Enqueues a run and dispatches immediately when a slot and quota are available. */
@@ -289,10 +316,23 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
         } while (this.tickAgain);
       } finally {
         this.ticking = undefined;
+        this.armWake();
         this.publish();
       }
     })();
     return this.ticking;
+  }
+
+  /** Re-arms the one wake timer for the next stored resume or retry time (none: no timer). */
+  private armWake(): void {
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = undefined;
+    if (this.disposed) return;
+    const now = new Date();
+    const at = nextWakeAt(this.db, now);
+    if (at === undefined) return;
+    this.wakeTimer = setTimeout(() => this.kick(), Math.min(at - now.getTime(), MAX_TIMER_MS));
+    this.wakeTimer.unref();
   }
 
   /** Schedules a pass on the next turn, after every synchronous listener of the current event ran. */
@@ -492,6 +532,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
     const lane: Lane = { agent: run.agent, credential: run.credential, pool: fromHook?.pool ?? '*' };
     // Synchronously, so no dispatch pass can resume this run before the window exists.
     this.recordLimit(run.id, lane, fromHook, 'hook');
+    this.armWake();
     void this.maybeHandOff(run, fromHook).catch(() => undefined);
     if (fromHook?.resetsAt) return;
     // The hook didn't say when; the banner on screen usually does.
@@ -505,8 +546,10 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
           model: run.model,
         })
       : undefined;
-    if (onScreen?.resetsAt)
+    if (onScreen?.resetsAt) {
       this.recordLimit(run.id, { ...lane, pool: onScreen.pool }, onScreen, 'screen', lane.pool);
+      this.armWake();
+    }
   }
 
   /** Policy `inFlight = fallback`: move the limited run to the first route whose lane is open. */

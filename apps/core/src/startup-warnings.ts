@@ -2,6 +2,7 @@
 import { catchAllRanges, parseCidrList } from './auth/cidr.js';
 import {
   type CoreConfig,
+  invalidPreviewLimitVars,
   invalidPreviewPortVars,
   parseAllowedHosts,
   previewPortRangesOverlap,
@@ -47,6 +48,14 @@ export function startupWarnings(
     out.push({
       data: { variables: invalidPorts },
       message: 'preview ports: not a port range (like 4300-4324); using the default',
+    });
+  }
+  const invalidLimits = invalidPreviewLimitVars(env);
+  if (invalidLimits.length > 0) {
+    out.push({
+      data: { variables: invalidLimits },
+      message:
+        'compose preview limits: EMBERLINE_PREVIEW_CPUS takes 0.1-64 and EMBERLINE_PREVIEW_MEMORY_MB 64-262144; using the default',
     });
   }
   const { runner, docker } = config.previewPorts;

@@ -1,5 +1,12 @@
-import type { Project, Run, SyncWorktreeResponse, Ticket, TicketStatus } from '@emberline/protocol';
-import { Play, Sparkles } from 'lucide-react';
+import type {
+  BulkTicketResult,
+  Project,
+  Run,
+  SyncWorktreeResponse,
+  Ticket,
+  TicketStatus,
+} from '@emberline/protocol';
+import { ListChecks, Play, Sparkles } from 'lucide-react';
 import { type DragEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -10,7 +17,9 @@ import {
   isBoardFilterActive,
   parseBoardFilter,
 } from '../boardFilter';
+import { bulkResultSummary, selectionAfter } from '../boardSelection';
 import { BlueprintModal } from '../components/BlueprintModal';
+import { BoardBulkBar } from '../components/BoardBulkBar';
 import { BOARD_COLUMNS, QuickAdd, TicketCard } from '../components/BoardCard';
 import { BoardExportMenu } from '../components/BoardExportMenu';
 import { BoardFilterBar, MobileColumnNav } from '../components/BoardFilterBar';
@@ -20,6 +29,7 @@ import { WorktreeConfigBanner } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { TicketDrawer } from '../components/TicketDrawer';
+import { useBoardSelection } from '../hooks/useBoardSelection';
 import { useRuns, useTickets } from '../hooks/liveData';
 import { useGoBack, useQueryParam, useUpdateQuery } from '../hooks/navigation';
 import { useApi } from '../hooks/useApi';
@@ -32,7 +42,7 @@ import {
   worktreeMissing,
 } from '../reviewComments';
 import { dropIntoInProgress } from '../ticketDeps';
-import { toastInfo } from '../toast';
+import { toastError, toastInfo } from '../toast';
 
 export { TicketDrawer } from '../components/TicketDrawer';
 
@@ -142,6 +152,19 @@ export function BoardPage({ projectId }: { projectId: string }) {
     for (const list of grouped.values()) list.sort(byPosition);
     return grouped;
   }, [allColumns, filterActive, filteredBoard.tickets]);
+
+  const orderedVisible = useMemo(
+    () => BOARD_COLUMNS.flatMap((c) => (visibleColumns.get(c.status) ?? []).map((t) => t.id)),
+    [visibleColumns],
+  );
+  const bulk = useBoardSelection(tickets, orderedVisible);
+
+  const onBulkApplied = (result: BulkTicketResult) => {
+    for (const ticket of result.updated) patchLocal(ticket);
+    if (result.removed.length > 0) void refreshTickets();
+    (result.failed.length > 0 ? toastError : toastInfo)(bulkResultSummary(result));
+    bulk.replace(selectionAfter(result));
+  };
 
   const columnCounts = useMemo(
     () => new Map(BOARD_COLUMNS.map((c) => [c.status, (visibleColumns.get(c.status) ?? []).length])),
@@ -312,6 +335,18 @@ export function BoardPage({ projectId }: { projectId: string }) {
             <span className="dot" />
             Auto-dispatch on In progress
           </button>
+          {(tickets?.length ?? 0) > 0 && (
+            <button
+              id="board-select-mode"
+              type="button"
+              className={`chip-toggle${bulk.active ? ' active' : ''}`}
+              aria-pressed={bulk.active}
+              title="Pick several tickets to move, reprioritise, reassign or delete them at once"
+              onClick={() => bulk.setActive(!bulk.active)}
+            >
+              <ListChecks className="icon" aria-hidden /> Select
+            </button>
+          )}
           {project && (
             <button
               type="button"
@@ -394,6 +429,16 @@ export function BoardPage({ projectId }: { projectId: string }) {
         />
       )}
 
+      {bulk.active && (
+        <BoardBulkBar
+          projectId={projectId}
+          columns={BOARD_COLUMNS}
+          selection={bulk.selection}
+          onApplied={onBulkApplied}
+          onExit={() => bulk.setActive(false)}
+        />
+      )}
+
       {ticketsLoading && !tickets ? (
         <ViewLoadingState label="Loading project tickets…" />
       ) : (
@@ -444,6 +489,16 @@ export function BoardPage({ projectId }: { projectId: string }) {
                         auto
                       </span>
                     )}
+                    {bulk.active && list.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-ghost board-col-select"
+                        aria-label={`${bulk.columnSelected(list.map((t) => t.id)) ? 'Unselect' : 'Select'} every shown ticket in ${col.label}`}
+                        onClick={() => bulk.toggleColumn(list.map((t) => t.id))}
+                      >
+                        {bulk.columnSelected(list.map((t) => t.id)) ? 'None' : 'All'}
+                      </button>
+                    )}
                     <span className="board-count mono">
                       {filterActive && list.length !== totalInCol
                         ? `${list.length}/${totalInCol}`
@@ -458,6 +513,14 @@ export function BoardPage({ projectId }: { projectId: string }) {
                         run={latestRun.get(ticket.id)}
                         dragging={dragId === ticket.id}
                         dropBefore={drop?.beforeId === ticket.id && dragId !== ticket.id}
+                        selection={
+                          bulk.active
+                            ? {
+                                selected: bulk.isSelected(ticket.id),
+                                onToggle: (range) => bulk.toggle(ticket.id, range),
+                              }
+                            : undefined
+                        }
                         onOpen={() => setOpenId(ticket.id)}
                         onDragStart={(e) => {
                           e.dataTransfer.effectAllowed = 'move';

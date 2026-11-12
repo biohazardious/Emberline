@@ -170,7 +170,7 @@ TypeScript everywhere in a pnpm monorepo on Node.js LTS. Backend: Fastify, node-
 ## 4. Open questions
 
 - **Plugins.** Agent adapters, forge providers, MCP bundles, templates and notifiers are built in behind interfaces. An out-of-process plugin host (JSON-RPC over stdio or a Unix socket, with a permission manifest) is planned but not designed in detail.
-- **Preview environments.** One compose stack per worktree with port allocation, resource limits and cleanup.
+- **Preview environments.** Decided (0.7.x): one compose stack per worktree under the run's project name (`emberline-<run8>-preview`), host ports from `EMBERLINE_PREVIEW_PORTS_DOCKER` (moved on a collision), per-container cpu/memory caps (`EMBERLINE_PREVIEW_CPUS`, `EMBERLINE_PREVIEW_MEMORY_MB`) injected by the stdin override, compose files that fix a `container_name` or a volume or network name refused before `up`, and teardown with volumes on worktree prune or ticket Done. States (starting, healthy, failed with log tail, stopped) are `ComposePreviewEnvironment` in `packages/protocol`. Still open: a UI for the environments list.
 - **Multiple users.** How several users map onto "one installation = one user", for example one runner per user.
 - **Runner isolation.** All agents share one user in the runner. Per-project isolation would need separate users or containers.
 

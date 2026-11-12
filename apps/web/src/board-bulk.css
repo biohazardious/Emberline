@@ -1,0 +1,151 @@
+/* Board selection mode: selectable cards and the bulk action toolbar. */
+
+.card-selectable {
+  cursor: pointer;
+}
+
+.card-selected {
+  border-color: color-mix(in hsl, var(--ember-1) 60%, var(--border));
+  background: color-mix(in hsl, var(--ember-1) 7%, var(--bg-elevated));
+}
+
+.card-selectable:focus-visible {
+  outline: 2px solid var(--ember-1);
+  outline-offset: 1px;
+}
+
+.card-check {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--on-accent);
+}
+
+.card-selected .card-check {
+  border-color: var(--ember-1);
+  background: var(--ember-1);
+}
+
+.card-check .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.board-col-select {
+  margin-left: auto;
+}
+
+.board-col-select + .board-count {
+  margin-left: 0;
+}
+
+.bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in hsl, var(--ember-1) 40%, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.bulk-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.bulk-bar-count {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 7.5em;
+}
+
+.bulk-bar-count strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.bulk-bar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.bulk-bar-field .input {
+  width: auto;
+  min-width: 8.5em;
+  padding-block: 3px;
+  font-size: 0.78rem;
+}
+
+.bulk-bar-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--bad);
+}
+
+.bulk-bar-hint {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.bulk-bar-exit {
+  margin-left: auto;
+}
+
+.bulk-bar-error,
+.bulk-bar-skipped {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--warn);
+}
+
+.bulk-bar-skipped p {
+  margin: 0 0 4px;
+}
+
+.bulk-bar-skipped ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+}
+
+.bulk-bar-error {
+  color: var(--bad);
+}
+
+@media (max-width: 720px) {
+  .bulk-bar {
+    top: auto;
+    bottom: 0;
+  }
+
+  .bulk-bar-field {
+    flex: 1 1 calc(50% - 12px);
+  }
+
+  .bulk-bar-field .input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .bulk-bar-exit {
+    margin-left: 0;
+  }
+}

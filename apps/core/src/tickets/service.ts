@@ -9,6 +9,8 @@ import {
   type AgentId,
   type AgentModelId,
   type AgentPersona,
+  type BulkTicketBody,
+  type BulkTicketResult,
   type CreateRunBody,
   type CreateTicketBody,
   CreateTicketBody as CreateTicketBodySchema,
@@ -65,6 +67,7 @@ import {
   syncWorktreeToMainWorkspace,
   type TicketsFileHooks,
 } from '../factory/service.js';
+import { applyBulkTicketAction } from './bulk.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import {
@@ -384,6 +387,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
     this.upgradeCandidates = this.takeUpgradeCandidates();
+    // A finished ticket's worktree previews are not needed any more: their stacks go, ports freed.
+    this.on('moved', (ticket: Ticket) => {
+      if (ticket.status === 'done') void runs.teardownTicketPreviews(ticket.id);
+    });
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;
@@ -2171,6 +2178,11 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   exportBoard(projectId: string, statuses: readonly TicketStatus[], now = new Date()): TicketExport {
     const project = this.project(projectId);
     return buildTicketExport(project, this.list(projectId), statuses, now);
+  }
+
+  /** One action over several tickets of the board; see `applyBulkTicketAction`. */
+  bulk(projectId: string, body: BulkTicketBody): BulkTicketResult {
+    return applyBulkTicketAction(this.db, this, projectId, body);
   }
 
   get(id: string): Ticket {

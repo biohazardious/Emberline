@@ -34,6 +34,7 @@ import {
 import { runEvents, runs } from './db/schema.js';
 import { COMPOSE_OVERRIDE_ENV } from './docker/compose.js';
 import { composeProjectName, mainComposeProjectName, previewComposeProjectName } from './docker/engine.js';
+import { composeConfigJson } from './test-compose.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
 
@@ -172,7 +173,7 @@ class FakeEngine {
     }
     const project = args[2] ?? '';
     const verb = args.find((a) => ['config', 'up', 'ps', 'logs', 'down'].includes(a));
-    if (verb === 'config') return ok('web\n');
+    if (verb === 'config') return ok(composeConfigJson(args, ['web']));
     if (verb === 'up') {
       if (this.upGate) {
         const gate = this.upGate;

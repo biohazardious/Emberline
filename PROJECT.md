@@ -25,7 +25,7 @@ The design rationale (principles, topology, scheduler, review, data model, auth,
 - **Backend:** Fastify (REST + `@fastify/websocket`) in `apps/core`, plus `apps/ptyd`, a node-pty host behind a Unix-socket RPC, so agents outlive core restarts.
 - **Database:** SQLite through better-sqlite3 and Drizzle ORM (WAL mode, SQL migrations in `apps/core/drizzle`). It is one embedded file for a single-user install and needs no server.
 - **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`, error/filter UI primitives in `apps/web/src/error-filter.css`, and responsive workbench breakpoints in `apps/web/src/responsive.css`. No CSS framework.
-- **Testing:** Vitest for unit and integration tests across all packages. `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack.
+- **Testing:** Vitest for unit and integration tests across all packages (how to run them and what covers which workflow: [`docs/TESTING.md`](docs/TESTING.md)). `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack.
 - **Authentication:** A single admin account with an argon2id password set through a one-time setup token. HTTP-only session cookies, plus a per-login key sent as the CSRF header and the WebSocket subprotocol (DESIGN §3.8).
 - **Wire contracts:** zod schemas in `packages/protocol` validate every boundary: REST bodies, WebSocket events, hook payloads, ptyd RPC and `.emberline/worktree.yml`.
 - **Deploy target:** Docker Compose (`compose.yaml`). One multi-stage `Dockerfile` builds the `core` and `runner` images and a `check` stage that serves as the CI gate.
@@ -80,8 +80,17 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   (source `hook | transcript | screen | user | system`). Types: `packages/protocol/src/api/{projects,tickets,runs}.ts`
   and `packages/adapter-sdk/src/index.ts`. Tables: `apps/core/src/db/schema.ts`.
 - **Scheduling:** `QuotaWindow` and scheduled jobs live in SQLite, so restarts keep every timer (`api/scheduler.ts`, `api/usage.ts`).
+  `quota_windows` is the pause table: lane (provider), `resets_at`, `resume_at`, reason and the run that hit the limit; open pauses
+  are served by `quota_windows_open_idx` (migration 0029). The scheduler keeps no queue, slot or pause state in memory: after every
+  pass it re-arms one timer for the next stored resume or retry time (`scheduler/next-wake.ts`), and on each ptyd connect
+  `Scheduler.recover()` first ends runs whose sessions ptyd no longer reports (freeing their slots), then resumes due pauses.
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
+- **Compose preview environments:** one stack per worktree (`apps/core/src/docker/compose-preview.ts`): its own project name,
+  a host port from `EMBERLINE_PREVIEW_PORTS_DOCKER`, cpu/memory caps from `EMBERLINE_PREVIEW_CPUS` / `EMBERLINE_PREVIEW_MEMORY_MB`
+  (default 1 cpu, 1024 MB per container), and a refusal of fixed `container_name`/volume/network names (`docker/compose-isolation.ts`).
+  Torn down on prune and on ticket Done. `GET /api/projects/:id/container-preview/environments` returns
+  `ComposePreviewEnvironmentsResponse` (`api/previews.ts`: `starting | healthy | failed | stopped`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).
 - **Agent-written factory files:** `.emberline/new-tickets.json` / `tickets.json`, `roadmap-generated.json` and
   `brainstorm-suggestions.json` are contracts in `packages/protocol/src/api/agent-files.ts` (`NewTicketsFile`,
@@ -92,6 +101,14 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
 - **Board export:** `GET /api/projects/:projectId/tickets/export?format=csv|json&status=<columns>` (`api/ticket-export.ts`).
   The strict query schema rejects unknown formats, statuses and keys. JSON carries whole-board status counts and the done ratio;
   CSV is RFC 4180 with a UTF-8 BOM and neutralises formula-leading cells (`apps/core/src/tickets/export.ts`). The board's Export menu downloads it.
+
+- **Bulk board actions:** `POST /api/projects/:projectId/tickets/bulk` takes a `BulkTicketBody` (`packages/protocol/src/api/ticket-bulk.ts`,
+  a discriminated union over `move | priority | persona | delete`, 1–`BULK_TICKET_LIMIT` (100) ids or keys, strict keys) and
+  returns a `BulkTicketResult` (`updated`, `removed`, `unchanged`, `failed`). `apps/core/src/tickets/bulk.ts` applies each ticket
+  through `TicketService.update`/`remove` in board order, so dependents and auto-dispatch behave as for a single edit. It refuses,
+  per ticket, a move or delete of a ticket with a live run (`run_active`) and a bulk close of a ticket with a run branch
+  (`merge_required`: closing it from the drawer merges it). The board's **Select** mode (`hooks/useBoardSelection.ts`,
+  `boardSelection.ts`, `components/BoardBulkBar.tsx`, `board-bulk.css`) keeps refused tickets selected and lists why.
 
 Every value that crosses a process boundary is parsed with its zod schema on arrival. New contracts go into
 `packages/protocol` first, then core and web consume them.
@@ -156,7 +173,10 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       Event retention (`runs/event-retention.ts`, `EMBERLINE_EVENT_RETENTION_DAYS`, default 90, `0` off) compacts old `done`
       runs to their state changes, summary, handoff note and usage totals (`run_event_compactions`); `event-indexes.test.ts`
       holds the inbox and board under 50 ms on a seeded 100k-event database and pins the hot query plans.
-- [ ] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
+- [x] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
+      The board (create, drag between columns, dependencies, start/prompt runs, review, accept/merge, export) and its bulk actions
+      (`ticket-bulk-route.test.ts`, `boardBulkBar.test.ts`, `boardSelection.test.ts`) are covered end to end through the REST API
+      and the React views.
 - [x] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
       anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and
