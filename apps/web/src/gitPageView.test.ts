@@ -49,7 +49,8 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     backups: [],
     ...over,
   }) as GitPageStatus;
-const branch = (name: string, kind: GitBranch['kind']) => ({ name, kind }) as GitBranch;
+const branch = (name: string, kind: GitBranch['kind']) =>
+  ({ name, kind, liveRuns: [] }) as unknown as GitBranch;
 
 const calls: string[] = [];
 function serve(s: GitPageStatus, extra: Record<string, (body: unknown) => unknown> = {}) {

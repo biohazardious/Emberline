@@ -130,3 +130,37 @@
   min-height: 320px;
   min-width: 0;
 }
+
+.git-new-branch,
+.git-branch-actions,
+.git-compare-head,
+.git-backups li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.git-new-branch {
+  margin-bottom: 12px;
+}
+.git-branch-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.git-branch-table th,
+.git-branch-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, #8884);
+}
+.git-backups {
+  list-style: none;
+  padding: 0;
+}
+.git-compare {
+  margin-top: 16px;
+}
+.git-compare-head {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}

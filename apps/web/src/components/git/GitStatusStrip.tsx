@@ -9,18 +9,34 @@ import { timeAgo } from '../../time';
 
 type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
 
-interface Problem {
+export interface Problem {
   text: string;
   runs: { id: string; title: string }[];
 }
 
 /** A failed request as the strip shows it; `runs_live` also lists the runs that block the change. */
-function problemOf(error: unknown): Problem {
+export function problemOf(error: unknown): Problem {
   const runs =
     error instanceof ApiRequestError && error.code === 'runs_live' && Array.isArray(error.data.runs)
       ? (error.data.runs as { id: string; title: string }[])
       : [];
   return { text: errorMessage(error), runs };
+}
+
+/** The error banner of a failed Git action, with the runs that block it when there are some. */
+export function GitProblemBanner({ problem }: { problem: Problem }) {
+  return (
+    <div className="banner banner-error" role="alert">
+      <span>{problem.text}</span>
+      {problem.runs.length > 0 && (
+        <ul className="git-runs">
+          {problem.runs.map((r) => (
+            <li key={r.id}>{r.title}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** The strip at the top of the Git page: where the factory works, how main and origin stand, and the actions. */
@@ -227,18 +243,7 @@ export function GitStatusStrip({
         </div>
       )}
 
-      {problem && (
-        <div className="banner banner-error" role="alert">
-          <span>{problem.text}</span>
-          {problem.runs.length > 0 && (
-            <ul className="git-runs">
-              {problem.runs.map((r) => (
-                <li key={r.id}>{r.title}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      {problem && <GitProblemBanner problem={problem} />}
     </section>
   );
 }

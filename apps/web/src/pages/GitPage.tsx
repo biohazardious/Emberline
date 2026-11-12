@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { SectionState } from '../components/SectionState';
+import { GitBranchesTab } from '../components/git/GitBranchesTab';
 import { GitCommitsTab } from '../components/git/GitCommitsTab';
 import { GitStatusStrip } from '../components/git/GitStatusStrip';
 import { GIT_TABS, type GitTab, gitRefetchMs, tabFromHash } from '../gitPage';
@@ -79,8 +80,10 @@ export function GitPage({ projectId }: { projectId: string }) {
               >
                 {tab === 'commits' ? (
                   <GitCommitsTab projectId={projectId} status={data} />
+                ) : tab === 'branches' ? (
+                  <GitBranchesTab projectId={projectId} status={data} />
                 ) : (
-                  /* Tasks 12 and 13 fill these tabs. */
+                  /* Task 13 fills this tab. */
                   <p className="muted">{TAB_LABEL[tab]} is coming.</p>
                 )}
               </div>
