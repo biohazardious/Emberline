@@ -607,14 +607,19 @@ export class ReleaseJobs {
   }
 
   /** One page when the job ends: done, or failed at its first failed step. Core stopping pages nothing. */
-  private page({ job, project }: JobContext): void {
+  private page({ job, project, main }: JobContext): void {
     if (!this.deps.notify || (job.state !== 'done' && job.state !== 'failed')) return;
     const label = job.version ?? job.working;
     const at = job.steps.find((s) => s.status === 'failed')?.name ?? 'the start';
     try {
       this.deps.notify(project.id, `${project.id}:release:${job.id}:${job.state}`, {
         event: 'release_finished',
-        title: job.state === 'done' ? `Released ${label}` : `Release ${label} stopped at ${at}`,
+        title:
+          job.state === 'done'
+            ? job.version
+              ? `Released ${job.version}`
+              : `Promoted ${job.working} into ${main}`
+            : `Release ${label} stopped at ${at}`,
         body:
           job.state === 'done'
             ? (job.releaseUrl ?? `${label} is released.`)

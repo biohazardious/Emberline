@@ -710,7 +710,8 @@ describe('NotificationService.notifyProject', () => {
     const { db } = h;
     const fresh = new NotificationService(db);
     const { setSetting } = await import('./db/index.js');
-    setSetting(db, 'notifications.config', {
+    // Settings stored before the switch existed have no such key.
+    const legacy = {
       enabled: true,
       provider: 'ntfy',
       url: 'http://x',
@@ -719,8 +720,10 @@ describe('NotificationService.notifyProject', () => {
       onQuotaResumed: true,
       onWaitingInput: true,
       onRunFinished: false,
-      onGitEvents: true,
-    });
+    };
+    setSetting(db, 'notifications.config', legacy);
     expect(fresh.getSettings().onGitEvents).toBe(true);
+    setSetting(db, 'notifications.config', { ...legacy, onGitEvents: false });
+    expect(fresh.getSettings().onGitEvents).toBe(false);
   });
 });

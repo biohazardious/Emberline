@@ -381,9 +381,11 @@ describe('release', () => {
   it('Promote only merges and pushes main, with no tag, CHANGELOG or release', async () => {
     approveChecks();
     const head = await developWithTickets();
-    const jobs = jobsWith();
+    const titles: string[] = [];
+    const jobs = jobsWith({ notify: (_p, _o, m) => titles.push(m.title) });
     await jobs.start(projectId, { mode: 'promote_only', head });
     await jobs.idle();
+    expect(titles).toEqual(['Promoted develop into main']);
     const job = storedJob();
     expect(job.state).toBe('done');
     expect(stepsOf(job)).toEqual([
