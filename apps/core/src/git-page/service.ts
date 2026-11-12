@@ -5,13 +5,16 @@ import {
   type GitCommitsPage,
   type GitCompare,
   type GitFileDiff,
+  type GitSync,
   SetWorkingBranchBody,
+  UpdateGitSettingsBody,
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { readRepositorySettings, workingBranchOf } from '../db/project-settings.js';
+import { readRepositorySettings, workingBranchOf, writeRepositorySettings } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
-import { badRequest, notFound } from '../errors.js';
+import { badRequest, conflict, notFound } from '../errors.js';
+import type { buildWorkspaceDemo } from '../factory/demo.js';
 import type { ForgeService } from '../forge/service.js';
 import type { RepositoryService } from '../repository/service.js';
 import type { RunService } from '../runs/service.js';
@@ -24,12 +27,17 @@ import {
   setWorkingBranch,
 } from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
+import { fetchOrigin, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
 
 /** What the Git page needs from the rest of core; later actions add to this. */
 export interface GitPageDeps {
   runs: RunService;
   forge: ForgeService;
   tickets: TicketService;
+  /** Where core keeps worktrees; a pull's heal gets its own there. */
+  workspacesDir: string;
+  /** Runs the checks on a healed pull merge (tests inject it); default: buildWorkspaceDemo. */
+  buildWorkspaceDemo?: typeof buildWorkspaceDemo;
 }
 
 /**
@@ -97,5 +105,56 @@ export class GitPageService {
   async setWorkingBranch(projectId: string, raw: unknown): Promise<void> {
     const body = SetWorkingBranchBody.parse(raw ?? {});
     await setWorkingBranch(this.db, this.project(projectId), body.branch);
+  }
+
+  private syncDeps(): SyncDeps {
+    return {
+      db: this.db,
+      repository: this.repository,
+      dockerEnvForMain: (projectId) => this.deps.runs.dockerEnvForMain(projectId),
+      workspacesDir: this.deps.workspacesDir,
+      ...(this.deps.buildWorkspaceDemo ? { buildWorkspaceDemo: this.deps.buildWorkspaceDemo } : {}),
+    };
+  }
+
+  /** A person's Pull (`auto: false`), or auto-pull's. */
+  pull(projectId: string, opts: { auto: boolean }): Promise<GitSync> {
+    this.project(projectId);
+    return pull(this.syncDeps(), projectId, opts);
+  }
+
+  /** Reads origin only. */
+  fetch(projectId: string): Promise<GitSync> {
+    this.project(projectId);
+    return fetchOrigin(this.syncDeps(), projectId);
+  }
+
+  matchOrigin(projectId: string, raw: unknown): Promise<GitSync> {
+    this.project(projectId);
+    return matchOrigin(this.syncDeps(), projectId, raw);
+  }
+
+  updateSettings(projectId: string, raw: unknown): { autoPull: boolean } {
+    this.project(projectId);
+    const body = UpdateGitSettingsBody.safeParse(raw ?? {});
+    if (!body.success) throw badRequest(body.error.issues.map((i) => i.message).join('; '));
+    const current = readRepositorySettings(this.db, projectId);
+    const autoPull = body.data.autoPull ?? current.autoPull;
+    writeRepositorySettings(this.db, projectId, { autoPull });
+    return { autoPull };
+  }
+
+  /**
+   * Resolve with a ticket: a ticket whose run merges what conflicted into its branch, through the
+   * existing run pipeline and conflict ladder.
+   */
+  pullTicket(projectId: string): { ticketId: string } {
+    this.project(projectId);
+    const { sync, syncStop } = readRepositorySettings(this.db, projectId);
+    if (sync?.state !== 'conflict' || !sync.branch || !syncStop)
+      throw conflict('There is no pull conflict to resolve.', 'no_conflict');
+    const { title, body } = pullTicketText(syncStop.source, sync.branch, sync.files);
+    const ticket = this.deps.tickets.create(projectId, { title, body, status: 'ready' });
+    return { ticketId: ticket.id };
   }
 }

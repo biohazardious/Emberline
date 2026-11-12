@@ -213,27 +213,54 @@ export async function worktreeCommandsGate(pass: GatePass): Promise<GateOutcome>
   );
 }
 
+/** A tree the build gate's checks run on: a run's worktree, or one core made itself. */
+export interface BuildCheckTarget {
+  db: Db;
+  projectId: string;
+  /** Whose build it is (a run id, or the name of core's own job). */
+  targetId: string;
+  workspacePath: string;
+  /** The approved worktree.yml's setup already ran in this tree. */
+  setupDone: boolean;
+  dockerEnv(): Promise<Record<string, string>>;
+  /** Runs the checks (tests inject it); default: buildWorkspaceDemo. */
+  build?: typeof buildWorkspaceDemo;
+}
+
 /**
- * The build gate's checks on the run's worktree as it is now: their result, the error that kept them
- * from running, or null when there is nothing to verify.
+ * The build gate's checks on a tree as it is now: their result, the error that kept them from
+ * running, or null when there is nothing to verify.
  */
-async function runBuildChecks(
-  pass: Pick<GatePass, 'db' | 'run' | 'dockerEnv'>,
+async function runBuildChecksIn(
+  target: BuildCheckTarget,
 ): Promise<{ ok: boolean; output: string } | Error | null> {
-  const { db, run } = pass;
-  const checks = approvedChecks(db, run.projectId);
-  const verifiable = Boolean(run.worktreePath) && (await hasVerifiableBuildTarget(run.worktreePath, checks));
+  const { db, projectId, workspacePath } = target;
+  const checks = approvedChecks(db, projectId);
+  const verifiable = Boolean(workspacePath) && (await hasVerifiableBuildTarget(workspacePath, checks));
   if (!verifiable) return null;
-  return buildWorkspaceDemo({
+  return (target.build ?? buildWorkspaceDemo)({
+    db,
+    projectId,
+    targetId: target.targetId,
+    workspacePath,
+    checks,
+    setup: target.setupDone ? [] : approvedSetup(db, projectId),
+    env: await target.dockerEnv(),
+  }).catch((error: unknown) => error as Error);
+}
+
+/** The build gate's checks on the run's worktree as it is now (see runBuildChecksIn). */
+function runBuildChecks(pass: Pick<GatePass, 'db' | 'run' | 'dockerEnv'>) {
+  const { db, run } = pass;
+  return runBuildChecksIn({
     db,
     projectId: run.projectId,
     targetId: run.id,
     workspacePath: run.worktreePath,
-    checks,
     // A worktree whose own setup finished is not set up twice; a skipped or failed one is.
-    setup: setupFinishedIn(runEventTypes(db, run.id)) ? [] : approvedSetup(db, run.projectId),
-    env: await pass.dockerEnv(),
-  }).catch((error: unknown) => error as Error);
+    setupDone: setupFinishedIn(runEventTypes(db, run.id)),
+    dockerEnv: () => pass.dockerEnv(),
+  });
 }
 
 /**
@@ -244,8 +271,21 @@ async function runBuildChecks(
 export async function verifyBuild(
   pass: Pick<GatePass, 'db' | 'run' | 'settings' | 'dockerEnv'>,
 ): Promise<HealGate> {
-  if (!pass.settings.selfHealingBuildGate) return { ok: 'unverified', reason: 'the build gate is off' };
-  const res = await runBuildChecks(pass);
+  if (!pass.settings.selfHealingBuildGate) return GATE_OFF;
+  return verdict(await runBuildChecks(pass));
+}
+
+/** {@link verifyBuild} for a tree that is no run's worktree (a pull's heal, in core's own worktree). */
+export async function verifyBuildIn(
+  target: BuildCheckTarget & { settings: FactorySettings },
+): Promise<HealGate> {
+  if (!target.settings.selfHealingBuildGate) return GATE_OFF;
+  return verdict(await runBuildChecksIn(target));
+}
+
+const GATE_OFF: HealGate = { ok: 'unverified', reason: 'the build gate is off' };
+
+function verdict(res: { ok: boolean; output: string } | Error | null): HealGate {
   if (res === null) return { ok: 'unverified', reason: 'the project has no build, lint or test checks' };
   if (!(res instanceof Error) && res.ok) return { ok: true };
   return { ok: false, output: res instanceof Error ? res.message : res.output };

@@ -39,6 +39,7 @@ import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { GitPageService } from './git-page/service.js';
+import { GitSync } from './git-page/sync.js';
 import { registerGitRoutes } from './routes/git.js';
 import { registerRepositoryRoutes } from './routes/repository.js';
 import { registerWorktreeConfigRoutes } from './routes/worktree-config.js';
@@ -159,7 +160,12 @@ export async function buildServer(
       log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
     });
   const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
-  const gitPage = new GitPageService(deps.db, repository, { runs: deps.runs, forge, tickets: deps.tickets });
+  const gitPage = new GitPageService(deps.db, repository, {
+    runs: deps.runs,
+    forge,
+    tickets: deps.tickets,
+    workspacesDir: deps.config.workspacesDir,
+  });
   const mainPush =
     deps.mainPush ??
     new KeepMainPushed(deps.db, deps.runs, repository, { log: (message) => app.log.warn(message) });
@@ -209,9 +215,15 @@ export async function buildServer(
   // and the runner is connected, and again on each reconnect.
   let listening = false;
   const ops = opsBridgeOf(deps);
+  const runnerReady = () => listening && deps.ptyd.status === 'connected' && ops.status === 'connected';
   const resumeMainPushes = () => {
-    if (listening && deps.ptyd.status === 'connected' && ops.status === 'connected') mainPush.resumePending();
+    if (runnerReady()) mainPush.resumePending();
   };
+  // Auto-pull reads origin every 2 minutes once core listens; a tick while the runner is away is skipped.
+  const gitSync = new GitSync(deps.db, gitPage, {
+    log: (message) => app.log.warn(message),
+    ready: runnerReady,
+  });
   const onPtydStatus = (status: string) => {
     if (status === 'connected') resumeMainPushes();
   };
@@ -220,6 +232,7 @@ export async function buildServer(
   app.addHook('onListen', async () => {
     listening = true;
     resumeMainPushes();
+    gitSync.start();
   });
   app.addHook('onClose', async () => {
     deps.ptyd.off('status', onPtydStatus);
@@ -231,6 +244,7 @@ export async function buildServer(
     await issueSync.stop();
     await postMerge.stop();
     await mainPush.stop();
+    await gitSync.stop();
   });
 
   installErrorHandler(app);

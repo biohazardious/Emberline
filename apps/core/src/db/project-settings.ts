@@ -164,9 +164,22 @@ export interface RepositorySettings {
   sync: GitSync | null;
   /** Commits that arrived by a pull, so the history can mark them as from origin. */
   pulledOids: string[];
+  /**
+   * What the last pull that stopped for the person (a conflict, a rewritten origin) was about:
+   * origin's tips then, and what it merged. Auto-pull leaves the project alone until origin moves
+   * past these or the person acts; null when no such stop stands.
+   */
+  syncStop: SyncStop | null;
   releaseDraft: ReleaseDraft | null;
   releaseJob: ReleaseJob | null;
 }
+const SyncStopSchema = z.object({
+  working: z.string().nullable(),
+  main: z.string().nullable(),
+  /** What was being merged: `origin/<branch>`, or the default branch merged into the working branch. */
+  source: z.string(),
+});
+export type SyncStop = z.infer<typeof SyncStopSchema>;
 const RemoteCheckSchema = z.object({
   url: z.string(),
   originKey: z.string().optional(),
@@ -187,6 +200,7 @@ const RepositorySettingsSchema = z.object({
   autoPull: z.boolean().catch(true).default(true),
   sync: GitSync.nullable().catch(null).default(null),
   pulledOids: z.array(z.string()).max(500).catch([]).default([]),
+  syncStop: SyncStopSchema.nullable().catch(null).default(null),
   releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
   releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });

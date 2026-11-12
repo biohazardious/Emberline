@@ -123,6 +123,11 @@ export interface HealParams {
   mainWorkspacePath: string;
   /** The branch the main workspace has checked out (the commit message names it). */
   mainBranch: string;
+  /**
+   * The branch the heal's commit is for, when the worktree has none checked out (a detached
+   * worktree core made for the heal alone); default: the worktree's own branch.
+   */
+  branch?: string;
   /** The ticket key or run label, for the messages. */
   label: string;
   /** Main's commit to catch up with (the failed merge read it under its lock); default: `mainBranch`'s tip. */
@@ -317,7 +322,8 @@ export async function healConflicts(params: HealParams): Promise<HealResult> {
       );
     }
     previous = await head(worktreePath);
-    branch = (await execGitFile(['symbolic-ref', '--short', 'HEAD'], inWorktree)).stdout.trim();
+    branch =
+      params.branch ?? (await execGitFile(['symbolic-ref', '--short', 'HEAD'], inWorktree)).stdout.trim();
     const tipRev = params.mainTip ?? `refs/heads/${mainBranch}`;
     mainTip = (
       await execGitFile(['rev-parse', '--verify', '--quiet', `${tipRev}^{commit}`], inWorktree)

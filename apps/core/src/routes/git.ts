@@ -34,4 +34,9 @@ export function registerGitRoutes(app: FastifyInstance, git: GitPageService): vo
     await git.setWorkingBranch(r.params.id, r.body);
     return { ok: true };
   });
+  app.patch<P>('/api/projects/:id/git', async (r) => git.updateSettings(r.params.id, r.body));
+  app.post<P>('/api/projects/:id/git/fetch', async (r) => git.fetch(r.params.id));
+  app.post<P>('/api/projects/:id/git/pull', async (r) => git.pull(r.params.id, { auto: false }));
+  app.post<P>('/api/projects/:id/git/pull/ticket', async (r) => git.pullTicket(r.params.id));
+  app.post<P>('/api/projects/:id/git/match-origin', async (r) => git.matchOrigin(r.params.id, r.body));
 }

@@ -136,14 +136,14 @@ async function validBranchName(mainPath: string, name: unknown): Promise<string>
 }
 
 /** The commit `ref` (a full ref name) names, or null when there is no such ref. */
-async function refTip(mainPath: string, ref: string): Promise<string | null> {
+export async function refTip(mainPath: string, ref: string): Promise<string | null> {
   return realGit(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], mainPath).then(
     (r) => r.stdout.trim() || null,
     absentWhen(null, 1),
   );
 }
 
-const localTip = (mainPath: string, name: string) => refTip(mainPath, `refs/heads/${name}`);
+export const localTip = (mainPath: string, name: string) => refTip(mainPath, `refs/heads/${name}`);
 
 /** `[ahead, behind]` of `a` against `b`. */
 async function counts(mainPath: string, a: string, b: string): Promise<[number, number]> {
@@ -291,7 +291,7 @@ export async function createBranch(
 }
 
 /** git's own words from a failed command, all of them (a file list included), on one line. */
-function gitMessage(error: unknown): string {
+export function gitMessage(error: unknown): string {
   const stderr = (error as { stderr?: unknown }).stderr;
   const text = typeof stderr === 'string' && stderr.trim() ? stderr : String(error);
   return text
@@ -303,7 +303,7 @@ function gitMessage(error: unknown): string {
 }
 
 /** The branches checked out in the main workspace or in any worktree (runs' included). */
-async function checkedOutBranches(mainPath: string): Promise<Set<string>> {
+export async function checkedOutBranches(mainPath: string): Promise<Set<string>> {
   return new Set((await worktreeList(mainPath)).flatMap((w) => (w.branch === null ? [] : [w.branch])));
 }
 
@@ -418,7 +418,9 @@ export async function deleteBranch(
   return { remote: onOrigin, message };
 }
 
-const WORKSPACE_DIRTY = /would be overwritten|commit your changes or stash|untracked working tree files/i;
+/** git's refusal to change files a person edited (or untracked files in the way). */
+export const WORKSPACE_DIRTY =
+  /would be overwritten|commit your changes or stash|untracked working tree files/i;
 
 /**
  * Makes `rawBranch` the working branch: refused while any run is live or waiting to merge (a run

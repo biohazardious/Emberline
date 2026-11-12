@@ -28,6 +28,7 @@ import { remoteCompareKey } from '../forge/hosts.js';
 import { secretDigest } from '../secrets/box.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway, type KnownSecrets } from '../git-gateway/gateway.js';
+import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { gatewayRemoteFor } from '../ssh-keys/remote.js';
 import {
@@ -52,6 +53,7 @@ import {
   setUpstream,
   shortGitError,
   sshSetupError,
+  unlessRunnerUnavailable,
   validateRepositoryUrl,
   workingDivergedMessage,
   workingMovedMessage,
@@ -118,6 +120,19 @@ export interface Snapshot {
   access: RemoteAccess;
   /** origin's URL as read under the lock (it may hold a token typed into it). */
   origin: string;
+}
+
+/** What a read of origin found: the commits its default and working branches name, as fetched. */
+export interface OriginRead {
+  /** null: origin has no such branch, or the read failed. */
+  main: string | null;
+  working: string | null;
+  /** The working branch the read was of (the default branch when no other is set). */
+  workingBranch: string;
+  /** Why the read failed (it is recorded as the last read of origin), else null. */
+  error: string | null;
+  /** origin changed while it was read: nothing was recorded. */
+  stale: boolean;
 }
 
 export class RepositoryService {
@@ -239,7 +254,7 @@ export class RepositoryService {
 
   async refresh(projectId: string): Promise<RepositoryStatus> {
     await this.remoteOps.run(projectId, async () =>
-      this.readRemote(projectId, await this.snapshot(projectId)),
+      this.readOrigin(projectId, await this.snapshot(projectId)),
     );
     return this.status(projectId);
   }
@@ -263,7 +278,7 @@ export class RepositoryService {
   }
 
   /** Under the lock: origin and projects.repoUrl still name what the network call used. */
-  private async originStill(projectId: string, ws: Snapshot): Promise<boolean> {
+  async originStill(projectId: string, ws: Snapshot): Promise<boolean> {
     const { fetch, push } = await originUrls(ws.path);
     const row = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
     return (
@@ -481,7 +496,7 @@ export class RepositoryService {
       const result = await pushBranch(plan.path, plan.access, branch, plan.oid);
       if (result === 'rejected') {
         // Only the default branch's read shows in status (main against origin's main).
-        if (branch === defaultBranch) await this.readRemote(projectId, plan);
+        if (branch === defaultBranch) await this.readOrigin(projectId, plan);
         return { outcome: result, branch, defaultBranch, onWorking };
       }
       await withMainWorkspaceLock(plan.path, async () => {
@@ -543,13 +558,17 @@ export class RepositoryService {
   }
 
   /**
-   * ls-remote, then the branch's objects (no ref written), outside the main-workspace lock; then,
-   * under it, refs/remotes/origin/<branch> set to the commit ls-remote reported and the read (or why
-   * it failed) kept; a failed read is recorded, not thrown. Nothing is recorded when origin changed
-   * meanwhile.
+   * ls-remote of origin's default branch and, when the working branch is another one, of that
+   * branch too, then their objects (no ref written), outside the main-workspace lock; then, under
+   * it, each refs/remotes/origin/<branch> set to the commit ls-remote reported (the working branch's
+   * removed when origin has none) and the read of the default branch (or why it failed) kept. A
+   * failed read is recorded and returned, not thrown. Nothing is recorded when origin changed
+   * meanwhile (`stale`).
    */
-  private async readRemote(projectId: string, ws: Snapshot): Promise<void> {
+  async readOrigin(projectId: string, ws: Snapshot): Promise<OriginRead> {
     const branch = ws.defaultBranch;
+    const workingBranch = workingBranchOf(readRepositorySettings(this.db, projectId), branch);
+    const separate = workingBranch !== branch;
     const at = new Date().toISOString();
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
     const key = originKey(ws.origin);
@@ -557,32 +576,45 @@ export class RepositoryService {
     const known = accessSecrets(ws.access, [ws.origin]);
     let check: RemoteCheck;
     let remoteOid: string | null = null;
+    let workingOid: string | null = null;
     // A host key to trust or one that changed: recorded as the read's failure, and also the answer.
     let setup: HttpError | null = null;
     try {
       remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
       if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
+      workingOid = remoteOid;
+      if (separate) {
+        workingOid = await remoteBranchHead(ws.path, ws.access, workingBranch);
+        if (workingOid) await fetchBranchObjects(ws.path, ws.access, workingBranch, workingOid);
+      }
       check = { url: checkedUrl, originKey: key, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
+      workingOid = null;
       setup = sshSetupError(error);
       const reason = error instanceof HttpError ? error.message : describeGitError(error, known);
       check = { url: checkedUrl, originKey: key, branch, at, published: false, error: reason };
     }
+    let stale = false;
     await withMainWorkspaceLock(ws.path, async () => {
-      if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
-      if (remoteOid) {
-        try {
-          await setRemoteTracking(ws.path, branch, remoteOid);
-        } catch (error) {
-          if (isRunnerUnavailable(error)) throw error;
-          check = {
-            ...check,
-            published: false,
-            error: describeGitError(error, known),
-          };
+      if (!(await this.originStill(projectId, ws))) {
+        stale = true; // origin changed meanwhile: its own read counts
+        return;
+      }
+      try {
+        if (remoteOid) await setRemoteTracking(ws.path, branch, remoteOid);
+        // What Emberline last read of origin's working branch: its commit, or no such branch.
+        if (separate && !check.error) {
+          if (workingOid) await setRemoteTracking(ws.path, workingBranch, workingOid);
+          else
+            await execGitFile(['update-ref', '-d', `refs/remotes/origin/${workingBranch}`], {
+              cwd: ws.path,
+            }).catch(unlessRunnerUnavailable(undefined));
         }
+      } catch (error) {
+        if (isRunnerUnavailable(error)) throw error;
+        check = { ...check, published: false, error: describeGitError(error, known) };
       }
       try {
         writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
@@ -591,6 +623,14 @@ export class RepositoryService {
       }
     });
     if (setup) throw setup;
+    const failed = check.error !== null || stale;
+    return {
+      main: failed ? null : remoteOid,
+      working: failed ? null : workingOid,
+      workingBranch,
+      error: check.error,
+      stale,
+    };
   }
 
   /** Names origin without user info, query or fragment: a token set by hand in it is never echoed. */

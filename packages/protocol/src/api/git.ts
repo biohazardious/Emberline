@@ -205,7 +205,7 @@ export type SetWorkingBranchBody = z.infer<typeof SetWorkingBranchBody>;
 export const CreateBranchBody = z.object({ name: z.string(), from: z.enum(['main', 'working']) });
 export type CreateBranchBody = z.infer<typeof CreateBranchBody>;
 
-export const MatchOriginBody = z.object({ branch: z.string() });
+export const MatchOriginBody = z.object({ branch: z.string().min(1) });
 export type MatchOriginBody = z.infer<typeof MatchOriginBody>;
 
 /** A release version as a person types it: an optional "v", three numbers, an optional pre-release. */

@@ -257,7 +257,7 @@ async function buildRunOutputCommit(
  * change to a tracked one is undone); the files on disk are left alone. For the main workspace,
  * where a tracked scratch file is removed by the run's merge rather than by a snapshot commit.
  */
-async function resetScratchFilesToHead(cwd: string): Promise<void> {
+export async function resetScratchFilesToHead(cwd: string): Promise<void> {
   await execGitFile(['reset', '-q', 'HEAD', '--', ...SCRATCH_PATHSPECS], { cwd });
 }
 

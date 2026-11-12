@@ -1,0 +1,790 @@
+/**
+ * Picking up pushes from elsewhere: Emberline reads origin's working branch and origin's main,
+ * fast-forwards or merges them in, and stops with a clear state when it cannot do so cleanly.
+ *
+ * Nothing a person or the factory committed is lost and nothing in the main workspace is
+ * overwritten: a fast-forward goes through only when git agrees, a merge needs a clean tree and is
+ * checked first with `merge-tree` (a conflicting one never touches the main workspace), the
+ * additive heal and its checks run in core's own worktree, and Match origin keeps the old tip under
+ * `refs/emberline/backup/`. Network calls run outside the main-workspace lock, in RepositoryService's
+ * remote-ops order; every change to the main workspace or its refs runs under the lock.
+ */
+import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  type BranchRemoteState,
+  type CommitIdentity,
+  type GitSync as SyncRecord,
+  type GitSyncState,
+  MatchOriginBody,
+} from '@emberline/protocol';
+import { eq, isNotNull } from 'drizzle-orm';
+import { CommandFailedError, isRunnerUnavailable } from '../command-exec.js';
+import type { Db } from '../db/index.js';
+import { readRepositorySettings, workingBranchOf, writeRepositorySettings } from '../db/project-settings.js';
+import { projects } from '../db/schema.js';
+import { badRequest, conflict, HttpError, notFound } from '../errors.js';
+import { commitIdentityFor, gitIdentityArgs } from '../factory/commit-identity.js';
+import { healConflicts } from '../factory/conflict-heal.js';
+import type { buildWorkspaceDemo } from '../factory/demo.js';
+import { resetScratchFilesToHead, withMainWorkspaceLock } from '../factory/merge.js';
+import { effectiveFactorySettings } from '../factory/settings.js';
+import { execGitFile } from '../git-exec.js';
+import {
+  isAncestorCommit,
+  mainBranchState,
+  originUrls,
+  realGit,
+  RUNNER_WAITING_MESSAGE,
+  unlessRunnerUnavailable,
+} from '../repository/git.js';
+import type { RepositoryService, Snapshot } from '../repository/service.js';
+import { pruneWorktree } from '../runs/git.js';
+import { verifyBuildIn } from '../runs/gates.js';
+import {
+  checkedOutBranches,
+  classify,
+  gitMessage,
+  liveRunsOf,
+  localTip,
+  refTip,
+  WORKSPACE_DIRTY,
+} from './branches.js';
+import { absentWhen, isPlainRefName } from './history.js';
+
+/** How often origin is read (and, with auto-pull on, pulled). */
+export const AUTO_PULL_INTERVAL_MS = 120_000;
+/** The commits kept as "from origin" for the history, newest first. */
+const PULLED_KEPT = 500;
+/** A pull heals at most twice (origin's working branch, then main into it), then ends. */
+const MAX_ROUNDS = 3;
+const BACKUP_PREFIX = 'refs/emberline/backup/';
+const ORIGIN_CHANGED =
+  "This project's origin changed while Emberline read it, so nothing was pulled. Pull again.";
+
+/** What a pull needs from the rest of core. */
+export interface SyncDeps {
+  db: Db;
+  repository: Pick<RepositoryService, 'remoteAction' | 'readOrigin' | 'originStill'>;
+  /** The main workspace's Docker variables, for the checks on a healed merge. */
+  dockerEnvForMain(projectId: string): Promise<Record<string, string>>;
+  /** Where core keeps worktrees (`<workspacesDir>/.worktrees/<slug>/…`); the heal's own goes there. */
+  workspacesDir: string;
+  /** Runs the checks on a healed merge (tests inject it); default: buildWorkspaceDemo. */
+  buildWorkspaceDemo?: typeof buildWorkspaceDemo;
+}
+
+/** What one pull came to, before it is stored as the project's `sync`. */
+interface Outcome {
+  state: GitSyncState;
+  branch: string | null;
+  files?: string[];
+  message: string | null;
+  /** A stop that waits for the person (a conflict, a rewritten origin): what was being merged. */
+  source?: string;
+}
+
+type Mode = 'read' | 'auto' | 'person';
+
+const toSync = (o: Outcome): SyncRecord => ({
+  state: o.state,
+  at: new Date().toISOString(),
+  branch: o.branch,
+  files: o.files ?? [],
+  message: o.message,
+});
+
+const IDLE: SyncRecord = { state: 'idle', at: null, branch: null, files: [], message: null };
+
+function projectRow(db: Db, projectId: string) {
+  const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+  if (!row) throw notFound('no such project');
+  return row;
+}
+
+/**
+ * Stores `outcome` as the project's last pull, with the commits that came in (newest first, before
+ * the ones kept already). A stop that waits for the person records origin's tips then, so auto-pull
+ * leaves it until origin moves; a pull that got through lifts it; anything else leaves it standing.
+ */
+function record(
+  db: Db,
+  projectId: string,
+  outcome: Outcome,
+  extra: { pulled?: string[]; tips?: { working: string | null; main: string | null } } = {},
+): SyncRecord {
+  const sync = toSync(outcome);
+  try {
+    const settings = readRepositorySettings(db, projectId);
+    const pulledOids = extra.pulled?.length
+      ? [...new Set([...extra.pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT)
+      : settings.pulledOids;
+    const syncStop =
+      outcome.source !== undefined && extra.tips
+        ? { ...extra.tips, source: outcome.source }
+        : outcome.state === 'pulled' || outcome.state === 'up_to_date'
+          ? null
+          : settings.syncStop;
+    writeRepositorySettings(db, projectId, { sync, pulledOids, syncStop });
+  } catch {
+    // the project was deleted meanwhile
+  }
+  return sync;
+}
+
+/** Everything one pull works with, read in order: the snapshot, then what origin names. */
+interface PullContext {
+  deps: SyncDeps;
+  projectId: string;
+  ws: Snapshot;
+  main: string;
+  working: string;
+  remote: { main: string | null; working: string | null };
+  identity: CommitIdentity;
+  /** The branch moves this pull made, to collect the commits that came in. */
+  moves: { before: string | null; after: string }[];
+  /** The merge commits Emberline made in this pull: they did not come from origin. */
+  made: Set<string>;
+}
+
+/** A merge that conflicted: the additive heal is tried on it outside the lock. */
+interface HealRequest {
+  before: string;
+  source: string;
+  label: string;
+  conflicts: string[];
+}
+
+type Step = { outcome: Outcome } | { heal: HealRequest };
+
+/**
+ * A pull of the working branch (and main, when it is another branch) from origin. `auto`: the
+ * timer's, which only reads origin while auto-pull is off or a stop waits for the person.
+ */
+export function pull(deps: SyncDeps, projectId: string, { auto }: { auto: boolean }): Promise<SyncRecord> {
+  return syncProject(deps, projectId, auto ? 'auto' : 'person');
+}
+
+/** Reads origin (sets the tracking refs) and pulls nothing; the last pull's outcome is returned. */
+export function fetchOrigin(deps: SyncDeps, projectId: string): Promise<SyncRecord> {
+  return syncProject(deps, projectId, 'read');
+}
+
+async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promise<SyncRecord> {
+  const project = projectRow(deps.db, projectId);
+  const finish = (outcome: Outcome) =>
+    mode === 'read' ? toSync(outcome) : record(deps.db, projectId, outcome);
+  try {
+    // No origin: nothing to read, and no network call.
+    if (!(await originUrls(project.path)).fetch)
+      return finish({
+        state: 'no_remote',
+        branch: null,
+        message: 'This project has no origin. Connect a repository in Project settings → Repository first.',
+      });
+    return await deps.repository.remoteAction(projectId, (ws) => pullIn(deps, projectId, ws, mode));
+  } catch (error) {
+    // A runner that did not answer decided nothing: the next tick or Pull tries again.
+    if (isRunnerUnavailable(error))
+      return finish({ state: 'error', branch: null, message: RUNNER_WAITING_MESSAGE });
+    const message = error instanceof HttpError ? error.message : gitMessage(error);
+    return finish({ state: 'error', branch: null, message });
+  }
+}
+
+async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mode): Promise<SyncRecord> {
+  const { db } = deps;
+  const read = await deps.repository.readOrigin(projectId, ws);
+  const current = () => readRepositorySettings(db, projectId).sync ?? IDLE;
+  const stopped = (outcome: Outcome) => (mode === 'read' ? toSync(outcome) : record(db, projectId, outcome));
+  if (read.stale) return stopped({ state: 'error', branch: null, message: ORIGIN_CHANGED });
+  if (read.error)
+    return stopped({ state: 'error', branch: null, message: `Couldn't read origin: ${read.error}` });
+  const settings = readRepositorySettings(db, projectId);
+  if (mode === 'read') return current();
+  if (mode === 'auto') {
+    // With auto-pull off, the read alone shows the new commits; the person pulls.
+    if (!settings.autoPull) return current();
+    // A conflict or a rewritten origin waits for the person, until origin moves on.
+    const stop = settings.syncStop;
+    if (stop && stop.working === read.working && stop.main === read.main) return current();
+  }
+  const ctx: PullContext = {
+    deps,
+    projectId,
+    ws,
+    main: ws.defaultBranch,
+    working: read.workingBranch,
+    remote: { main: read.main, working: read.working },
+    identity: commitIdentityFor(db, projectId),
+    moves: [],
+    made: new Set(),
+  };
+  let healed: { before: string; commit: string } | null = null;
+  let outcome: Outcome = {
+    state: 'error',
+    branch: ctx.working,
+    message: 'The pull did not finish; pull again.',
+  };
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const applied = healed;
+    const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, applied));
+    if ('outcome' in step) {
+      outcome = step.outcome;
+      break;
+    }
+    const result = await healPull(ctx, step.heal);
+    if ('outcome' in result) {
+      outcome = result.outcome;
+      break;
+    }
+    healed = result;
+  }
+  return record(db, projectId, outcome, { pulled: await pulledCommits(ctx), tips: ctx.remote });
+}
+
+/**
+ * Under the lock: moves main and the working branch as far as they go cleanly. Returns the outcome,
+ * or a conflicting merge for the heal (the next round applies a heal that landed, first).
+ */
+async function advance(ctx: PullContext, healed: { before: string; commit: string } | null): Promise<Step> {
+  const { ws, main, working, remote, deps, projectId } = ctx;
+  const stop = (outcome: Outcome): Step => ({ outcome });
+  if (!(await deps.repository.originStill(projectId, ws)))
+    return stop({ state: 'error', branch: null, message: ORIGIN_CHANGED });
+  // A switch of the working branch takes this lock too: one made since the read is not pulled into.
+  const nowWorking = workingBranchOf(readRepositorySettings(deps.db, projectId), main);
+  if (nowWorking !== working)
+    return stop({
+      state: 'error',
+      branch: nowWorking,
+      message: `The working branch changed to ${nowWorking} during the pull, so nothing more was pulled. Pull again.`,
+    });
+  const { branch: checkedOut } = await mainBranchState(ws.path);
+  if (checkedOut !== working) {
+    const on = checkedOut ? `is on ${checkedOut}` : 'is not on a branch';
+    return stop({
+      state: 'error',
+      branch: working,
+      message: `The main workspace ${on}, but the working branch is ${working}, so nothing was pulled. Switch back on the Git page (or check out ${working}), then pull again.`,
+    });
+  }
+  if (healed) {
+    if ((await localTip(ws.path, working)) !== healed.before)
+      return stop({
+        state: 'error',
+        branch: working,
+        message: `${working} moved while Emberline checked the merge, so the merge was not applied. The next pull tries again.`,
+      });
+    if (await workspaceDirty(ws.path)) return stop(dirtyOutcome(working, 'the healed merge'));
+    const failed = await fastForward(ctx, healed.commit, healed.before);
+    if (failed) return stop(failed);
+    ctx.made.add(healed.commit);
+  }
+
+  // origin's main (a PR merged on the forge) fast-forwards local main; main is never merged into here.
+  if (main !== working && remote.main) {
+    const local = await localTip(ws.path, main);
+    const state = await classify(ws.path, local, remote.main);
+    if (state === 'behind') {
+      if ((await checkedOutBranches(ws.path)).has(main))
+        return stop({
+          state: 'error',
+          branch: main,
+          message: `${main} is checked out in another worktree, so Emberline did not move it. Check out another branch there, then pull again.`,
+        });
+      // Only from the commit read here: a change since makes git refuse it.
+      await execGitFile(
+        ['update-ref', '-m', 'emberline: pull', `refs/heads/${main}`, remote.main, local ?? ''],
+        { cwd: ws.path },
+      );
+      ctx.moves.push({ before: local, after: remote.main });
+    } else if (state === 'ahead') {
+      return stop({
+        state: 'main_unpushed',
+        branch: main,
+        message: `${main} has commits origin's ${main} does not have (a promote that was not pushed yet), so nothing was pulled. Push ${main}, then pull again.`,
+      });
+    } else if (state === 'diverged') {
+      return stop({
+        state: 'diverged',
+        branch: main,
+        message: `${main} and origin's ${main} both have commits the other lacks, so nothing was pulled. Emberline never merges into ${main} by itself: bring origin's ${main} in from a terminal, or use Match origin to take origin's.`,
+      });
+    } else if (state === 'rewritten') {
+      return stop(rewrittenOutcome(main, `origin/${main}`));
+    }
+  }
+
+  if (remote.working) {
+    const local = await localTip(ws.path, working);
+    const state = await classify(ws.path, local, remote.working);
+    if (state === 'behind') {
+      const failed = await fastForward(ctx, remote.working, local);
+      if (failed) return stop(failed);
+    } else if (state === 'diverged') {
+      const merged = await mergeInto(ctx, remote.working, `origin/${working}`);
+      if (merged) return merged;
+    } else if (state === 'rewritten') {
+      return stop(rewrittenOutcome(working, `origin/${working}`));
+    }
+  }
+
+  // What came into main goes on into the working branch, so the factory builds on it.
+  if (main !== working) {
+    const mainTip = await localTip(ws.path, main);
+    const workingTip = await localTip(ws.path, working);
+    if (mainTip && workingTip && !(await isAncestorCommit(ws.path, mainTip, workingTip))) {
+      if (!(await hasMergeBase(ws.path, mainTip, workingTip)))
+        return stop({
+          state: 'rewritten',
+          branch: working,
+          source: main,
+          message: `${main} no longer shares history with ${working} (one of them was rewritten), so ${main} was not merged into ${working}. Match origin on ${working} takes origin's history, or merge them in a terminal.`,
+        });
+      const merged = await mergeInto(ctx, mainTip, main);
+      if (merged) return merged;
+    }
+  }
+  return stop({
+    state: ctx.moves.length > 0 ? 'pulled' : 'up_to_date',
+    branch: working,
+    message: null,
+  });
+}
+
+const rewrittenOutcome = (branch: string, source: string): Outcome => ({
+  state: 'rewritten',
+  branch,
+  source,
+  message: `origin's ${branch} no longer shares history with ${branch} here (it was rewritten and force-pushed), so nothing was pulled into it. Match origin takes origin's history and keeps the old tip under a backup ref.`,
+});
+
+const dirtyOutcome = (working: string, what: string, why?: string): Outcome => ({
+  state: 'workspace_dirty',
+  branch: working,
+  message: `The main workspace has uncommitted changes, so Emberline did not bring ${what} into ${working}. Commit or discard them, then pull again.${why ? ` (${why})` : ''}`,
+});
+
+const conflictOutcome = (working: string, label: string, files: string[], detail?: string): Outcome => {
+  const shown = files.slice(0, 10).join(', ') + (files.length > 10 ? ', …' : '');
+  return {
+    state: 'conflict',
+    branch: working,
+    files,
+    source: label,
+    message: `${label} and ${working} changed the same lines in ${shown}, so ${working} was left as it was. Resolve it with a ticket, or merge ${label} in a terminal.${detail ? ` ${detail}` : ''}`,
+  };
+};
+
+/** Whether the main workspace has changes to tracked files or an unfinished merge (Emberline's scratch files aside). */
+async function workspaceDirty(mainPath: string): Promise<boolean> {
+  await resetScratchFilesToHead(mainPath);
+  const status = await execGitFile(['status', '--porcelain', '--untracked-files=no'], { cwd: mainPath });
+  if (status.stdout.trim()) return true;
+  return unfinishedOperation(mainPath);
+}
+
+/** Whether a merge, cherry-pick or revert someone started in the main workspace is not concluded. */
+async function unfinishedOperation(mainPath: string): Promise<boolean> {
+  for (const ref of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD']) {
+    if ((await refTip(mainPath, ref)) !== null) return true;
+  }
+  return false;
+}
+
+/** The checked-out working branch fast-forwarded to `target`; git refuses it if it would overwrite an edit. */
+async function fastForward(ctx: PullContext, target: string, before: string | null): Promise<Outcome | null> {
+  const { ws, working } = ctx;
+  try {
+    await execGitFile(['merge', '--ff-only', '--no-stat', target], { cwd: ws.path, timeout: 120_000 });
+  } catch (error) {
+    if (isRunnerUnavailable(error)) throw error;
+    const why = gitMessage(error);
+    if (WORKSPACE_DIRTY.test(why))
+      return {
+        state: 'workspace_dirty',
+        branch: working,
+        message: `The main workspace has changes the pull would overwrite, so ${working} stayed as it was. Commit or discard them, then pull again. (${why})`,
+      };
+    return { state: 'error', branch: working, message: `Could not fast-forward ${working}: ${why}` };
+  }
+  ctx.moves.push({ before, after: target });
+  return null;
+}
+
+/** The paths a merge of `theirs` into `ours` would leave conflicted; nothing is written. */
+async function mergeConflicts(mainPath: string, ours: string, theirs: string): Promise<string[]> {
+  const out = await realGit(
+    ['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', ours, theirs],
+    mainPath,
+  ).then(
+    () => null,
+    (error: unknown) => {
+      // Exit 1 is "conflicts": the tree, then each conflicted path. Anything else is a real failure.
+      if (error instanceof CommandFailedError && error.code === 1) return error.stdout;
+      throw error;
+    },
+  );
+  if (out === null) return [];
+  return [...new Set(out.split('\0').slice(1).filter(Boolean))].sort();
+}
+
+const hasMergeBase = (mainPath: string, a: string, b: string) =>
+  realGit(['merge-base', a, b], mainPath).then(() => true, absentWhen(false, 1));
+
+/**
+ * Merges `source` into the checked-out working branch (a merge commit with the project's identity,
+ * no trailers). A conflicting merge is found before the main workspace is touched and goes to the
+ * heal when the factory setting allows it. Null: merged.
+ */
+async function mergeInto(ctx: PullContext, source: string, label: string): Promise<Step | null> {
+  const { ws, working, deps, projectId } = ctx;
+  if (await workspaceDirty(ws.path)) return { outcome: dirtyOutcome(working, label) };
+  const before = await localTip(ws.path, working);
+  if (!before)
+    return { outcome: { state: 'error', branch: working, message: `${working} has no commits yet.` } };
+  const conflicts = await mergeConflicts(ws.path, before, source);
+  if (conflicts.length > 0) {
+    if (effectiveFactorySettings(deps.db, projectId).autoResolveAdditiveConflicts)
+      return { heal: { before, source, label, conflicts } };
+    return { outcome: conflictOutcome(working, label, conflicts) };
+  }
+  const inMain = { cwd: ws.path };
+  try {
+    await execGitFile(
+      [
+        ...gitIdentityArgs(ctx.identity),
+        'merge',
+        '--no-ff',
+        '--no-edit',
+        '--no-log',
+        '--no-signoff',
+        '-m',
+        `Merge ${label} into ${working}`,
+        source,
+      ],
+      { ...inMain, timeout: 120_000 },
+    );
+  } catch (error) {
+    if (isRunnerUnavailable(error)) throw error;
+    const why = gitMessage(error);
+    const files = (
+      await execGitFile(['diff', '--name-only', '--diff-filter=U'], inMain).catch(
+        unlessRunnerUnavailable({ stdout: '' }),
+      )
+    ).stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    // Only a merge that started is aborted; the tree was clean, so that puts it back exactly.
+    if ((await refTip(ws.path, 'MERGE_HEAD')) !== null)
+      await execGitFile(['merge', '--abort'], inMain).catch(unlessRunnerUnavailable(undefined));
+    if (files.length > 0) return { outcome: conflictOutcome(working, label, files) };
+    if (WORKSPACE_DIRTY.test(why)) return { outcome: dirtyOutcome(working, label, why) };
+    return {
+      outcome: {
+        state: 'error',
+        branch: working,
+        message: `Could not merge ${label} into ${working}: ${why}`,
+      },
+    };
+  }
+  const after = await localTip(ws.path, working);
+  if (after) {
+    ctx.made.add(after);
+    ctx.moves.push({ before, after });
+  }
+  return null;
+}
+
+/**
+ * The additive heal (factory/conflict-heal.ts, as the merge ladder runs it) of a conflicting pull
+ * merge, outside the lock, in a detached worktree of core's own at the working branch's tip: the
+ * main workspace is not touched while it merges and its checks run. The healed commit is applied
+ * by the next round, as a fast-forward, only if the working branch has not moved.
+ */
+async function healPull(
+  ctx: PullContext,
+  req: HealRequest,
+): Promise<{ outcome: Outcome } | { before: string; commit: string }> {
+  const { deps, ws, working, projectId } = ctx;
+  const project = projectRow(deps.db, projectId);
+  const dir = path.join(deps.workspacesDir, '.worktrees', project.slug, `pull-${randomUUID().slice(0, 8)}`);
+  await mkdir(path.dirname(dir), { recursive: true });
+  await withMainWorkspaceLock(ws.path, () =>
+    execGitFile(['worktree', 'add', '--detach', dir, req.before], { cwd: ws.path }),
+  );
+  try {
+    const healed = await healConflicts({
+      worktreePath: dir,
+      mainWorkspacePath: ws.path,
+      mainBranch: req.label,
+      branch: working,
+      label: req.label,
+      mainTip: req.source,
+      stale: () => false,
+      verify: () =>
+        verifyBuildIn({
+          db: deps.db,
+          projectId,
+          targetId: 'pull',
+          workspacePath: dir,
+          setupDone: false,
+          settings: effectiveFactorySettings(deps.db, projectId),
+          dockerEnv: () => deps.dockerEnvForMain(projectId),
+          ...(deps.buildWorkspaceDemo ? { build: deps.buildWorkspaceDemo } : {}),
+        }),
+      identity: ctx.identity,
+    });
+    if (!healed.healed) {
+      const files = healed.conflicts.length > 0 ? healed.conflicts : req.conflicts;
+      return { outcome: conflictOutcome(working, req.label, files, healed.message) };
+    }
+    return { before: req.before, commit: healed.commitOid };
+  } finally {
+    await withMainWorkspaceLock(ws.path, () => pruneWorktree(ws.path, dir)).catch(() => undefined);
+  }
+}
+
+/** The commits this pull brought in (not the merges Emberline made), newest first. */
+async function pulledCommits(ctx: PullContext): Promise<string[]> {
+  const pulled: string[] = [];
+  for (const { before, after } of ctx.moves) {
+    const range = before ? [`${before}..${after}`] : [after];
+    const out = await realGit(['rev-list', `--max-count=${PULLED_KEPT}`, ...range, '--'], ctx.ws.path).then(
+      (r) => r.stdout,
+      unlessRunnerUnavailable(''),
+    );
+    for (const oid of out.split('\n').map((l) => l.trim())) {
+      if (oid && !ctx.made.has(oid)) pulled.push(oid);
+    }
+  }
+  return pulled;
+}
+
+/** `YYYYMMDD-HHMMSS`, UTC. */
+const backupStamp = (at = new Date()) => at.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+
+/** Keeps `oid` as `refs/emberline/backup/<branch>-<stamp>` (never overwriting one); returns the ref. */
+async function keepBackup(mainPath: string, branch: string, oid: string): Promise<string> {
+  const stamp = backupStamp();
+  for (let n = 1; n <= 20; n++) {
+    const ref = `${BACKUP_PREFIX}${branch}-${stamp}${n > 1 ? `-${n}` : ''}`;
+    // The empty old value makes this a create: an existing backup is never moved.
+    const made = await execGitFile(
+      ['update-ref', '-m', 'emberline: backup before Match origin', ref, oid, ''],
+      { cwd: mainPath },
+    ).then(() => true, unlessRunnerUnavailable(false));
+    if (made) return ref;
+  }
+  throw conflict(`Could not keep a backup of ${branch}, so it was not changed.`, 'backup_failed');
+}
+
+/** The backups Match origin kept, by name under refs/emberline/backup/. */
+export async function listBackups(mainPath: string): Promise<string[]> {
+  const out = (await realGit(['for-each-ref', '--format=%(refname)', BACKUP_PREFIX], mainPath)).stdout;
+  return out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((ref) => ref.startsWith(BACKUP_PREFIX))
+    .map((ref) => ref.slice(BACKUP_PREFIX.length));
+}
+
+const STATE_TEXT: Record<BranchRemoteState, string> = {
+  up_to_date: "is the same as origin's",
+  behind: "is only behind origin's (Pull brings it in)",
+  ahead: "only has commits origin's lacks",
+  diverged: "has diverged from origin's",
+  rewritten: "no longer shares history with origin's",
+  unpublished: 'is not on origin',
+  unknown: "could not be compared with origin's",
+};
+
+/**
+ * Match origin: the branch (the working branch or main) takes origin's history, on the person's
+ * confirmation, only when its own no longer fits origin's (rewritten or diverged). Its old tip is
+ * kept under a backup ref first; the checked-out branch moves with `reset --keep`, which refuses to
+ * overwrite an edit. Then a normal pull lines main and the working branch up again.
+ */
+export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknown): Promise<SyncRecord> {
+  const parsed = MatchOriginBody.safeParse(raw ?? {});
+  const branch = parsed.success ? parsed.data.branch : '';
+  if (!branch || branch.startsWith('-') || !isPlainRefName(branch))
+    throw badRequest('Name the branch to match with origin.');
+  const { db } = deps;
+  const done = await deps.repository.remoteAction(projectId, async (ws) => {
+    const read = await deps.repository.readOrigin(projectId, ws);
+    if (read.stale) throw conflict(ORIGIN_CHANGED, 'origin_changed');
+    if (read.error) throw conflict(`Couldn't read origin: ${read.error}`, 'remote_unreachable');
+    const main = ws.defaultBranch;
+    const working = read.workingBranch;
+    if (branch !== working && branch !== main)
+      throw badRequest(
+        `Match origin is for ${working}${working !== main ? ` or ${main}` : ''}, the branches Emberline pulls.`,
+      );
+    const remote = branch === working ? read.working : read.main;
+    if (!remote)
+      throw conflict(`origin has no branch ${branch}, so there is nothing to match.`, 'unpublished');
+    return withMainWorkspaceLock(ws.path, async () => {
+      if (!(await deps.repository.originStill(projectId, ws)))
+        throw conflict(ORIGIN_CHANGED, 'origin_changed');
+      const local = await localTip(ws.path, branch);
+      const state = await classify(ws.path, local, remote);
+      if (!local || (state !== 'rewritten' && state !== 'diverged'))
+        throw conflict(
+          `${branch} ${STATE_TEXT[state]}, so there is nothing to match: Match origin is only for a branch whose history no longer fits origin's.`,
+          'nothing_to_match',
+        );
+      // Runs based on the working branch's history would merge it back in.
+      if (branch === working) {
+        const live = await liveRunsOf(db, projectId);
+        if (live.length > 0) {
+          const names = live.map((r) => r.title ?? r.id).join(', ');
+          throw new HttpError(
+            409,
+            'runs_live',
+            `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or stop them, then match origin.`,
+            { runs: live },
+          );
+        }
+      }
+      const { branch: checkedOut } = await mainBranchState(ws.path);
+      // A reset would end a merge someone has not concluded, and drop what it recorded.
+      if (checkedOut === branch && (await unfinishedOperation(ws.path)))
+        throw conflict(
+          `A merge, cherry-pick or revert in the main workspace is not finished, so ${branch} stayed as it was. Conclude or abort it, then try again.`,
+          'workspace_dirty',
+        );
+      const backup = await keepBackup(ws.path, branch, local);
+      if (checkedOut === branch) {
+        try {
+          await execGitFile(['reset', '--keep', remote], { cwd: ws.path, timeout: 120_000 });
+        } catch (error) {
+          if (isRunnerUnavailable(error)) throw error;
+          return { backup, refused: gitMessage(error) };
+        }
+      } else {
+        if ((await checkedOutBranches(ws.path)).has(branch))
+          throw conflict(
+            `${branch} is checked out in another worktree, so Emberline did not move it (its tip is kept as ${backup}).`,
+            'branch_checked_out',
+          );
+        await execGitFile(
+          ['update-ref', '-m', 'emberline: match origin', `refs/heads/${branch}`, remote, local],
+          { cwd: ws.path },
+        );
+      }
+      const pulled = (
+        await realGit(['rev-list', `--max-count=${PULLED_KEPT}`, remote, '--not', local, '--'], ws.path).then(
+          (r) => r.stdout,
+          unlessRunnerUnavailable(''),
+        )
+      )
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const settings = readRepositorySettings(db, projectId);
+      writeRepositorySettings(db, projectId, {
+        pulledOids: [...new Set([...pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT),
+        syncStop: null,
+      });
+      return { backup, refused: null };
+    });
+  });
+  if (done.refused !== null)
+    return record(db, projectId, {
+      state: 'workspace_dirty',
+      branch,
+      message: `The main workspace has changes that matching origin would overwrite, so ${branch} stayed as it was (its tip is also kept as ${done.backup}). Commit or discard them, then try again. (${done.refused})`,
+    });
+  const after = await pull(deps, projectId, { auto: false });
+  if (after.state !== 'up_to_date') return after;
+  return record(db, projectId, {
+    state: 'pulled',
+    branch,
+    message: `${branch} now matches origin. Its old tip is kept as ${done.backup}.`,
+  });
+}
+
+/** The body of "Resolve with a ticket": what conflicted, and how the run resolves it. */
+export function pullTicketText(
+  source: string,
+  branch: string,
+  files: string[],
+): { title: string; body: string } {
+  const listed = files.slice(0, 200).map((f) => `- ${f}`);
+  if (files.length > 200) listed.push(`- … and ${files.length - 200} more`);
+  return {
+    title: `Merge ${source} into ${branch}`.slice(0, 200),
+    body: [
+      `Emberline could not pull ${source} into ${branch}: both changed the same lines.`,
+      '',
+      'Conflicting files:',
+      ...listed,
+      '',
+      `Run \`git merge ${source}\`, resolve every conflict keeping both changes' intent, run the project's checks, commit.`,
+    ].join('\n'),
+  };
+}
+
+/** What GitSync needs: one pull per project. */
+export interface GitSyncTarget {
+  pull(projectId: string, opts: { auto: boolean }): Promise<SyncRecord>;
+}
+
+/**
+ * Auto-pull: every AUTO_PULL_INTERVAL_MS, each project with a connected origin is pulled (or, with
+ * auto-pull off or a stop that waits for the person, only read), one project at a time. A tick
+ * never runs while the one before it still runs; `ready` (the runner is connected) gates each one.
+ */
+export class GitSync {
+  private timer: NodeJS.Timeout | null = null;
+  private running: Promise<void> | null = null;
+  private stopped = false;
+  private readonly intervalMs: number;
+  private readonly ready: () => boolean;
+
+  constructor(
+    private readonly db: Db,
+    private readonly git: GitSyncTarget,
+    private readonly opts: { intervalMs?: number; log: (message: string) => void; ready?: () => boolean },
+  ) {
+    this.intervalMs = opts.intervalMs ?? AUTO_PULL_INTERVAL_MS;
+    this.ready = opts.ready ?? (() => true);
+  }
+
+  start(): void {
+    if (this.timer || this.stopped) return;
+    this.timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.timer.unref();
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    await this.running;
+  }
+
+  /** One pass over the projects; while a pass runs, this is that pass. */
+  tick(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (!this.running) this.running = this.pass().finally(() => (this.running = null));
+    return this.running;
+  }
+
+  private async pass(): Promise<void> {
+    const rows = this.db.select({ id: projects.id }).from(projects).where(isNotNull(projects.repoUrl)).all();
+    for (const { id } of rows) {
+      if (this.stopped || !this.ready()) return;
+      try {
+        const sync = await this.git.pull(id, { auto: true });
+        if (sync.state === 'error') this.opts.log(`auto-pull: project ${id}: ${sync.message ?? 'failed'}`);
+      } catch (error) {
+        this.opts.log(`auto-pull: project ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+}
