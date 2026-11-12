@@ -67,9 +67,24 @@ const BACKUP_PREFIX = 'refs/emberline/backup/';
 const ORIGIN_CHANGED =
   "This project's origin changed while Emberline read it, so nothing was pulled. Pull again.";
 
+/** A page about a project (not a run): what core's notifications send, narrowed to what git-page says. */
+export type GitNotify = (
+  projectId: string,
+  occurrence: string,
+  message: {
+    event: 'git_pull_stopped' | 'release_finished';
+    title: string;
+    body: string;
+    priority?: 'default' | 'high';
+    tags?: string[];
+  },
+) => void;
+
 /** What a pull needs from the rest of core. */
 export interface SyncDeps {
   db: Db;
+  /** Pages a person when an automatic pull stops; a failure inside it never reaches the pull. */
+  notify?: GitNotify;
   repository: Pick<RepositoryService, 'remoteAction' | 'readOrigin' | 'originStill'>;
   /** Docker for the heal's own worktree, under a compose project of its own (RunService's job helpers). */
   docker: {
@@ -159,6 +174,8 @@ interface PullContext {
   moves: { before: string | null; after: string }[];
   /** The merge commits Emberline made in this pull: they did not come from origin. */
   made: Set<string>;
+  /** Who started the pull: a person sees its outcome in the reply, the timer's goes to a page. */
+  mode: Mode;
 }
 
 /** A merge that conflicted: the additive heal is tried on it outside the lock. */
@@ -250,6 +267,7 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
     identity: commitIdentityFor(db, projectId),
     moves: [],
     made: new Set(),
+    mode,
   };
   const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, null));
   if ('outcome' in step) return finishPull(ctx, step.outcome);
@@ -263,8 +281,42 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
 }
 
 /** Records how the pull ended, with the commits it brought in. */
-async function finishPull(ctx: PullContext, outcome: Outcome): Promise<SyncRecord> {
+async function finishPull(ctx: PullContext, outcome: Outcome, background = false): Promise<SyncRecord> {
+  pageStop(ctx, outcome, background);
   return record(ctx.deps.db, ctx.projectId, outcome, { pulled: await pulledCommits(ctx), tips: ctx.remote });
+}
+
+/** The stops that wait for a person: the ones worth a page. */
+const PAGED_STOPS: readonly GitSyncState[] = ['conflict', 'rewritten', 'diverged', 'main_unpushed'];
+const STOP_TEXT: Partial<Record<GitSyncState, string>> = {
+  conflict: 'merge conflict',
+  rewritten: 'origin was rewritten',
+  diverged: 'branches diverged',
+  main_unpushed: 'main has commits origin lacks',
+};
+
+/**
+ * Pages once for a stop the timer's pull (or a heal's end, whoever started it) came to; a person who
+ * pulled sees it in the reply. The occurrence names origin's tips, so the same stop is one page and
+ * a stop on a new tip is another.
+ */
+function pageStop(ctx: PullContext, outcome: Outcome, background: boolean): void {
+  if (!ctx.deps.notify || !PAGED_STOPS.includes(outcome.state) || (ctx.mode !== 'auto' && !background))
+    return;
+  const { remote } = ctx;
+  const tip = `${remote.working ?? ''}/${remote.main ?? ''}`;
+  const branch = outcome.branch ?? ctx.working;
+  try {
+    ctx.deps.notify(ctx.projectId, `${ctx.projectId}:pull:${outcome.state}:${tip}`, {
+      event: 'git_pull_stopped',
+      title: `Pull stopped on ${branch}: ${STOP_TEXT[outcome.state] ?? outcome.state}`,
+      body: outcome.message ?? 'Open the Git page to see what stopped it.',
+      priority: 'high',
+      tags: ['warning', 'emberline'],
+    });
+  } catch {
+    // a page that cannot be sent never changes how the pull ends
+  }
 }
 
 /**
@@ -313,7 +365,7 @@ async function healInBackground(ctx: PullContext, first: HealRequest): Promise<v
     };
   }
   if (heals.stopped) return;
-  await finishPull(ctx, outcome).catch(() => record(ctx.deps.db, ctx.projectId, outcome));
+  await finishPull(ctx, outcome, true).catch(() => record(ctx.deps.db, ctx.projectId, outcome));
 }
 
 /** How long stop() waits for a heal to give up (as PostMergeJobs waits for its jobs). */

@@ -40,7 +40,7 @@ import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { ReleaseJobs } from './git-page/release.js';
 import { GitPageService } from './git-page/service.js';
-import { GitSync } from './git-page/sync.js';
+import { type GitNotify, GitSync } from './git-page/sync.js';
 import { registerGitRoutes } from './routes/git.js';
 import { registerRepositoryRoutes } from './routes/repository.js';
 import { registerWorktreeConfigRoutes } from './routes/worktree-config.js';
@@ -161,13 +161,17 @@ export async function buildServer(
       log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
     });
   const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
+  const notifyGit: GitNotify = (projectId, occurrence, message) =>
+    notifications.notifyProject(projectId, occurrence, message);
   const releases = new ReleaseJobs(deps.db, {
+    notify: notifyGit,
     repository,
     forge,
     runs: deps.runs,
     workspacesDir: deps.config.workspacesDir,
   });
   const gitPage = new GitPageService(deps.db, repository, {
+    notify: notifyGit,
     runs: deps.runs,
     forge,
     tickets: deps.tickets,

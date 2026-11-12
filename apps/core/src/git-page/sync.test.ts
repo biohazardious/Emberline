@@ -515,6 +515,25 @@ describe('pull from origin', () => {
     expect(await listBackups(projectPath)).toEqual([]);
   });
 
+  it("pages once when an automatic pull stops, with origin's tip in the occurrence; a person's pull pages nothing", async () => {
+    const pages: { projectId: string; occurrence: string; title: string }[] = [];
+    const notify = (p: string, occurrence: string, m: { title: string }) =>
+      pages.push({ projectId: p, occurrence, title: m.title });
+    const personal = service({ notify });
+    forcePushUnrelated(cloneOf(bare));
+    expect((await personal.pull(projectId, { auto: false })).state).toBe('rewritten');
+    expect(pages).toEqual([]);
+    // Wipe the person's stop so the timer meets origin's rewrite itself.
+    writeRepositorySettings(t.db, projectId, { sync: null, syncStop: null });
+    const timer = new GitSync(t.db, personal, { log: () => undefined });
+    await timer.tick();
+    await timer.tick();
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.projectId).toBe(projectId);
+    expect(pages[0]?.occurrence).toMatch(new RegExp(`^${projectId}:pull:rewritten:[0-9a-f]{40}`));
+    expect(pages[0]?.title).toMatch(/^Pull stopped on main: /);
+  });
+
   it('with auto-pull off, a tick reads origin and pulls nothing', async () => {
     const off = await send('PATCH', gitUrl(), { autoPull: false });
     expect(off.statusCode).toBe(200);

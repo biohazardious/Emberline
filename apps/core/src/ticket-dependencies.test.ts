@@ -2619,6 +2619,7 @@ async function pagesOf() {
     onQuotaResumed: false,
     onWaitingInput: true,
     onRunFinished: false,
+    onGitEvents: true,
   });
   const sent: string[] = [];
   service.dispatch = async (_cfg, msg) => {

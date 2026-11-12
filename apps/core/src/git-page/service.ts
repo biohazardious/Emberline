@@ -47,6 +47,7 @@ import { currentReleaseDraft, DraftJobs, draftReleaseNotes } from './release-not
 import { latestVersionTag, ReleaseJobs } from './release.js';
 import {
   fetchOrigin,
+  type GitNotify,
   HealJobs,
   listBackups,
   matchOrigin,
@@ -71,6 +72,8 @@ export interface GitPageDeps {
   workspacesDir: string;
   /** Runs the checks on a healed pull merge (tests inject it); default: buildWorkspaceDemo. */
   buildWorkspaceDemo?: typeof buildWorkspaceDemo;
+  /** Pages a person about a project (server.ts wires core's notifications in); pulls and releases made here use it. */
+  notify?: GitNotify;
   /** The release jobs (server.ts makes them); made from the deps above when omitted. */
   releases?: ReleaseJobs;
 }
@@ -100,6 +103,7 @@ export class GitPageService {
         forge: deps.forge,
         runs: deps.runs,
         workspacesDir: deps.workspacesDir,
+        ...(deps.notify ? { notify: deps.notify } : {}),
         ...(deps.buildWorkspaceDemo ? { buildWorkspaceDemo: deps.buildWorkspaceDemo } : {}),
       });
   }
@@ -162,6 +166,7 @@ export class GitPageService {
   private syncDeps(): SyncDeps {
     return {
       db: this.db,
+      ...(this.deps.notify ? { notify: this.deps.notify } : {}),
       repository: this.repository,
       docker: {
         envFor: (composeProject) => this.deps.runs.dockerEnvForJob(composeProject),

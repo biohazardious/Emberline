@@ -52,7 +52,7 @@ import { pruneWorktree } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import { approvedChecks, approvedSetup } from '../worktree-config/load.js';
 import { checkedOutBranches, classify, gitMessage, localTip, refTip, WORKSPACE_DIRTY } from './branches.js';
-import { within, workspaceDirty } from './sync.js';
+import { type GitNotify, within, workspaceDirty } from './sync.js';
 
 /** How long stop() waits for a running release step to end. */
 export const RELEASE_STOP_TIMEOUT_MS = 5_000;
@@ -78,6 +78,8 @@ const INTERRUPTED =
 
 /** What a release needs from the rest of core. */
 export interface ReleaseDeps {
+  /** Pages a person when a job ends done or failed; a failure inside it never reaches the job. */
+  notify?: GitNotify;
   repository: Pick<RepositoryService, 'remoteAction' | 'readOrigin' | 'recordPush'>;
   forge: Pick<ForgeService, 'createRelease' | 'findRelease'>;
   /** Docker for the checks' own worktree (RunService's job helpers). */
@@ -583,6 +585,7 @@ export class ReleaseJobs {
     const end = (state: ReleaseJob['state'], error: string | null) => {
       Object.assign(job, { state, error, finishedAt: new Date().toISOString() });
       this.write(project.id, job);
+      if (!this.stopping) this.page(ctx);
     };
     try {
       for (const name of ReleaseStepName.options) {
@@ -600,6 +603,27 @@ export class ReleaseJobs {
       end('done', null);
     } finally {
       await this.removeWorktree(ctx);
+    }
+  }
+
+  /** One page when the job ends: done, or failed at its first failed step. Core stopping pages nothing. */
+  private page({ job, project }: JobContext): void {
+    if (!this.deps.notify || (job.state !== 'done' && job.state !== 'failed')) return;
+    const label = job.version ?? job.working;
+    const at = job.steps.find((s) => s.status === 'failed')?.name ?? 'the start';
+    try {
+      this.deps.notify(project.id, `${project.id}:release:${job.id}:${job.state}`, {
+        event: 'release_finished',
+        title: job.state === 'done' ? `Released ${label}` : `Release ${label} stopped at ${at}`,
+        body:
+          job.state === 'done'
+            ? (job.releaseUrl ?? `${label} is released.`)
+            : (job.error ?? 'Open the Git page to see what stopped it.'),
+        priority: job.state === 'done' ? 'default' : 'high',
+        tags: [job.state === 'done' ? 'rocket' : 'x', 'emberline'],
+      });
+    } catch {
+      // a page that cannot be sent never changes how the job ends
     }
   }
 

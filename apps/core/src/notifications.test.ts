@@ -31,6 +31,7 @@ describe('NotificationService.dispatch', () => {
         onQuotaResumed: true,
         onWaitingInput: true,
         onRunFinished: true,
+        onGitEvents: true,
       };
       const title = 'Claude quota limit reached — dispatch paused 🔥';
       const result = await service.dispatch(cfg, { event: 'rate_limited', title, body: 'body' });
@@ -55,6 +56,7 @@ const CFG: NotificationSettings = {
   onQuotaResumed: false,
   onWaitingInput: true,
   onRunFinished: true,
+  onGitEvents: true,
 };
 
 type Attention = { reason: string; detail: string | null; since: string; occurrence: string };
@@ -481,6 +483,7 @@ describe('NotificationService quota lanes', () => {
         onQuotaResumed: true,
         onWaitingInput: true,
         onRunFinished: true,
+        onGitEvents: true,
       }) satisfies NotificationSettings;
     service.dispatch = async (_cfg, msg) => {
       sent.push({ event: msg.event, title: msg.title, body: msg.body });
@@ -544,6 +547,7 @@ describe('NotificationService quota lanes', () => {
         onQuotaResumed: true,
         onWaitingInput: true,
         onRunFinished: true,
+        onGitEvents: true,
       }) satisfies NotificationSettings;
     service.dispatch = async (_cfg, msg) => {
       sent.push(msg.title);
@@ -675,5 +679,48 @@ describe('NotificationService on real hooks', () => {
     } finally {
       await t.close();
     }
+  });
+});
+
+describe('NotificationService.notifyProject', () => {
+  const message = {
+    event: 'git_pull_stopped' as const,
+    title: 'Pull stopped on main: conflict',
+    body: 'a.txt',
+    priority: 'high' as const,
+  };
+
+  it('pages once per occurrence, even while someone watches a run, and not when the switch is off', async () => {
+    const h = await harness({}, { presence: { isWatched: () => true } });
+    h.service.notifyProject('p1', 'p1:pull:conflict:abc', message);
+    h.service.notifyProject('p1', 'p1:pull:conflict:abc', message);
+    await h.flush();
+    expect(h.sent.map((m) => m.title)).toEqual(['Pull stopped on main: conflict']);
+    h.service.notifyProject('p1', 'p1:pull:conflict:def', message);
+    await h.flush();
+    expect(h.sent).toHaveLength(2);
+    h.set({ onGitEvents: false });
+    h.service.notifyProject('p1', 'p1:pull:conflict:ghi', message);
+    await h.flush();
+    expect(h.sent).toHaveLength(2);
+  });
+
+  it('reads stored settings without the git switch as on', async () => {
+    const h = await harness();
+    const { db } = h;
+    const fresh = new NotificationService(db);
+    const { setSetting } = await import('./db/index.js');
+    setSetting(db, 'notifications.config', {
+      enabled: true,
+      provider: 'ntfy',
+      url: 'http://x',
+      token: null,
+      onRateLimited: true,
+      onQuotaResumed: true,
+      onWaitingInput: true,
+      onRunFinished: false,
+      onGitEvents: true,
+    });
+    expect(fresh.getSettings().onGitEvents).toBe(true);
   });
 });

@@ -30,7 +30,15 @@ export function encodeHeaderValue(value: string): string {
 }
 
 export interface NotificationMessage {
-  event: 'rate_limited' | 'quota_resumed' | 'waiting_input' | 'run_finished' | 'factory_paused' | 'test';
+  event:
+    | 'rate_limited'
+    | 'quota_resumed'
+    | 'waiting_input'
+    | 'run_finished'
+    | 'factory_paused'
+    | 'git_pull_stopped'
+    | 'release_finished'
+    | 'test';
   title: string;
   body: string;
   priority?: 'default' | 'high';
@@ -91,7 +99,8 @@ export interface NotificationServiceOptions {
 /** The part of a page that depends on what happened; the rest (log, presence, retry) is shared. */
 interface Page {
   occurrence: string;
-  runId: string;
+  /** The run the page is about; absent for a project's page (a pull, a release), which presence never hides. */
+  runId?: string;
   message: NotificationMessage;
   /** ISO time the attention began; a page older than this service's start is not sent. */
   since?: string;
@@ -172,6 +181,20 @@ export class NotificationService {
         tags: ['pause_button', 'emberline'],
       },
     });
+  }
+
+  /**
+   * Pages for something that happened to a project, not to a run (an automatic pull that stopped, a
+   * finished release): once per `occurrence`, under the Git switch, never hidden by presence.
+   */
+  notifyProject(projectId: string, occurrence: string, message: NotificationMessage): void {
+    try {
+      const cfg = this.getSettings();
+      if (!cfg.enabled || !cfg.onGitEvents) return;
+      this.send(cfg, { occurrence, wanted: (c) => c.onGitEvents, message });
+    } catch (error) {
+      this.log(`notification: paging project ${projectId} failed`, error);
+    }
   }
 
   /** Starts the daily pruning of the page log. */
@@ -304,7 +327,7 @@ export class NotificationService {
    */
   private async page(cfg: NotificationSettings, page: Page): Promise<void> {
     const old = page.since !== undefined && Date.parse(page.since) < this.startedAt;
-    const hidden = old || (this.presence?.isWatched(page.runId) ?? false);
+    const hidden = old || (page.runId !== undefined && (this.presence?.isWatched(page.runId) ?? false));
     const inserted = this.db
       .insert(notificationLog)
       .values({
@@ -335,7 +358,7 @@ export class NotificationService {
   private retry(page: Page): void {
     const current = this.getSettings();
     if (!current.enabled || !page.wanted(current)) return;
-    if (page.attention) {
+    if (page.attention && page.runId !== undefined) {
       let now: string | undefined;
       try {
         now = this.runs?.getRun(page.runId).attention?.occurrence;
@@ -344,7 +367,7 @@ export class NotificationService {
       }
       if (now !== page.occurrence) return;
     }
-    if (this.presence?.isWatched(page.runId)) {
+    if (page.runId !== undefined && this.presence?.isWatched(page.runId)) {
       this.setOutcome(page.occurrence, 'suppressed');
       return;
     }
@@ -420,6 +443,7 @@ export class NotificationService {
       onQuotaResumed: true,
       onWaitingInput: true,
       onRunFinished: false,
+      onGitEvents: true,
     };
 
     if (typeof stored !== 'object' || stored === null) return defaults;

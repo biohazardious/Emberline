@@ -87,12 +87,20 @@ const approveChecks = () => {
 
 let checked: string[];
 type Deps = ConstructorParameters<typeof ReleaseJobs>[1];
-const jobsWith = (extra: { build?: Build; forge?: Deps['forge']; repository?: Deps['repository'] } = {}) =>
+const jobsWith = (
+  extra: {
+    build?: Build;
+    forge?: Deps['forge'];
+    repository?: Deps['repository'];
+    notify?: Deps['notify'];
+  } = {},
+) =>
   new ReleaseJobs(t.db, {
     repository: extra.repository ?? t.repository,
     forge: extra.forge ?? t.forge,
     runs: t.runs,
     workspacesDir: t.config.workspacesDir,
+    ...(extra.notify ? { notify: extra.notify } : {}),
     buildWorkspaceDemo:
       extra.build ??
       (async (p) => {
@@ -209,6 +217,40 @@ describe('release', () => {
     expect(releaseWorktrees()).toEqual([]);
     expect(git(projectPath, 'status', '--porcelain')).toBe('');
     expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('develop');
+  });
+
+  it('pages once when a release finishes and once when it stops, naming the version and the step', async () => {
+    approveChecks();
+    const pages: { occurrence: string; title: string; event: string }[] = [];
+    const notify: Deps['notify'] = (_p, occurrence, m) =>
+      pages.push({ occurrence, title: m.title, event: m.event });
+    const head = await developWithTickets();
+    const jobs = jobsWith({
+      notify,
+      build: async () => ({ ...okBuild(), ok: false, output: 'the build broke' }),
+    });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const failedJob = storedJob();
+    expect(pages).toEqual([
+      {
+        occurrence: `${projectId}:release:${failedJob.id}:failed`,
+        title: 'Release v0.2.0 stopped at checks',
+        event: 'release_finished',
+      },
+    ]);
+    const retrying = jobsWith({ notify });
+    await retrying.retry(projectId);
+    await retrying.idle();
+    const doneJob = storedJob();
+    expect(doneJob.state).toBe('done');
+    expect(pages.slice(1)).toEqual([
+      {
+        occurrence: `${projectId}:release:${doneJob.id}:done`,
+        title: 'Released v0.2.0',
+        event: 'release_finished',
+      },
+    ]);
   });
 
   it('red checks stop before anything is pushed, and Undo promote puts main back', async () => {

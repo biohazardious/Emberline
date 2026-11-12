@@ -15,6 +15,8 @@ export const NotificationSettings = z.object({
   onQuotaResumed: z.boolean(),
   onWaitingInput: z.boolean(),
   onRunFinished: z.boolean(),
+  /** A pull that stops for a person, and a finished release. Absent in settings stored before it. */
+  onGitEvents: z.boolean().default(true),
 });
 export type NotificationSettings = z.infer<typeof NotificationSettings>;
 
@@ -34,6 +36,7 @@ export const UpdateNotificationSettingsBody = z
     onQuotaResumed: z.boolean(),
     onWaitingInput: z.boolean(),
     onRunFinished: z.boolean(),
+    onGitEvents: z.boolean(),
   })
   .partial();
 export type UpdateNotificationSettingsBody = z.input<typeof UpdateNotificationSettingsBody>;

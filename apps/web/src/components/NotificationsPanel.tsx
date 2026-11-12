@@ -17,6 +17,7 @@ export function NotificationsPanel() {
   const [onQuotaResumed, setOnQuotaResumed] = useState(true);
   const [onWaitingInput, setOnWaitingInput] = useState(true);
   const [onRunFinished, setOnRunFinished] = useState(false);
+  const [onGitEvents, setOnGitEvents] = useState(true);
   const [busy, setBusy] = useState<'save' | 'test' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +33,7 @@ export function NotificationsPanel() {
         setOnQuotaResumed(res.onQuotaResumed);
         setOnWaitingInput(res.onWaitingInput);
         setOnRunFinished(res.onRunFinished);
+        setOnGitEvents(res.onGitEvents);
       })
       .catch(() => undefined);
   }, []);
@@ -52,6 +54,7 @@ export function NotificationsPanel() {
         onQuotaResumed,
         onWaitingInput,
         onRunFinished,
+        onGitEvents,
       });
       setSettings(updated);
       setToken('');
@@ -214,6 +217,14 @@ export function NotificationsPanel() {
                   onChange={(e) => setOnRunFinished(e.target.checked)}
                 />
                 Run completed / failed
+              </label>
+              <label className="review-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={onGitEvents}
+                  onChange={(e) => setOnGitEvents(e.target.checked)}
+                />
+                Git: a pull that stops, a finished release
               </label>
             </div>
 
