@@ -3,6 +3,9 @@ DEV  := docker compose -f compose.dev.yaml
 PROD := docker compose
 E2E_OUT ?= e2e-results
 E2E_PROJECT ?= emberline-e2e
+# Image tag of the e2e stack: another tag keeps parallel runs on one engine apart.
+E2E_TAG ?= e2e
+export EMBERLINE_E2E_TAG := $(E2E_TAG)
 E2E  := docker compose -p $(E2E_PROJECT) -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
@@ -44,23 +47,24 @@ attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
 
-e2e: ## End-to-end smoke test, then the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), on an isolated core + runner + ops stack (port 7498, removed afterwards)
+e2e: ## End-to-end smoke test, the isolation suite (e2e/isolation.sh), then the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), on an isolated core + runner + ops stack (port 7498, removed afterwards)
 	@set -e; ws=$$(mktemp -d); chmod 777 $$ws; \
 	export EMBERLINE_WORKSPACES_HOST_DIR=$$ws; \
 	if [ -z "$(E2E_PREBUILT)" ]; then \
-	  docker build -q --target core -t emberline/core:e2e . >/dev/null; \
-	  docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	  docker build -q --target core -t emberline/core:$(E2E_TAG) . >/dev/null; \
+	  docker build -q --target runner -t emberline/runner:$(E2E_TAG) . >/dev/null; \
 	fi; \
 	$(E2E) create >/dev/null && docker run --rm --user root -v "$$PWD/e2e:/e2e:ro" -v $$ws:/workspaces \
 	  -v $(E2E_PROJECT)_ptyd-socket:/run/emberline -v $(E2E_PROJECT)_runner-logs:/var/log/emberline \
 	  -v $(E2E_PROJECT)_runner-home:/home/node -v $(E2E_PROJECT)_runner-tools:/opt/ai-tools \
-	  emberline/runner:e2e /e2e/seed-0.6-volumes.sh || { $(E2E) down -v >/dev/null 2>&1; exit 1; }; \
+	  emberline/runner:$(E2E_TAG) /e2e/seed-0.6-volumes.sh || { $(E2E) down -v >/dev/null 2>&1; exit 1; }; \
 	$(E2E) up -d --wait; \
 	mkdir -p "$(E2E_OUT)"; chmod 777 "$(E2E_OUT)"; status=0; \
-	docker run --rm --network $(E2E_PROJECT)_default -v "$$PWD/e2e:/e2e:ro" emberline/core:e2e \
+	docker run --rm --network $(E2E_PROJECT)_default -v "$$PWD/e2e:/e2e:ro" emberline/core:$(E2E_TAG) \
 	  node /e2e/smoke.mjs http://core:7420 || status=$$?; \
+	[ $$status -ne 0 ] || e2e/isolation.sh "$(E2E_PROJECT)" "$(E2E_TAG)" || status=$$?; \
 	[ $$status -ne 0 ] || docker run --rm --user node --network $(E2E_PROJECT)_default -v "$$PWD/e2e:/e2e:ro" \
-	  -v "$$PWD/$(E2E_OUT):/out" -e E2E_OUT=/out emberline/runner:e2e \
+	  -v "$$PWD/$(E2E_OUT):/out" -e E2E_OUT=/out emberline/runner:$(E2E_TAG) \
 	  node /e2e/ui/run.mjs http://core:7420 || status=$$?; \
 	[ $$status -eq 0 ] || $(E2E) logs --tail 80; \
 	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws 2>/dev/null || true; exit $$status

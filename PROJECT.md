@@ -84,7 +84,7 @@ Milestone 1 serves the contributor and the adapter author. Its acceptance criter
 - **Backend:** Fastify (REST + `@fastify/websocket`) in `apps/core`, plus `apps/ptyd`, a node-pty host behind a Unix-socket RPC, so agents outlive core restarts.
 - **Database:** SQLite through better-sqlite3 and Drizzle ORM (WAL mode, SQL migrations in `apps/core/drizzle`). It is one embedded file for a single-user install and needs no server.
 - **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`, error/filter UI primitives in `apps/web/src/error-filter.css`, and responsive workbench breakpoints in `apps/web/src/responsive.css`. No CSS framework.
-- **Testing:** Vitest for unit and integration tests across all packages (how to run them and what covers which workflow: [`docs/TESTING.md`](docs/TESTING.md)). `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack, and `e2e/ui/run.mjs` is a Playwright ticket-to-merge regression suite on the same stack (wizard import from a git URL, a card following the agent, an Inbox question, a blocking review comment closing the merge gate, a usage-limit pause that auto-resumes). It uses the fake forge (`e2e/fake-forge.mjs`) and a scripted Claude stand-in (`e2e/fake-claude.mjs`, set as `EMBERLINE_CLAUDE_COMMAND`); a failed scenario leaves a trace zip and screenshot in `e2e-results/`, which CI uploads. `make e2e-upgrade` (`e2e/upgrade-paths.sh`, CI step) seeds 0.5/0.6/0.7 data volumes, upgrades them to the current images and checks the pre-migration snapshot, seeded rows, secrets, the ops-missing banner and a snapshot rollback; it fails if any migration lacks a snapshot or breaks a seeded row.
+- **Testing:** Vitest for unit and integration tests across all packages (how to run them and what covers which workflow: [`docs/TESTING.md`](docs/TESTING.md)). `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack, and `e2e/ui/run.mjs` is a Playwright ticket-to-merge regression suite on the same stack (wizard import from a git URL, a card following the agent, an Inbox question, a blocking review comment closing the merge gate, a usage-limit pause that auto-resumes). It uses the fake forge (`e2e/fake-forge.mjs`) and a scripted Claude stand-in (`e2e/fake-claude.mjs`, set as `EMBERLINE_CLAUDE_COMMAND`); a failed scenario leaves a trace zip and screenshot in `e2e-results/`, which CI uploads. `e2e/isolation.sh` (with `e2e/isolation/run.mjs`), run by `make e2e` after the smoke test, is the isolation regression suite: SECURITY.md's "The shared runner" guarantees as named tests SR-01–SR-20 (table in `docs/TESTING.md`), checked from an agent terminal (ptyd, inherited terminals, ops and core processes, SSH keys, the browser daemon) and from ops, a container named `docker` and the host (cookie replays, the git gateway, volume scan, mounts); reverting the 0.7.0 terminal-inheritance fix fails SR-05/SR-06. `make e2e-upgrade` (`e2e/upgrade-paths.sh`, CI step) seeds 0.5/0.6/0.7 data volumes, upgrades them to the current images and checks the pre-migration snapshot, seeded rows, secrets, the ops-missing banner and a snapshot rollback; it fails if any migration lacks a snapshot or breaks a seeded row.
 - **Authentication:** A single admin account with an argon2id password set through a one-time setup token. HTTP-only session cookies, plus a per-login key sent as the CSRF header and the WebSocket subprotocol (DESIGN §3.8).
 - **Wire contracts:** zod schemas in `packages/protocol` validate every boundary: REST bodies, WebSocket events, hook payloads, ptyd RPC and `.emberline/worktree.yml`.
 - **Deploy target:** Docker Compose (`compose.yaml`). One multi-stage `Dockerfile` builds the `core` and `runner` images and a `check` stage that serves as the CI gate.
@@ -206,18 +206,18 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 
 ### 3.5 Commands (from the repo root)
 
-| Command                          | What it does                                                     |
-| -------------------------------- | ---------------------------------------------------------------- |
-| `pnpm install --frozen-lockfile` | Install the workspace                                            |
-| `pnpm dev`                       | Run the dev servers for all packages in parallel                 |
-| `pnpm build`                     | Build every package (`tsc`; Vite for web)                        |
-| `pnpm lint` / `pnpm typecheck`   | ESLint (including layer boundaries) / `tsc --noEmit` per package |
-| `pnpm test`                      | Vitest across `{apps,packages}/*/src/**/*.test.ts`               |
-| `pnpm format:check`              | Prettier check                                                   |
-| `make check`                     | All of the above inside the dev toolbox container                |
-| `make ci`                        | The Dockerfile `check` stage: the CI gate                        |
-| `make e2e`                       | End-to-end smoke test + Playwright suite on an isolated stack    |
-| `make e2e-upgrade`               | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill    |
+| Command                          | What it does                                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pnpm install --frozen-lockfile` | Install the workspace                                                                                 |
+| `pnpm dev`                       | Run the dev servers for all packages in parallel                                                      |
+| `pnpm build`                     | Build every package (`tsc`; Vite for web)                                                             |
+| `pnpm lint` / `pnpm typecheck`   | ESLint (including layer boundaries) / `tsc --noEmit` per package                                      |
+| `pnpm test`                      | Vitest across `{apps,packages}/*/src/**/*.test.ts`                                                    |
+| `pnpm format:check`              | Prettier check                                                                                        |
+| `make check`                     | All of the above inside the dev toolbox container                                                     |
+| `make ci`                        | The Dockerfile `check` stage: the CI gate                                                             |
+| `make e2e`                       | Smoke test, isolation suite and Playwright suite on an isolated stack (`E2E_TAG` picks the image tag) |
+| `make e2e-upgrade`               | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill                                         |
 
 | `make up` / `make down` | Production stack (core, runner, ops, docker) |
 
@@ -285,4 +285,4 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
       anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and
       internal hook routes stay closed without a run token. A new route that forgets authentication fails that test.
-      `make e2e` runs `e2e/smoke.mjs` against an isolated core + runner + ops stack seeded with 0.6.x volumes.
+      `make e2e` runs `e2e/smoke.mjs` and the isolation suite (`e2e/isolation.sh`, SR-01–SR-20) against an isolated core + runner + ops stack seeded with 0.6.x volumes.
