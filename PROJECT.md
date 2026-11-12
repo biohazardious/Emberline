@@ -104,6 +104,10 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   `Scheduler.recover()` first ends runs whose sessions ptyd no longer reports (freeing their slots), then resumes due pauses.
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
+  Before `setup` runs (a run's worktree and the build gate), core provisions the package manager package.json's
+  `packageManager` pins when a setup command names it and the runner's PATH lacks it: today pnpm, installed at exactly that
+  version with `npm install -g` into the runner-tools volume (`apps/core/src/toolchain/package-manager.ts`). The run records
+  `worktree_toolchain_installed` ("Installed pnpm 10.15.0 for setup") or `worktree_toolchain_failed`; npm and yarn projects are untouched.
 - **Compose preview environments:** one stack per worktree (`apps/core/src/docker/compose-preview.ts`): its own project name,
   a host port from `EMBERLINE_PREVIEW_PORTS_DOCKER`, cpu/memory caps from `EMBERLINE_PREVIEW_CPUS` / `EMBERLINE_PREVIEW_MEMORY_MB`
   (default 1 cpu, 1024 MB per container), and a refusal of fixed `container_name`/volume/network names (`docker/compose-isolation.ts`).

@@ -218,6 +218,7 @@ import {
   TEARDOWN_TIMEOUT_MS,
   unignoredSecretsNote,
 } from '../worktree-config/lifecycle.js';
+import { ensureSetupPackageManager, type ProvisionOutcome } from '../toolchain/package-manager.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
 import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import {
@@ -1788,6 +1789,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const dockerEnv = await this.dockerEnvFor(row);
       const startedAt = Date.now();
       const deadline = startedAt + SETUP_TOTAL_MS;
+      const provisioned = await ensureSetupPackageManager(row.worktreePath, setup, {
+        execId: setupExecId(row.id),
+        env: dockerEnv,
+      });
+      if (provisioned.status === 'cancelled' || !this.setupGoesOn(row.id)) return;
+      this.noteProvisioning(row.id, provisioned);
       for (const [index, command] of setup.entries()) {
         if (!this.setupGoesOn(row.id)) return;
         const left = deadline - Date.now();
@@ -1842,6 +1849,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       }
     } finally {
       this.settingUp.delete(row.id);
+    }
+  }
+
+  /** Records the package manager setup needed: installed for it, or why that failed. */
+  private noteProvisioning(runId: string, provisioned: ProvisionOutcome): void {
+    if (provisioned.status === 'installed') {
+      this.note(runId, 'worktree_toolchain_installed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: provisioned.message,
+      });
+    } else if (provisioned.status === 'failed') {
+      this.note(runId, 'worktree_toolchain_failed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: `Could not install ${provisioned.manager} ${provisioned.version} for setup`,
+        exitCode: provisioned.outcome.exitCode,
+        timedOut: provisioned.outcome.timedOut,
+        tail: provisioned.outcome.tail,
+      });
     }
   }
 
