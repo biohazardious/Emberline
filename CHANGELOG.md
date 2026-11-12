@@ -6,6 +6,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Added
 
+- **Bulk board actions.** The board's **Select** toggle turns cards into checkboxes (click, Space or Enter; shift-click picks a range; each column header offers All/None), and a toolbar moves, reprioritises, reassigns or deletes every picked ticket in one request (`POST /api/projects/:projectId/tickets/bulk`, up to 100 tickets). Tickets an agent is still working on, and tickets whose run branch would skip its merge when closed, are left as they were, stay selected and are listed with the reason. Escape leaves selection mode.
 - Compose previews run one stack per worktree with per-container caps: `EMBERLINE_PREVIEW_CPUS` (default 1) and `EMBERLINE_PREVIEW_MEMORY_MB` (default 1024, no swap). A ticket moved to Done takes its runs' preview stacks down with their volumes. `GET /api/projects/:id/container-preview/environments` lists every stack as starting, healthy, failed (with the end of its output) or stopped.
 
 ### Changed

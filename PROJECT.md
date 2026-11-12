@@ -92,6 +92,14 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   The strict query schema rejects unknown formats, statuses and keys. JSON carries whole-board status counts and the done ratio;
   CSV is RFC 4180 with a UTF-8 BOM and neutralises formula-leading cells (`apps/core/src/tickets/export.ts`). The board's Export menu downloads it.
 
+- **Bulk board actions:** `POST /api/projects/:projectId/tickets/bulk` takes a `BulkTicketBody` (`packages/protocol/src/api/ticket-bulk.ts`,
+  a discriminated union over `move | priority | persona | delete`, 1–`BULK_TICKET_LIMIT` (100) ids or keys, strict keys) and
+  returns a `BulkTicketResult` (`updated`, `removed`, `unchanged`, `failed`). `apps/core/src/tickets/bulk.ts` applies each ticket
+  through `TicketService.update`/`remove` in board order, so dependents and auto-dispatch behave as for a single edit. It refuses,
+  per ticket, a move or delete of a ticket with a live run (`run_active`) and a bulk close of a ticket with a run branch
+  (`merge_required`: closing it from the drawer merges it). The board's **Select** mode (`hooks/useBoardSelection.ts`,
+  `boardSelection.ts`, `components/BoardBulkBar.tsx`, `board-bulk.css`) keeps refused tickets selected and lists why.
+
 Every value that crosses a process boundary is parsed with its zod schema on arrival. New contracts go into
 `packages/protocol` first, then core and web consume them.
 
@@ -155,7 +163,10 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       Event retention (`runs/event-retention.ts`, `EMBERLINE_EVENT_RETENTION_DAYS`, default 90, `0` off) compacts old `done`
       runs to their state changes, summary, handoff note and usage totals (`run_event_compactions`); `event-indexes.test.ts`
       holds the inbox and board under 50 ms on a seeded 100k-event database and pins the hot query plans.
-- [ ] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
+- [x] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
+      The board (create, drag between columns, dependencies, start/prompt runs, review, accept/merge, export) and its bulk actions
+      (`ticket-bulk-route.test.ts`, `boardBulkBar.test.ts`, `boardSelection.test.ts`) are covered end to end through the REST API
+      and the React views.
 - [x] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
       anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and
