@@ -1,0 +1,5 @@
+{
+  "error": "cli_exit",
+  "reason": "Loaded cached credentials. I'll start by reading PROJECT.md to understand the layout of the workspace. [API Error: You have exhausted your capacity on this model. Your quota will reset after 2h31m12s. (Status: RESOURCE_EXHAUSTED)]",
+  "message": "Loaded cached credentials. I'll start by reading PROJECT.md to understand the layout of the workspace. [API Error: You have exhausted your capacity on this model. Your quota will reset after 2h31m12s. (Status: RESOURCE_EXHAUSTED)]"
+}

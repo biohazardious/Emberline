@@ -1,0 +1,5 @@
+{
+  "error": "cli_exit",
+  "reason": "-------- workdir: /workspaces/.worktrees/demo/7f3a9c21 model: gpt-5-codex provider: openai user instructions: KEY-12: fix the failing lint step ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at 3:42 PM.",
+  "message": "-------- workdir: /workspaces/.worktrees/demo/7f3a9c21 model: gpt-5-codex provider: openai user instructions: KEY-12: fix the failing lint step ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at 3:42 PM."
+}

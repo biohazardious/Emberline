@@ -79,13 +79,7 @@ export interface LaunchSpec {
   env: Record<string, string>;
 }
 
-/**
- * Whether a Notification hook payload is a permission prompt ("a human must act now") rather than an
- * idle reminder. Shared by the Claude adapter (state) and core (attention reason).
- */
-export function isPermissionNotification(payload: Record<string, unknown>): boolean {
-  const type = typeof payload.notification_type === 'string' ? payload.notification_type : undefined;
-  if (type) return type === 'permission_prompt';
-  const message = typeof payload.message === 'string' ? payload.message : '';
-  return /permission/i.test(message);
-}
+export * from './limits.js';
+export * from './provider.js';
+export * from './state.js';
+export * from './wrapper.js';

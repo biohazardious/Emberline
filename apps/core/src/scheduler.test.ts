@@ -5,6 +5,7 @@ import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { quotaWindows, runs as runsTable } from './db/schema.js';
+import { Scheduler } from './scheduler/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
 let t: TestApp;
@@ -282,6 +283,90 @@ describe('scheduler', () => {
     await t.scheduler.tick();
     expect((await scheduler()).window).toBeNull();
     await expect.poll(() => readLines(a.id), { timeout: 5_000 }).toContain('Continue where you left off.');
+  });
+
+  describe('crash-safe recovery', () => {
+    const CONTINUE = 'Continue where you left off.';
+
+    /** Core goes down and comes back: the old scheduler is gone, a new one reads only SQLite. */
+    const restartScheduler = (): Scheduler => {
+      t.scheduler.dispose();
+      // An hour-long interval: within the test only the re-armed wake timer can end a pause.
+      return new Scheduler(t.db, t.runs, t.ptyd, t.config, {
+        jitterMinMs: 0,
+        jitterMaxMs: 0,
+        screenSettleMs: 200,
+        tickMs: 3_600_000,
+      });
+    };
+
+    it('a restart mid-pause re-arms the stored reset and resumes the run exactly once', async () => {
+      const a = await submit();
+      const tokenA = await work(a);
+      await hook(a.id, 'StopFailure', tokenA, {
+        error: 'rate_limit',
+        last_assistant_message: 'resets 11:59pm (UTC)',
+      });
+      expect((await getRun(a.id)).state).toBe('rate_limited');
+
+      const next = restartScheduler();
+      try {
+        // While core was down the reset came close: it is now just ahead.
+        t.db
+          .update(quotaWindows)
+          .set({ resumeAt: new Date(Date.now() + 800) })
+          .run();
+        const resume = vi.spyOn(t.runs, 'resume');
+        next.start();
+        await Promise.all([next.recover(), next.recover()]);
+        expect(next.state()).toMatchObject({ rateLimited: 1, windows: [{ resumedAt: null }] });
+        expect(resume).not.toHaveBeenCalled();
+
+        await expect.poll(() => readLines(a.id), { timeout: 5_000 }).toContain(CONTINUE);
+        // Further passes after the resume dispatch nothing again.
+        await Promise.all([next.tick(), next.recover()]);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(resume).toHaveBeenCalledTimes(1);
+        expect(readLines(a.id).filter((line) => line === CONTINUE)).toHaveLength(1);
+        expect((await getRun(a.id)).events.filter((e) => e.type === 'resumed')).toHaveLength(1);
+        expect(t.db.select().from(quotaWindows).get()?.resumedAt).not.toBeNull();
+        expect(next.state().windows).toEqual([]);
+      } finally {
+        next.dispose();
+      }
+    });
+
+    it('a disposed scheduler stops listening to the runs, so two instances never both dispatch', () => {
+      const events = ['run', 'rateLimited', 'removed'] as const;
+      const counts = () => events.map((event) => t.runs.listenerCount(event));
+      const before = counts();
+      const next = restartScheduler();
+      expect(counts()).toEqual(before);
+      next.dispose();
+      expect(counts()).toEqual(before.map((n) => n - 1));
+    });
+
+    it('frees the slot of a run whose session ptyd no longer reports, then starts the queue', async () => {
+      await api('PATCH', '/api/scheduler', { maxConcurrentRuns: 1 });
+      const a = await submit();
+      await work(a);
+      const b = await submit();
+      expect(b.state).toBe('queued');
+
+      const next = restartScheduler();
+      try {
+        // The runner lost a's session while core was down.
+        t.db.update(runsTable).set({ ptydSessionId: 'lost-session' }).where(eq(runsTable.id, a.id)).run();
+        expect(next.state().busy).toBe(1);
+        await next.recover();
+        await expect.poll(async () => (await getRun(b.id)).state, { timeout: 5_000 }).toBe('starting');
+        const lost = t.db.select().from(runsTable).where(eq(runsTable.id, a.id)).get();
+        expect(lost?.endedAt).not.toBeNull();
+        expect(next.state()).toMatchObject({ busy: 1, queued: 0 });
+      } finally {
+        next.dispose();
+      }
+    });
   });
 
   it('lets the user end the pause early', async () => {

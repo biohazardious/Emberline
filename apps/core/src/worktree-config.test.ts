@@ -503,6 +503,53 @@ describe('run worktree lifecycle', () => {
     expect(await promptOf(run.id)).toBe('build it');
   });
 
+  it('installs the pnpm package.json pins before a setup that runs it, as a run event', async () => {
+    const project = await createProject(setupYml('pnpm install --frozen-lockfile > pnpm-ran'));
+    writeFileSync(
+      path.join(project.path, 'package.json'),
+      JSON.stringify({ name: 'app', packageManager: 'pnpm@10.15.0' }),
+    );
+    const git = (...args: string[]) => execFileSync('git', ['-C', project.path, ...args]);
+    git('add', 'package.json');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'pin pnpm');
+    await approveHead(project.id);
+    // A runner without pnpm: a stand-in npm drops a `pnpm` that prints its version into the tools volume.
+    const fakeBin = path.join(t.dir, 'fake-bin');
+    const toolsDir = path.join(t.dir, 'ai-tools');
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(
+      path.join(fakeBin, 'npm'),
+      [
+        '#!/bin/sh',
+        'for arg in "$@"; do case "$arg" in pnpm@*) version="${arg#pnpm@}";; esac; done',
+        'mkdir -p "$NPM_CONFIG_PREFIX/bin"',
+        'printf \'#!/bin/sh\\necho %s\\n\' "$version" > "$NPM_CONFIG_PREFIX/bin/pnpm"',
+        'chmod +x "$NPM_CONFIG_PREFIX/bin/pnpm"',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const previous = { path: process.env.PATH, tools: process.env.EMBERLINE_TOOLS_DIR };
+    process.env.PATH = [fakeBin, path.join(toolsDir, 'npm', 'bin'), '/usr/bin', '/bin'].join(':');
+    process.env.EMBERLINE_TOOLS_DIR = toolsDir;
+    try {
+      const run = await startRun(project.id, 'build it');
+      expect(await payloadOf(run.id, 'worktree_toolchain_installed')).toEqual({
+        manager: 'pnpm',
+        version: '10.15.0',
+        message: 'Installed pnpm 10.15.0 for setup',
+      });
+      expect(readFileSync(path.join(run.worktreePath, 'pnpm-ran'), 'utf8')).toBe('10.15.0\n');
+      const types = await typesOf(run.id);
+      expect(types).toContain('worktree_setup_finished');
+      expect(types).not.toContain('worktree_setup_failed');
+      expect(await promptOf(run.id)).toBe('build it');
+    } finally {
+      process.env.PATH = previous.path;
+      if (previous.tools === undefined) delete process.env.EMBERLINE_TOOLS_DIR;
+      else process.env.EMBERLINE_TOOLS_DIR = previous.tools;
+    }
+  });
+
   it('a failed setup still starts the run, and its first prompt says what failed', async () => {
     const project = await createProject(
       'version: 1\nsetup:\n  - echo first >> order\n  - "echo broken install >&2; exit 7"\n  - echo never >> order\n',

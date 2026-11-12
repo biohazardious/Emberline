@@ -5,18 +5,13 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import { isPermissionNotification, type AgentState } from '@emberline/adapter-sdk';
 import {
-  CONTINUE_PROMPT,
-  decoratePromptWithPersona,
-  headlessModeProblem,
-  nextStateFromHook,
-  PERSONA_CATALOG,
+  isPermissionNotification,
+  type AgentState,
   type RateLimitInfo,
-  rateLimitFromHook,
   stateAfterExit,
-  transientErrorFromHook,
-} from '@emberline/adapter-claude';
+} from '@emberline/adapter-sdk';
+import { CONTINUE_PROMPT, PERSONA_CATALOG, personaBrief } from '@emberline/adapter-claude';
 import {
   type AgentId,
   AgentPreviewBody,
@@ -218,6 +213,7 @@ import {
   TEARDOWN_TIMEOUT_MS,
   unignoredSecretsNote,
 } from '../worktree-config/lifecycle.js';
+import { ensureSetupPackageManager, type ProvisionOutcome } from '../toolchain/package-manager.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
 import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
 import {
@@ -1038,7 +1034,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * a prompt (`-p`, `exec`, `--message`), as every respawn is. Text typed into it is lost.
    */
   private exitsAfterTurn(row: RunRow): boolean {
-    if (providerAdapter(row.agent).claudeNative) return false;
+    if (providerAdapter(row.agent).hooks === 'native') return false;
     return row.prompt.trim() !== '' || this.hasEvent(row.id, 'respawning');
   }
 
@@ -1174,7 +1170,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   }
 
   private refuseHeadlessAsk(agent: string, mode: PermissionMode, prompt: string): void {
-    const problem = headlessModeProblem(agent, mode, prompt.length > 0);
+    const problem = providerAdapter(agent).headlessProblem(mode, prompt.length > 0);
     if (problem) throw conflict(problem, 'headless_needs_auto');
   }
 
@@ -1693,8 +1689,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     // Enqueue refuses this for the first lane; a lane picked later (a fallback, a handoff) or a run
     // from before that check would deny every command that needs approval, without telling anyone.
-    const headless = headlessModeProblem(
-      row.agent,
+    const headless = providerAdapter(row.agent).headlessProblem(
       row.permissionMode as PermissionMode,
       Boolean(options.prompt),
     );
@@ -1788,6 +1783,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       const dockerEnv = await this.dockerEnvFor(row);
       const startedAt = Date.now();
       const deadline = startedAt + SETUP_TOTAL_MS;
+      const provisioned = await ensureSetupPackageManager(row.worktreePath, setup, {
+        execId: setupExecId(row.id),
+        env: dockerEnv,
+      });
+      if (provisioned.status === 'cancelled' || !this.setupGoesOn(row.id)) return;
+      this.noteProvisioning(row.id, provisioned);
       for (const [index, command] of setup.entries()) {
         if (!this.setupGoesOn(row.id)) return;
         const left = deadline - Date.now();
@@ -1845,6 +1846,26 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
   }
 
+  /** Records the package manager setup needed: installed for it, or why that failed. */
+  private noteProvisioning(runId: string, provisioned: ProvisionOutcome): void {
+    if (provisioned.status === 'installed') {
+      this.note(runId, 'worktree_toolchain_installed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: provisioned.message,
+      });
+    } else if (provisioned.status === 'failed') {
+      this.note(runId, 'worktree_toolchain_failed', {
+        manager: provisioned.manager,
+        version: provisioned.version,
+        message: `Could not install ${provisioned.manager} ${provisioned.version} for setup`,
+        exitCode: provisioned.outcome.exitCode,
+        timedOut: provisioned.outcome.timedOut,
+        tail: provisioned.outcome.tail,
+      });
+    }
+  }
+
   /** Spawns the agent's terminal for a run already marked `starting`. */
   private async spawnTerminal(
     row: RunRow,
@@ -1858,9 +1879,12 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const resolvedModel = (runModel(row) ??
       resolveModelForPersona(this.db, persona, undefined, row.agent as AgentId)) as AgentModelId;
 
+    const provider = providerAdapter(row.agent);
     const dockerEnv = await this.dockerEnvFor(row);
     const personaPrompt =
-      options.type === 'spawned' ? decoratePromptWithPersona(options.prompt, persona) : options.prompt;
+      options.type === 'spawned' && options.prompt
+        ? provider.decoratePrompt(options.prompt, personaBrief(persona))
+        : options.prompt;
     // A fresh start with a task learns about the Docker engine once; a resumed session already knows.
     const decorated =
       personaPrompt && options.type === 'spawned' && dockerEnv.DOCKER_HOST
@@ -1882,7 +1906,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // Antigravity AI credits are a setting in agy's shared settings.json; the CLI seed writes it per run.
     if (row.agent === 'antigravity')
       extraEnv.EMBERLINE_USE_CREDITS = row.credential === 'credits' ? '1' : '0';
-    const provider = providerAdapter(row.agent);
     // Tests substitute a fake `claude`; the Claude-specific extras need the real CLI.
     const isRealClaude = (this.config.claudeCommand ?? 'claude') === 'claude';
     const { playwrightEnabled, customMcpServers } = resolveMcpServersForPersona(this.db, persona);
@@ -1909,7 +1932,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       coreUrl: this.config.hookUrl,
       hookCommand: this.config.hookCommand,
       permissionMode: row.permissionMode as Run['permissionMode'],
-      model: provider.claudeNative && !isRealClaude ? 'auto' : resolvedModel,
+      model: provider.hooks === 'native' && !isRealClaude ? 'auto' : resolvedModel,
       prompt: effectivePrompt,
       resumeSessionId: options.resumeSessionId,
       extraEnv,
@@ -2091,13 +2114,16 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // The agent is alive: the stall watchdog starts over.
     if (live) this.stallWatch.delete(row.id);
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
-    const limitCtx = { agent: row.agent, model: runModel(row) };
+    const provider = providerAdapter(row.agent);
+    const limits = { model: runModel(row), timeZone: this.config.timeZone };
     let next = live
-      ? nextStateFromHook(row.state as AgentState, envelope.event, envelope.payload, limitCtx)
+      ? provider.nextState(row.state as AgentState, envelope.event, envelope.payload, limits)
       : undefined;
     // A temporary provider error: wait as `rate_limited` (no slot, no quota window) and let the
     // scheduler retry the turn, a few times with growing delays.
-    const transient = live ? transientErrorFromHook(envelope.event, envelope.payload, limitCtx) : undefined;
+    const transient = live
+      ? provider.transientErrorFromHook(envelope.event, envelope.payload, limits)
+      : undefined;
     let retry: { attempt: number; at: Date } | undefined;
     if (transient && row.autoRetryCount < AUTO_RETRY_DELAYS_MS.length) {
       const attempt = row.autoRetryCount + 1;
@@ -2144,11 +2170,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     if (next === 'rate_limited') {
-      this.emit(
-        'rateLimited',
-        run,
-        rateLimitFromHook(envelope.event, envelope.payload, new Date(), this.config.timeZone, limitCtx),
-      );
+      this.emit('rateLimited', run, provider.rateLimitFromHook(envelope.event, envelope.payload, limits));
     }
     return run;
   }

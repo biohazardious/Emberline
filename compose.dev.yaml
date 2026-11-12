@@ -14,6 +14,8 @@ x-dev-volumes: &dev-volumes
   - nm-protocol:/workspace/packages/protocol/node_modules
   - nm-adapter-sdk:/workspace/packages/adapter-sdk/node_modules
   - nm-adapter-claude:/workspace/packages/adapter-claude/node_modules
+  - nm-adapter-codex:/workspace/packages/adapter-codex/node_modules
+  - nm-adapter-gemini:/workspace/packages/adapter-gemini/node_modules
   - nm-hook:/workspace/packages/hook/node_modules
   - pnpm-store:/pnpm-store
   - ptyd-socket:/run/emberline
@@ -92,6 +94,8 @@ volumes:
   nm-protocol:
   nm-adapter-sdk:
   nm-adapter-claude:
+  nm-adapter-codex:
+  nm-adapter-gemini:
   nm-hook:
   pnpm-store:
   ptyd-socket:

@@ -230,10 +230,10 @@ describe('provider limits', () => {
   });
 
   it('ends the limit message before a JSON error blob', () => {
-    const gemini =
+    const apiError =
       '[API Error: got status: 429 Too Many Requests. {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details.","status":"RESOURCE_EXHAUSTED"}}]';
-    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', message: gemini }, NOW, 'UTC', {
-      agent: 'gemini',
+    const info = rateLimitFromHook('StopFailure', { error: 'cli_exit', message: apiError }, NOW, 'UTC', {
+      agent: 'copilot',
     });
     expect(info?.message).toBe('Error: got status: 429 Too Many Requests.');
   });
@@ -253,7 +253,7 @@ describe('provider limits', () => {
       'Quota exceeded for metric generate_content',
     ]) {
       expect(
-        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' })
+        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'copilot' })
           ?.pool,
       ).toBe('*');
     }
@@ -272,7 +272,7 @@ describe('provider limits', () => {
       'tests: 429 passed',
     ]) {
       expect(
-        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' }),
+        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'copilot' }),
         message,
       ).toBeUndefined();
     }
@@ -286,7 +286,7 @@ describe('provider limits', () => {
       'rate_limit_error: Number of requests has exceeded your rate limit',
     ]) {
       expect(
-        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'codex' }),
+        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'aider' }),
         message,
       ).toBeDefined();
     }
@@ -298,11 +298,11 @@ describe('provider limits', () => {
   });
 
   it('keeps an explicit 429 / RESOURCE_EXHAUSTED a limit when it only points at billing details', () => {
-    const gemini =
+    const apiError =
       '[API Error: got status: 429 Too Many Requests. {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details.","status":"RESOURCE_EXHAUSTED"}}]';
     expect(
-      rateLimitFromHook('StopFailure', { error: 'cli_exit', message: gemini }, NOW, 'UTC', {
-        agent: 'gemini',
+      rateLimitFromHook('StopFailure', { error: 'cli_exit', message: apiError }, NOW, 'UTC', {
+        agent: 'copilot',
       })?.pool,
     ).toBe('*');
     for (const message of [
@@ -311,7 +311,7 @@ describe('provider limits', () => {
       'status 429 payment required',
     ]) {
       expect(
-        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'gemini' }),
+        rateLimitFromHook('StopFailure', { error: 'cli_exit', message }, NOW, 'UTC', { agent: 'copilot' }),
         message,
       ).toBeUndefined();
     }
@@ -323,8 +323,8 @@ describe('provider limits', () => {
       message:
         'insufficient_quota: You exceeded your current quota, please check your plan and billing details',
     };
-    expect(rateLimitFromHook('StopFailure', payload, NOW, 'UTC', { agent: 'codex' })).toBeUndefined();
-    expect(transientErrorFromHook('StopFailure', payload, { agent: 'codex' })).toBeUndefined();
+    expect(rateLimitFromHook('StopFailure', payload, NOW, 'UTC', { agent: 'aider' })).toBeUndefined();
+    expect(transientErrorFromHook('StopFailure', payload, { agent: 'aider' })).toBeUndefined();
   });
 
   it('gives Claude model-specific limits their own pool', () => {

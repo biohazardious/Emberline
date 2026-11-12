@@ -13,6 +13,9 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - `make e2e` now also runs a Playwright regression suite (`e2e/ui/run.mjs`) after the smoke test: it imports a project from a git URL through the wizard, runs tickets with a scripted agent, answers an Inbox question, checks that a blocking review comment keeps the merge gate closed until it is resolved, and waits out a usage limit until the run resumes by itself. CI runs it in the end-to-end step (10-minute limit) and uploads Playwright traces on failure.
 - A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
+- Codex and Gemini CLI have adapters of their own (`packages/adapter-codex`, `packages/adapter-gemini`); core reaches every CLI through one registry keyed by agent id.
+- Codex runs read the reset time of a usage limit from Codex's own message ("try again at 3:42 PM", "try again at Oct 15th, 2026 9:05 AM"), and, when the output does not say, from the session's latest rate-limit record, so they resume at the reset instead of retrying every 15 minutes. "Quota exceeded. Check your plan and billing details." is a billing problem, not a limit.
+- Gemini runs read "Your quota will reset after 2h31m12s", "Please retry in 38.06s" and the interactive "Access resets at 3:45 PM GMT+3". A Gemini limit that names a model (Pro, Flash, Flash-Lite) pauses only that model's lane; a model with no quota at all on the account's tier (`limit: 0`) is no longer waited for.
 
 ## [0.7.0] - 2026-11-11
 
