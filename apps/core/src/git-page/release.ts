@@ -606,13 +606,17 @@ export class ReleaseJobs {
     }
   }
 
-  /** One page when the job ends: done, or failed at its first failed step. Core stopping pages nothing. */
+  /**
+   * One page each time the job ends: done, or failed at its first failed step. Core stopping pages
+   * nothing.
+   */
   private page({ job, project, main }: JobContext): void {
     if (!this.deps.notify || (job.state !== 'done' && job.state !== 'failed')) return;
     const label = job.version ?? job.working;
     const at = job.steps.find((s) => s.status === 'failed')?.name ?? 'the start';
     try {
-      this.deps.notify(project.id, `${project.id}:release:${job.id}:${job.state}`, {
+      // Each end of the job is its own page: a Retry that stops again is paged again.
+      this.deps.notify(project.id, `${project.id}:release:${job.id}:${job.state}:${job.finishedAt ?? ''}`, {
         event: 'release_finished',
         title:
           job.state === 'done'

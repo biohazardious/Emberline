@@ -219,7 +219,7 @@ describe('release', () => {
     expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('develop');
   });
 
-  it('pages once when a release finishes and once when it stops, naming the version and the step', async () => {
+  it('pages once each time a release finishes or stops (a Retry that stops again too), naming the version and the step', async () => {
     approveChecks();
     const pages: { occurrence: string; title: string; event: string }[] = [];
     const notify: Deps['notify'] = (_p, occurrence, m) =>
@@ -234,7 +234,24 @@ describe('release', () => {
     const failedJob = storedJob();
     expect(pages).toEqual([
       {
-        occurrence: `${projectId}:release:${failedJob.id}:failed`,
+        occurrence: `${projectId}:release:${failedJob.id}:failed:${failedJob.finishedAt}`,
+        title: 'Release v0.2.0 stopped at checks',
+        event: 'release_finished',
+      },
+    ]);
+    // A Retry that stops again is a page of its own.
+    const again = jobsWith({
+      notify,
+      build: async () => ({ ...okBuild(), ok: false, output: 'still broken' }),
+    });
+    await sleep(5);
+    await again.retry(projectId);
+    await again.idle();
+    const failedAgain = storedJob();
+    expect(failedAgain.finishedAt).not.toBe(failedJob.finishedAt);
+    expect(pages.slice(1)).toEqual([
+      {
+        occurrence: `${projectId}:release:${failedJob.id}:failed:${failedAgain.finishedAt}`,
         title: 'Release v0.2.0 stopped at checks',
         event: 'release_finished',
       },
@@ -244,9 +261,9 @@ describe('release', () => {
     await retrying.idle();
     const doneJob = storedJob();
     expect(doneJob.state).toBe('done');
-    expect(pages.slice(1)).toEqual([
+    expect(pages.slice(2)).toEqual([
       {
-        occurrence: `${projectId}:release:${doneJob.id}:done`,
+        occurrence: `${projectId}:release:${doneJob.id}:done:${doneJob.finishedAt}`,
         title: 'Released v0.2.0',
         event: 'release_finished',
       },
