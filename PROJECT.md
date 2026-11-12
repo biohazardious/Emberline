@@ -219,7 +219,7 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 | `make e2e`                       | End-to-end smoke test + Playwright suite on an isolated stack    |
 | `make e2e-upgrade`               | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill    |
 
-| `make up` / `make down`          | Production stack (core, runner, ops, docker)                     |
+| `make up` / `make down` | Production stack (core, runner, ops, docker) |
 
 The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm run lint` and `pnpm run test`.
 
