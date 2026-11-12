@@ -32,6 +32,7 @@ engine) is absent; they run in the `make ci` stage.
 | Authentication and route coverage        | `apps/core/src/auth-coverage.test.ts`, `session-binding.test.ts`                                           |
 | Wire contracts                           | `packages/protocol/src` (`ptyd.test.ts`, `hooks.test.ts` for the frame and hook schemas)                   |
 | Package layering, manifests, hygiene     | `apps/core/src/workspace-layers.test.ts`, `workspace-manifests.test.ts` (PROJECT.md AC-1.3–1.5, 1.9, 1.11) |
+| M3 board workflow acceptance (AC-3.x)    | `apps/core/src/m3-workflows.test.ts` (PROJECT.md AC-3.1–3.6)                                               |
 | Layer lint probes, manifests, env, skips | `apps/core/src/m1-layers.test.ts`, `m1-guards.test.ts` (AC-1.3, 1.4, 1.5, 1.9, 1.11)                       |
 | PTY host and framing                     | `apps/ptyd/src/{server,session,framing,drop}.test.ts`                                                      |
 | Hooks and MCP server                     | `packages/hook/src/mcp-server.test.ts`                                                                     |

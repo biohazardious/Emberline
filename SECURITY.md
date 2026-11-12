@@ -10,6 +10,45 @@ You will get an answer within a week. Fixes land on `main` and in the next relea
 
 Only the latest release and `main` receive security fixes.
 
+## Supply chain and release images
+
+### The release gate
+
+CI publishes `ghcr.io/biohazardious/emberline-core` and `ghcr.io/biohazardious/emberline-runner` (linux/amd64) only after the `supply-chain` and `secrets` jobs pass, as well as lint, tests and the end-to-end suite. A version tag cannot publish images while either of these holds:
+
+- **A high or critical advisory** in a production dependency (`pnpm audit --prod`) that `scripts/supply-chain/audit-allowlist.json` does not accept. An entry names the GHSA id and the affected package, says why the advisory does not affect Emberline, and has an `expires` date. After that day the gate fails again until the dependency is fixed or the entry is reviewed again. An entry that no longer matches anything shows up as a warning: remove it. If the registry cannot be reached or returns an incomplete report, the gate fails.
+- **A new install script.** pnpm runs install scripts only for `pnpm.onlyBuiltDependencies`, and that list stays `better-sqlite3`, `esbuild` and `node-pty`. `cpu-features` and `ssh2` have install scripts that were reviewed and stay off (`pnpm.ignoredBuiltDependencies`): they only build optional native bindings, and ssh2 works without them. With `strictDepBuilds` in `pnpm-workspace.yaml`, the install fails for any other dependency with an install script. The gate fails if either list grows, if `pnpm ignored-builds` reports an unreviewed package, or if `pnpm-workspace.yaml` or `.npmrc` sets something that gets around the list.
+
+The secret scan runs gitleaks over the whole history with `.gitleaks.toml`.
+
+Run the gate locally after an install with `pnpm supply-chain` (Node 24), or with `make supply-chain`. Changing the allowed or reviewed packages means changing `scripts/supply-chain/builds.ts` too, so the change shows up in review.
+
+### Verifying an image
+
+Each pushed image digest is signed with [cosign](https://docs.sigstore.dev/) keyless signing: the certificate comes from the CI run's GitHub OIDC identity and is logged in Sigstore's public Rekor transparency log. No signing key exists to leak. The image also has a signed SPDX SBOM attestation. Each GitHub release attaches the same SBOMs (`emberline-core.spdx.json`, `emberline-runner.spdx.json`).
+
+You need cosign 2.x or later. Use a digest, since a tag can move. To check that an image was built by this repository's CI workflow from a version tag:
+
+```sh
+IMAGE=ghcr.io/biohazardious/emberline-core:0.8.0
+cosign verify "$IMAGE" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/biohazardious/[Ee]mberline/\.github/workflows/ci\.yml@refs/tags/v'
+```
+
+For `edge` images built from `main`, use `@refs/heads/main$` in place of `@refs/tags/v`. To check one exact release, use `--certificate-identity https://github.com/biohazardious/Emberline/.github/workflows/ci.yml@refs/tags/v0.8.0` instead of the regular expression. The output names the digest that was verified. Pull that digest (`docker pull ghcr.io/biohazardious/emberline-core@sha256:…`) or pin it in your compose file.
+
+To verify the SBOM attestation and extract the SBOM:
+
+```sh
+cosign verify-attestation "$IMAGE" --type spdxjson \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/biohazardious/[Ee]mberline/\.github/workflows/ci\.yml@refs/tags/v' \
+  | jq -r '.payload' | base64 -d | jq '.predicate' > emberline-core.spdx.json
+```
+
+A failed verification (no matching signature, another identity or issuer) means the image did not come from this repository's CI. Do not run it, and report it as described above.
+
 ## Security model
 
 Emberline gives AI agents a shell, your git credentials and your provider logins. An Emberline login is roughly equivalent to SSH access to the runner container, so protect it accordingly.

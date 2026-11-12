@@ -158,6 +158,10 @@ export function TicketDrawer({
       onChanged(res.ticket);
     });
 
+  const runLive =
+    run !== undefined &&
+    (run.state === 'rate_limited' ||
+      (run.endedAt === null && run.state !== 'done' && run.state !== 'failed'));
   const remove = () =>
     act('delete', async () => {
       if (!confirm(`Delete ${ticket.key}? Its runs, branch and worktree are kept.`)) return;
@@ -346,7 +350,8 @@ export function TicketDrawer({
           <button
             id="drawer-delete"
             className="btn btn-sm btn-ghost danger"
-            disabled={!!busy}
+            disabled={!!busy || runLive}
+            title={runLive ? 'An agent is still working on this ticket: stop its run first' : undefined}
             onClick={() => void remove()}
           >
             Delete
