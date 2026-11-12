@@ -10,19 +10,27 @@ import { type Run, type RunDetail, SyncWorktreeResponse, type Ticket } from '@em
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runs } from './db/schema.js';
+import { runEvents, runs } from './db/schema.js';
 import type * as FactoryService from './factory/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { RESOLVER_REASON, RESOLVER_RUN_CAP } from './tickets/conflict-ladder.js';
 
 /** Build gate results handed out in order (one per check run); an empty queue builds green. */
-const build = vi.hoisted(() => ({ results: [] as Array<{ ok: boolean; output: string }>, calls: 0 }));
+const build = vi.hoisted(() => ({
+  results: [] as Array<{ ok: boolean; output: string }>,
+  calls: 0,
+  /** Runs inside the next check run, before its result (what an agent does while the checks run). */
+  during: null as (() => void) | null,
+}));
 vi.mock('./factory/service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof FactoryService>();
   return {
     ...actual,
     buildWorkspaceDemo: (async (params) => {
       build.calls += 1;
+      const during = build.during;
+      build.during = null;
+      during?.();
       const result = build.results.shift() ?? { ok: true, output: '' };
       return { ...result, targetId: params.targetId, demoEntryRelPath: null, demoUrl: null };
     }) as typeof actual.buildWorkspaceDemo,
@@ -55,6 +63,7 @@ function writeLivingClaude(dir: string): string {
 beforeEach(async () => {
   build.results = [];
   build.calls = 0;
+  build.during = null;
   t = await createTestApp();
   t.config.claudeCommand = writeLivingClaude(t.dir);
   ptydServer = new PtydServer({ socketPath: t.config.ptydSocket });
@@ -358,5 +367,63 @@ describe('M5 layer 3: escalation to an agent (AC-5.3, AC-5.4)', () => {
     expect(body).toMatchObject({ ok: false, resolution: 'resolver_started', conflicts: ['app.js'] });
     const [note] = await noteOf(runB, 'conflict_resolver_started');
     expect(runsFor(b.id).map((r) => r.id)).toContain(note?.runId);
+  });
+});
+
+describe("M5 layer 2 on a person's close: the heal never works under an agent", () => {
+  const ADDITIVE = {
+    file: 'Makefile',
+    base: 'all:\n',
+    a: 'all:\n\nlint:\n\techo lint\n',
+    b: 'all:\n\ntest:\n\techo test\n',
+    buildable: true,
+  };
+  const parents = (dir: string) => wgit(dir, 'rev-list', '--parents', '-n', '1', 'HEAD').trim().split(' ');
+
+  it('skips the heal while the run is live and takes the ordinary conflict path', async () => {
+    const { project, runB } = await conflictingPair(ADDITIVE);
+    const callsBefore = build.calls;
+    const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: runB.id });
+    // The working agent is not interrupted either, so the conflict is the person's.
+    expect(SyncWorktreeResponse.parse(res.json())).toMatchObject({
+      ok: false,
+      resolution: 'manual',
+      conflicts: ['Makefile'],
+    });
+    expect(await noteOf(runB, 'conflict_resolution_failed')).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('working') }),
+    ]);
+    // No merge of main was made in the worktree, and no check ran for one.
+    expect(parents(runB.worktreePath)).toHaveLength(2);
+    expect(build.calls).toBe(callsBefore);
+    expect(await eventTypes(runB)).not.toContain('conflict_heal_failed');
+    expect(await eventTypes(runB)).not.toContain('conflict_auto_resolved');
+  });
+
+  it("keeps what an agent wrote during the heal's checks when they fail, instead of resetting it", async () => {
+    const { project, runB } = await conflictingPair(ADDITIVE);
+    await endWithoutResume(runB);
+    const edited = 'all:\n\ntest:\n\techo test\n\n# the agent, mid-check\n';
+    build.results = [{ ok: false, output: 'make: *** [test] Error 2 (healed tree)' }];
+    build.during = () => {
+      writeFileSync(path.join(runB.worktreePath, 'Makefile'), edited);
+      t.db
+        .insert(runEvents)
+        .values({
+          runId: runB.id,
+          ts: new Date(),
+          source: 'hook',
+          type: 'UserPromptSubmit',
+          state: 'working',
+        })
+        .run();
+    };
+    const res = await api('POST', `/api/projects/${project.id}/sync-worktree`, { runId: runB.id });
+    expect(res.statusCode).toBe(200);
+    expect(build.during).toBeNull();
+    // The heal's merge commit stays and the agent's uncommitted edit is still there.
+    expect(parents(runB.worktreePath)).toHaveLength(3);
+    expect(readFileSync(path.join(runB.worktreePath, 'Makefile'), 'utf8')).toBe(edited);
+    expect(await noteOf(runB, 'conflict_heal_failed')).toEqual([]);
   });
 });

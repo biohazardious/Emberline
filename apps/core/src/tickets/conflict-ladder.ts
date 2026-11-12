@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import type { Run, SyncWorktreeResolution } from '@emberline/protocol';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runEvents, runs, tickets } from '../db/schema.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
@@ -11,6 +11,7 @@ import type { RunService } from '../runs/service.js';
 import { healThenMerge, mergeTarget, type RunMerge } from '../runs/worktree.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { clipText } from '../text/control-chars.js';
+import { occupiesTicketSlot } from './columns.js';
 
 /** Automatic conflict requests into one run's own session (each after main moved again). */
 export const CONFLICT_ATTEMPT_CAP = 3;
@@ -214,6 +215,31 @@ export class ConflictLadder {
     return true;
   }
 
+  /** Whether an agent may be working in the worktree: a run there holds a ticket slot (handoffs share it). */
+  private worktreeBusy(worktreePath: string): boolean {
+    return this.deps.db
+      .select({ state: runs.state })
+      .from(runs)
+      .where(eq(runs.worktreePath, worktreePath))
+      .all()
+      .some((r) => occupiesTicketSlot(r.state as Run['state']));
+  }
+
+  /** The latest switch to `working` or `done` of any run in the worktree: its agents' current turn. */
+  private worktreeTurn(worktreePath: string): number | undefined {
+    const inWorktree = this.deps.db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.worktreePath, worktreePath));
+    return this.deps.db
+      .select({ id: runEvents.id })
+      .from(runEvents)
+      .where(and(inArray(runEvents.runId, inWorktree), inArray(runEvents.state, ['working', 'done'])))
+      .orderBy(desc(runEvents.id))
+      .limit(1)
+      .get()?.id;
+  }
+
   /**
    * A person's close (`POST /api/projects/:id/sync-worktree`) whose merge conflicted: the same ladder
    * as the pipeline's, the deterministic heal first (when the factory setting is on). `merge` merges
@@ -228,26 +254,33 @@ export class ConflictLadder {
   }): Promise<{ result: SyncWorktreeResult; resolution: SyncWorktreeResolution }> {
     const { run, first, project, ticketKey } = p;
     const settings = effectiveFactorySettings(this.deps.db, run.projectId);
-    const healed = settings.autoResolveAdditiveConflicts
-      ? await healThenMerge<HealedMerge>({
-          run,
-          mainWorkspacePath: project.path,
-          ticketKey,
-          stale: () => false,
-          heal: {
-            verify: () =>
-              verifyBuild({
-                db: this.deps.db,
-                run,
-                settings,
-                dockerEnv: () => this.deps.runs.dockerEnvFor(run),
-              }),
-            note: (type, payload) => this.deps.runs.note(run.id, type, payload),
-          },
-          first,
-          merge: p.merge,
-        })
-      : null;
+    // The heal holds a merge in the worktree while the checks run (minutes) and resets it away when
+    // they fail: never under an agent that may be editing there. A busy worktree skips the heal (the
+    // heal itself refuses uncommitted changes); one an agent takes up meanwhile is stale, and its
+    // heal is undone only when the agent left the tree untouched, as on the pipeline's path.
+    const turn = this.worktreeTurn(run.worktreePath);
+    const stale = () => this.worktreeBusy(run.worktreePath) || this.worktreeTurn(run.worktreePath) !== turn;
+    const healed =
+      settings.autoResolveAdditiveConflicts && !stale()
+        ? await healThenMerge<HealedMerge>({
+            run,
+            mainWorkspacePath: project.path,
+            ticketKey,
+            stale,
+            heal: {
+              verify: () =>
+                verifyBuild({
+                  db: this.deps.db,
+                  run,
+                  settings,
+                  dockerEnv: () => this.deps.runs.dockerEnvFor(run),
+                }),
+              note: (type, payload) => this.deps.runs.note(run.id, type, payload),
+            },
+            first,
+            merge: p.merge,
+          })
+        : null;
     const result: HealedMerge = healed ?? first;
     if (result.ok) return { result, resolution: result.resolution ?? 'auto_resolved' };
     const resolution = await this.escalate({
