@@ -148,4 +148,7 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       a backup before pending migrations). Services in `apps/core/src/{tickets,runs,scheduler,review,repository}` own the domain
       logic. `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
 - [ ] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
-- [ ] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
+- [x] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
+      Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
+      anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and
+      internal hook routes stay closed without a run token. A new route that forgets authentication fails that test.
