@@ -6,7 +6,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { evaluateAudit, parseAllowlist, parseAuditReport, type Advisory } from './audit.ts';
+import {
+  AUDIT_SCOPES,
+  evaluateAuditScopes,
+  parseAllowlist,
+  parseAuditReport,
+  type ScopedAdvisory,
+} from './audit.ts';
 import { evaluateBuilds, parseIgnoredBuilds, readBuildConfig } from './builds.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,14 +47,16 @@ function checkBuilds(): boolean {
   return problems.length === 0;
 }
 
-const describe = (advisory: Advisory): string =>
-  `${advisory.severity} ${advisory.ghsa} in ${advisory.module}: ${advisory.title} ${advisory.url} (${advisory.paths.slice(0, 3).join('; ')})`;
+const describe = (advisory: ScopedAdvisory): string =>
+  `${advisory.severity} ${advisory.ghsa} in ${advisory.module} (${advisory.scope}): ${advisory.title} ${advisory.url} (${advisory.paths.slice(0, 3).join('; ')})`;
 
 function checkAudit(): boolean {
   const allowlist = parseAllowlist(readFileSync(ALLOWLIST, 'utf8'));
-  const report = pnpm(['audit', '--prod', '--json']);
-  const advisories = parseAuditReport(report.stdout);
-  const verdict = evaluateAudit(advisories, allowlist, new Date().toISOString().slice(0, 10));
+  const reports = AUDIT_SCOPES.map((scope) => ({
+    scope,
+    advisories: parseAuditReport(pnpm(['audit', scope.flag, '--json']).stdout, scope.severities),
+  }));
+  const verdict = evaluateAuditScopes(reports, allowlist, new Date().toISOString().slice(0, 10));
 
   for (const advisory of verdict.blocking) say('error', `audit: ${describe(advisory)}`);
   for (const entry of verdict.expired) {
@@ -62,10 +70,11 @@ function checkAudit(): boolean {
     say('warning', `audit allowlist: ${entry.id} (${entry.package}) no longer matches; remove it`);
   }
   const ok = verdict.blocking.length === 0 && verdict.expired.length === 0;
+  const total = reports.reduce((sum, report) => sum + report.advisories.length, 0);
   if (ok)
     say(
       'info',
-      `audit: no unallowlisted high or critical advisory (${advisories.length} lower or allowlisted)`,
+      `audit: no unallowlisted high or critical production advisory, no critical dev advisory (${total} lower or allowlisted)`,
     );
   return ok;
 }

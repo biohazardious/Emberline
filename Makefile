@@ -47,7 +47,7 @@ attach: ## Interactive shell inside the dev ptyd (Ctrl-] detaches)
 ci: ## CI gate: lint/typecheck/test inside an image build
 	docker build --target check -t emberline/check:local .
 
-supply-chain: ## Release gate: allowed install scripts + pnpm audit --prod against scripts/supply-chain/audit-allowlist.json
+supply-chain: ## Release gate: allowed install scripts + pnpm audit --prod (high) and --dev (critical) against scripts/supply-chain/audit-allowlist.json
 	$(RUN) pnpm supply-chain
 
 e2e: ## End-to-end smoke test, the isolation suite (e2e/isolation.sh), then the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), on an isolated core + runner + ops stack (port 7498, removed afterwards)

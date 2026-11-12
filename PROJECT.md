@@ -227,7 +227,7 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 | `make ci`                                 | The Dockerfile `check` stage: the CI gate                                                                  |
 | `make e2e`                                | Smoke test, isolation suite and Playwright suite on an isolated stack (`E2E_TAG` picks the image tag)      |
 | `make e2e-upgrade`                        | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill                                              |
-| `pnpm supply-chain` / `make supply-chain` | Release gate: allowed install scripts + `pnpm audit --prod` vs `scripts/supply-chain/audit-allowlist.json` |
+| `pnpm supply-chain` / `make supply-chain` | Release gate: install scripts + `pnpm audit --prod`/`--dev` vs `scripts/supply-chain/audit-allowlist.json` |
 
 | `make up` / `make down` | Production stack (core, runner, ops, docker) |
 
@@ -309,7 +309,7 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       internal hook routes stay closed without a run token. A new route that forgets authentication fails that test.
       `make e2e` runs `e2e/smoke.mjs` and the isolation suite (`e2e/isolation.sh`, SR-01–SR-20) against an isolated core + runner + ops stack seeded with 0.6.x volumes.
       Supply chain: the CI `supply-chain` job gates every image push. It blocks unallowlisted high or critical `pnpm audit --prod`
-      advisories and any install script outside `better-sqlite3`, `esbuild` and `node-pty` (`scripts/supply-chain/`, tests in
+      advisories, critical `pnpm audit --dev` advisories and any install script outside `better-sqlite3`, `esbuild` and `node-pty` (`scripts/supply-chain/`, tests in
       `gate.test.ts`; `strictDepBuilds` in `pnpm-workspace.yaml`). Pushed images get an SPDX SBOM and a cosign keyless signature
       and attestation (verification: SECURITY.md).
 

@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIT_SCOPES,
   evaluateAudit,
+  evaluateAuditScopes,
   parseAllowlist,
   parseAuditReport,
   type Advisory,
@@ -18,15 +20,16 @@ const advisory = (ghsa: string, module: string, severity: string) => ({
   findings: [{ version: '1.0.0', paths: [`apps__core>${module}`] }],
 });
 
-const report = (advisories: ReturnType<typeof advisory>[], high = 0) =>
+const report = (advisories: ReturnType<typeof advisory>[], high = 0, critical = 0) =>
   JSON.stringify({
     actions: [],
     advisories: Object.fromEntries(advisories.map((item, index) => [String(index + 1), item])),
-    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high, critical: 0 } },
+    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high, critical } },
   });
 
 const HIGH = 'GHSA-gpj5-g38j-94v9';
 const LOW = 'GHSA-389g-gv7q-r4x8';
+const CRITICAL = 'GHSA-wf5p-g6vw-rhxx';
 
 describe('pnpm audit gate', () => {
   const advisories: Advisory[] = parseAuditReport(
@@ -79,6 +82,60 @@ describe('pnpm audit gate', () => {
     expect(() => parseAllowlist(file({ ...entry(), expires: 'next year' }))).toThrow(/YYYY-MM-DD/);
     expect(() => parseAllowlist(JSON.stringify({ advisories: [entry(), entry()] }))).toThrow(/twice/);
     expect(parseAllowlist(file(entry()))).toEqual([entry()]);
+  });
+
+  describe('dev dependencies', () => {
+    const [production, dev] = AUDIT_SCOPES;
+    if (!production || !dev) throw new Error('expected a production and a dev scope');
+    const devAdvisories = parseAuditReport(
+      report([advisory(HIGH, 'vite', 'high'), advisory(CRITICAL, 'esbuild', 'critical')], 1, 1),
+      dev.severities,
+    );
+    const scoped = (allowlist: AllowlistEntry[], today = '2026-11-12') =>
+      evaluateAuditScopes(
+        [
+          { scope: production, advisories },
+          { scope: dev, advisories: devAdvisories },
+        ],
+        allowlist,
+        today,
+      );
+
+    it('audits production at high and dev at critical severity', () => {
+      expect(AUDIT_SCOPES.map((scope) => [scope.flag, [...scope.severities]])).toEqual([
+        ['--prod', ['high', 'critical']],
+        ['--dev', ['critical']],
+      ]);
+      const verdict = scoped([]);
+      expect(verdict.blocking.map((item) => [item.scope, item.module, item.severity])).toEqual([
+        ['production', 'drizzle-orm', 'high'],
+        ['dev', 'esbuild', 'critical'],
+      ]);
+    });
+
+    it('lets the same allowlist cover a dev advisory, and calls an entry unused only if no scope matches', () => {
+      const allowlist = [
+        entry(),
+        entry({ id: CRITICAL, package: 'esbuild', reason: 'Only bundles our own code' }),
+        entry({ id: LOW, package: 'nothing-here' }),
+      ];
+      const verdict = scoped(allowlist);
+      expect(verdict.blocking).toEqual([]);
+      expect(verdict.allowed.map((item) => [item.scope, item.ghsa])).toEqual([
+        ['production', HIGH],
+        ['dev', CRITICAL],
+      ]);
+      expect(verdict.unused.map((item) => item.package)).toEqual(['nothing-here']);
+      // An expired entry is reported once and blocks what it covered.
+      const expired = scoped([entry({ id: CRITICAL, package: 'esbuild', expires: '2026-11-11' })]);
+      expect(expired.expired).toHaveLength(1);
+      expect(expired.blocking.map((item) => item.ghsa)).toEqual([HIGH, CRITICAL]);
+    });
+
+    it('fails closed when a dev report counts critical findings it does not list', () => {
+      expect(() => parseAuditReport(report([], 0, 1), dev.severities)).toThrow(/critical findings/);
+      expect(() => parseAuditReport(report([], 3, 0), dev.severities)).not.toThrow();
+    });
   });
 
   it('accepts the checked-in allowlist', () => {

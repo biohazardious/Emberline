@@ -1,7 +1,25 @@
-// `pnpm audit --prod --json` against the reviewed allowlist (audit-allowlist.json).
-// High and critical advisories block a release unless an unexpired allowlist entry names them.
+// `pnpm audit --json` against the reviewed allowlist (audit-allowlist.json), once per dependency scope.
+// High and critical advisories in production dependencies (`--prod`) and critical ones in dev
+// dependencies (`--dev`: the build and test tooling) block a release unless an unexpired allowlist
+// entry names them.
 
+/** Severities that block in production dependencies. */
 export const BLOCKING_SEVERITIES: ReadonlySet<string> = new Set(['high', 'critical']);
+
+/** Severities that block in dev dependencies: they never ship, but they run in CI and on developers' machines. */
+export const DEV_BLOCKING_SEVERITIES: ReadonlySet<string> = new Set(['critical']);
+
+export interface AuditScope {
+  name: string;
+  /** The `pnpm audit` flag that selects the scope. */
+  flag: '--prod' | '--dev';
+  severities: ReadonlySet<string>;
+}
+
+export const AUDIT_SCOPES: readonly AuditScope[] = [
+  { name: 'production', flag: '--prod', severities: BLOCKING_SEVERITIES },
+  { name: 'dev', flag: '--dev', severities: DEV_BLOCKING_SEVERITIES },
+];
 
 export interface Advisory {
   ghsa: string;
@@ -42,8 +60,14 @@ function str(record: Json, key: string, where: string): string {
   return value;
 }
 
-/** Parses the pnpm audit report. Anything that is not a complete report (a registry error) throws: fail closed. */
-export function parseAuditReport(raw: string): Advisory[] {
+/**
+ * Parses the pnpm audit report. Anything that is not a complete report (a registry error, metadata
+ * counting `severities` findings the report does not list) throws: fail closed.
+ */
+export function parseAuditReport(
+  raw: string,
+  severities: ReadonlySet<string> = BLOCKING_SEVERITIES,
+): Advisory[] {
   const report: unknown = JSON.parse(raw);
   if (!isObject(report)) throw new Error('pnpm audit: the report is not a JSON object');
   if ('error' in report) throw new Error(`pnpm audit failed: ${JSON.stringify(report.error)}`);
@@ -69,14 +93,14 @@ export function parseAuditReport(raw: string): Advisory[] {
       ),
     };
   });
-  const counted = [...BLOCKING_SEVERITIES].reduce((sum, severity) => {
+  const counted = [...severities].reduce((sum, severity) => {
     const count = vulnerabilities[severity];
     return sum + (typeof count === 'number' ? count : 0);
   }, 0);
-  const listed = parsed.filter((advisory) => BLOCKING_SEVERITIES.has(advisory.severity)).length;
+  const listed = parsed.filter((advisory) => severities.has(advisory.severity)).length;
   if (counted > 0 && listed === 0) {
     throw new Error(
-      `pnpm audit: metadata counts ${counted} high/critical findings but lists no such advisory`,
+      `pnpm audit: metadata counts ${counted} ${[...severities].join('/')} findings but lists no such advisory`,
     );
   }
   return parsed;
@@ -108,20 +132,58 @@ export function parseAllowlist(raw: string): AllowlistEntry[] {
   });
 }
 
-/** `today` is a YYYY-MM-DD date; an entry is valid through its `expires` day. */
+/**
+ * `today` is a YYYY-MM-DD date; an entry is valid through its `expires` day. Only advisories of
+ * `severities` can block.
+ */
 export function evaluateAudit(
   advisories: Advisory[],
   allowlist: AllowlistEntry[],
   today: string,
+  severities: ReadonlySet<string> = BLOCKING_SEVERITIES,
 ): AuditVerdict {
   const expired = allowlist.filter((entry) => entry.expires < today);
   const active = allowlist.filter((entry) => entry.expires >= today);
   const matches = (entry: AllowlistEntry, advisory: Advisory): boolean =>
     entry.id === advisory.ghsa && entry.package === advisory.module;
 
-  const relevant = advisories.filter((advisory) => BLOCKING_SEVERITIES.has(advisory.severity));
+  const relevant = advisories.filter((advisory) => severities.has(advisory.severity));
   const allowed = relevant.filter((advisory) => active.some((entry) => matches(entry, advisory)));
   const blocking = relevant.filter((advisory) => !allowed.includes(advisory));
   const unused = active.filter((entry) => !advisories.some((advisory) => matches(entry, advisory)));
   return { blocking, allowed, expired, unused };
+}
+
+/** An advisory with the dependency scope (`production`, `dev`) whose report listed it. */
+export type ScopedAdvisory = Advisory & { scope: string };
+
+export interface ScopedAuditVerdict {
+  blocking: ScopedAdvisory[];
+  allowed: ScopedAdvisory[];
+  expired: AllowlistEntry[];
+  unused: AllowlistEntry[];
+}
+
+/**
+ * One verdict over every scope's report, with the same allowlist: an entry is unused only when it
+ * matches nothing in any scope, and an expired entry is reported once.
+ */
+export function evaluateAuditScopes(
+  reports: { scope: AuditScope; advisories: Advisory[] }[],
+  allowlist: AllowlistEntry[],
+  today: string,
+): ScopedAuditVerdict {
+  const verdicts = reports.map(({ scope, advisories }) => {
+    const verdict = evaluateAudit(advisories, allowlist, today, scope.severities);
+    const tag = (advisory: Advisory): ScopedAdvisory => ({ ...advisory, scope: scope.name });
+    return { ...verdict, blocking: verdict.blocking.map(tag), allowed: verdict.allowed.map(tag) };
+  });
+  return {
+    blocking: verdicts.flatMap((verdict) => verdict.blocking),
+    allowed: verdicts.flatMap((verdict) => verdict.allowed),
+    expired: allowlist.filter((entry) => entry.expires < today),
+    unused: allowlist.filter(
+      (entry) => entry.expires >= today && verdicts.every((verdict) => verdict.unused.includes(entry)),
+    ),
+  };
 }

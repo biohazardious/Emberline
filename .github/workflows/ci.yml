@@ -76,9 +76,9 @@ jobs:
       # onlyBuiltDependencies stays better-sqlite3, esbuild and node-pty; nothing else builds or bypasses it.
       - name: Build-script policy
         run: pnpm supply-chain builds
-      # High or critical advisories in production dependencies fail unless scripts/supply-chain/audit-allowlist.json
-      # accepts them (with a reason and an expiry date).
-      - name: pnpm audit --prod against the allowlist
+      # High or critical advisories in production dependencies, and critical ones in dev dependencies, fail unless
+      # scripts/supply-chain/audit-allowlist.json accepts them (with a reason and an expiry date).
+      - name: pnpm audit --prod and --dev against the allowlist
         run: pnpm supply-chain audit
 
   images:
