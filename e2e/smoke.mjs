@@ -430,16 +430,21 @@ await step('git page: the factory works on develop and main stays put', async ()
 await step('git page: promote and release', async () => {
   const git = `/api/projects/${project.id}/git`;
   // The e2e's Claude is the scripted stand-in (fake-claude.mjs): a stored key counts it as signed in.
-  const key = await api('PATCH', '/api/factory/settings', { anthropicApiKey: 'sk-ant-e2e-stand-in' });
-  assert.equal(key.status, 200, key.text);
-  const asked = await api('POST', `${git}/release/draft`);
-  assert.equal(asked.status, 200, asked.text);
-  const draft = await until(async () => {
-    const d = (await api('GET', git)).json.releaseDraft;
-    return d && d.status !== 'drafting' ? d : null;
-  }, 'the draft never finished');
-  const cleared = await api('PATCH', '/api/factory/settings', { anthropicApiKey: null });
-  assert.equal(cleared.status, 200, cleared.text);
+  let draft;
+  try {
+    const key = await api('PATCH', '/api/factory/settings', { anthropicApiKey: 'sk-ant-e2e-stand-in' });
+    assert.equal(key.status, 200, key.text);
+    const asked = await api('POST', `${git}/release/draft`);
+    assert.equal(asked.status, 200, asked.text);
+    draft = await until(async () => {
+      const d = (await api('GET', git)).json.releaseDraft;
+      return d && d.status !== 'drafting' ? d : null;
+    }, 'the draft never finished');
+  } finally {
+    // On every path: the checks after this one (and the UI suite) run without the stand-in key.
+    const cleared = await api('PATCH', '/api/factory/settings', { anthropicApiKey: null });
+    assert.equal(cleared.status, 200, cleared.text);
+  }
   assert.equal(draft.status, 'ready', JSON.stringify(draft));
   assert.equal(draft.bump, 'minor');
   assert.equal(draft.version, 'v0.1.0');
@@ -469,7 +474,7 @@ await step('git page: promote and release', async () => {
   // No approved checks in this project: that step is skipped, everything else runs.
   assert.deepEqual(steps, {
     promote: 'done',
-    checks: steps.checks === 'skipped' ? 'skipped' : 'done',
+    checks: 'skipped',
     changelog: 'done',
     push_main: 'done',
     tag: 'done',
