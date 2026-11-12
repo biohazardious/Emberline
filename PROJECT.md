@@ -77,6 +77,9 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).
+- **Board export:** `GET /api/projects/:projectId/tickets/export?format=csv|json&status=<columns>` (`api/ticket-export.ts`).
+  The strict query schema rejects unknown formats, statuses and keys. JSON carries whole-board status counts and the done ratio;
+  CSV is RFC 4180 with a UTF-8 BOM and neutralises formula-leading cells (`apps/core/src/tickets/export.ts`). The board's Export menu downloads it.
 
 Every value that crosses a process boundary is parsed with its zod schema on arrival. New contracts go into
 `packages/protocol` first, then core and web consume them.
