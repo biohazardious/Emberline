@@ -113,6 +113,10 @@ export function registerAuth(
   // http://core:7420, or from the engine). The direct peer decides, whatever a proxy header says.
   const containers = new ContainerAddresses(config.containerHosts ?? [], {
     containerNetworks: config.containerNetworks ?? [],
+    onKeptAnswer: (host, code) =>
+      app.log.warn(
+        `Looking up the container name ${host} failed (${code}); its last known address still counts`,
+      ),
   });
   // A runner that connects again has restarted, likely with a new address: learn it now, not on the
   // next timer. Only the runner's connection triggers this; a stranger's cookie never costs a lookup.

@@ -50,7 +50,7 @@ ci: ## CI gate: lint/typecheck/test inside an image build
 supply-chain: ## Release gate: allowed install scripts + pnpm audit --prod (high) and --dev (critical) against scripts/supply-chain/audit-allowlist.json
 	$(RUN) pnpm supply-chain
 
-e2e: ## End-to-end smoke test, the isolation suite (e2e/isolation.sh), then the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), on an isolated core + runner + ops stack (port 7498, removed afterwards)
+e2e: ## End-to-end smoke test, the Playwright ticket-to-merge suite (traces in $(E2E_OUT)/ on failure), then the isolation suite (e2e/isolation.sh, last: its probes come and go on the network), on an isolated core + runner + ops stack (port 7498, removed afterwards)
 	@set -e; ws=$$(mktemp -d); chmod 777 $$ws; \
 	export EMBERLINE_WORKSPACES_HOST_DIR=$$ws; \
 	if [ -z "$(E2E_PREBUILT)" ]; then \
@@ -65,10 +65,10 @@ e2e: ## End-to-end smoke test, the isolation suite (e2e/isolation.sh), then the 
 	mkdir -p "$(E2E_OUT)"; chmod 777 "$(E2E_OUT)"; status=0; \
 	docker run --rm --network $(E2E_PROJECT)_default -v "$$PWD/e2e:/e2e:ro" emberline/core:$(E2E_TAG) \
 	  node /e2e/smoke.mjs http://core:7420 || status=$$?; \
-	[ $$status -ne 0 ] || e2e/isolation.sh "$(E2E_PROJECT)" "$(E2E_TAG)" || status=$$?; \
 	[ $$status -ne 0 ] || docker run --rm --user node --network $(E2E_PROJECT)_default -v "$$PWD/e2e:/e2e:ro" \
 	  -v "$$PWD/$(E2E_OUT):/out" -e E2E_OUT=/out emberline/runner:$(E2E_TAG) \
 	  node /e2e/ui/run.mjs http://core:7420 || status=$$?; \
+	[ $$status -ne 0 ] || e2e/isolation.sh "$(E2E_PROJECT)" "$(E2E_TAG)" || status=$$?; \
 	[ $$status -eq 0 ] || $(E2E) logs --tail 80; \
 	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws 2>/dev/null || true; exit $$status
 

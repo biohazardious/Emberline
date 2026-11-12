@@ -28,6 +28,11 @@ export interface ContainerAddressesOptions {
    * back (NTP) would stop the refresh.
    */
   now?: () => number;
+  /**
+   * Told once per host and error code when a lookup fails with an error that keeps the last answer
+   * (not ENOTFOUND/ENODATA), so a resolver that never says "gone" shows up in the log.
+   */
+  onKeptAnswer?: (host: string, code: string) => void;
 }
 
 const defaultLookup = async (host: string) => (await dnsLookup(host, { all: true })).map((a) => a.address);
@@ -96,12 +101,15 @@ export class ContainerAddresses {
   private readonly now: () => number;
   private lastRefreshAt = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<void> | null = null;
+  private readonly onKeptAnswer: (host: string, code: string) => void;
+  private readonly keptReported = new Set<string>();
 
   constructor(
     private readonly hosts: string[],
     options: ContainerAddressesOptions = {},
   ) {
     this.lookup = options.lookup ?? defaultLookup;
+    this.onKeptAnswer = options.onKeptAnswer ?? (() => undefined);
     this.localNetworks = options.localNetworks ?? defaultNetworks;
     const refreshMs = options.refreshMs ?? CONTAINER_ADDRESSES_REFRESH_MS;
     this.extra = blockListOf(options.containerNetworks ?? []);
@@ -143,7 +151,12 @@ export class ContainerAddresses {
         } catch (error) {
           // Not resolvable (removed, or stopped or restarting: Docker's DNS has no answer for it then): forget
           // it until it resolves again. Otherwise (EAI_AGAIN, DNS slow): keep what was known.
-          if (GONE.has((error as NodeJS.ErrnoException).code ?? '')) this.byHost.delete(host);
+          const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
+          if (GONE.has(code)) this.byHost.delete(host);
+          else if (!this.keptReported.has(`${host} ${code}`)) {
+            this.keptReported.add(`${host} ${code}`);
+            this.onKeptAnswer(host, code);
+          }
         }
       }),
     );

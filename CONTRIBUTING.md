@@ -12,7 +12,7 @@ Everything runs in Docker. You need Docker with Compose v2, `make` and `git`; do
 make dev                 # ptyd + core + web dev servers -> http://localhost:5173
 make shell               # shell inside the toolbox
 make check               # format check + lint + typecheck + test + build: run before every pull request
-make e2e                 # isolated core + runner + ops stack: smoke test, isolation suite, then the Playwright ticket-to-merge suite
+make e2e                 # isolated core + runner + ops stack: smoke test, the Playwright ticket-to-merge suite, then the isolation suite
 make lock                # after editing any package.json
 make db-generate         # after editing apps/core/src/db/schema.ts
 ```

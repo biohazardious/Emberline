@@ -664,6 +664,28 @@ describe('container addresses', () => {
     c.stop();
   });
 
+  it('reports a lookup failure that keeps the last answer once per host and code', async () => {
+    const answers: Record<string, string[] | Error> = { docker: ['172.18.0.9'] };
+    const kept: string[] = [];
+    const c = new ContainerAddresses(['docker'], {
+      lookup: lookupFrom(answers),
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+      onKeptAnswer: (host, code) => kept.push(`${host} ${code}`),
+    });
+    await c.refresh();
+    answers.docker = Object.assign(new Error('getaddrinfo EAI_AGAIN docker'), { code: 'EAI_AGAIN' });
+    await c.refresh();
+    await c.refresh();
+    expect(kept).toEqual(['docker EAI_AGAIN']);
+    expect(await c.has('172.18.0.9')).toBe(true);
+    answers.docker = Object.assign(new Error('getaddrinfo ENOTFOUND docker'), { code: 'ENOTFOUND' });
+    await c.refresh();
+    expect(kept).toEqual(['docker EAI_AGAIN']);
+    expect(await c.has('172.18.0.9')).toBe(false);
+    c.stop();
+  });
+
   it("accepts only answers on core's own networks (a LAN host named docker is ignored)", async () => {
     const c = new ContainerAddresses(['runner', 'docker'], {
       lookup: lookupFrom({ docker: ['192.168.1.20'], runner: ['172.18.0.3', '8.8.8.8'] }),

@@ -225,7 +225,7 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 | `pnpm format:check`                       | Prettier check                                                                                             |
 | `make check`                              | All of the above inside the dev toolbox container                                                          |
 | `make ci`                                 | The Dockerfile `check` stage: the CI gate                                                                  |
-| `make e2e`                                | Smoke test, isolation suite and Playwright suite on an isolated stack (`E2E_TAG` picks the image tag)      |
+| `make e2e`                                | Smoke test, Playwright suite and isolation suite on an isolated stack (`E2E_TAG` picks the image tag)      |
 | `make e2e-upgrade`                        | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill                                              |
 | `pnpm supply-chain` / `make supply-chain` | Release gate: install scripts + `pnpm audit --prod`/`--dev` vs `scripts/supply-chain/audit-allowlist.json` |
 | `make up` / `make down`                   | Production stack (core, runner, ops, docker)                                                               |
