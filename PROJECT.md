@@ -228,10 +228,10 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 | `make e2e`                                | Smoke test, isolation suite and Playwright suite on an isolated stack (`E2E_TAG` picks the image tag)      |
 | `make e2e-upgrade`                        | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill                                              |
 | `pnpm supply-chain` / `make supply-chain` | Release gate: install scripts + `pnpm audit --prod`/`--dev` vs `scripts/supply-chain/audit-allowlist.json` |
+| `make up` / `make down`                   | Production stack (core, runner, ops, docker)                                                               |
 
-| `make up` / `make down` | Production stack (core, runner, ops, docker) |
-
-The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm run lint` and `pnpm run test`.
+The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`; `pnpm run lint`, `pnpm run typecheck` and
+`pnpm run format:check`; and, as its test check, `docker build --target check .`, the same check stage CI runs.
 
 ---
 
@@ -240,7 +240,7 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture and design decisions.
 - [`SECURITY.md`](SECURITY.md): threat model, container privileges, secrets, SSH keys and host key checks.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): workflow and conventions.
-- [`CHANGELOG.md`](CHANGELOG.md): release history (current: 0.7.0).
+- [`CHANGELOG.md`](CHANGELOG.md): release history (current: 0.8.0).
 
 ---
 
