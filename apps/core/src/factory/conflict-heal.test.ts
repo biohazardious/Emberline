@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as gitExec from '../git-exec.js';
 import { mergeRunBranch } from '../runs/worktree.js';
 import { rmTemp } from '../test-rm.js';
-import { type HealGate, healConflicts, resolveAdditiveHunks } from './conflict-heal.js';
+import { argChunks, type HealGate, healConflicts, resolveAdditiveHunks } from './conflict-heal.js';
 
 vi.mock('../git-exec.js', async (orig) => {
   const actual = await orig<typeof gitExec>();
@@ -110,6 +110,25 @@ beforeEach(() => {
 afterEach(() => {
   rmTemp(dir);
   vi.mocked(gitExec.execGitFile).mockClear();
+});
+
+describe('argChunks', () => {
+  it('never splits a surrogate pair and loses nothing', () => {
+    const text = `ab😀cd😀😀e`;
+    for (const size of [1, 2, 3, 4, 5]) {
+      const chunks = argChunks(text, size);
+      expect(chunks.join(''), `size ${size}`).toBe(text);
+      for (const chunk of chunks) {
+        expect(chunk.length, `size ${size}`).toBeLessThanOrEqual(Math.max(size, 2));
+        expect(Buffer.from(chunk, 'utf8').toString('utf8')).toBe(chunk);
+      }
+    }
+  });
+
+  it('cuts the 30,000-unit chunk one unit short when an emoji starts at 29,999', () => {
+    const chunks = argChunks(`${'x'.repeat(29_999)}😀y`);
+    expect(chunks.map((c) => c.length)).toEqual([29_999, 3]);
+  });
 });
 
 describe('resolveAdditiveHunks', () => {
@@ -266,6 +285,25 @@ describe('healConflicts (real git repos)', () => {
     expect(res).toMatchObject({ healed: false, reason: 'unverified' });
     expect(res.healed === false && res.message).toContain('the build gate is off');
     expect(snapshot(b)).toEqual(before);
+  });
+
+  it('writes a resolved file byte for byte when an emoji straddles an argv chunk boundary', async () => {
+    // The emoji's two UTF-16 halves sit at 29,999 and 30,000: the first 30,000-unit chunk ends between them.
+    const prefix = `${'x'.repeat(29_999)}😀 tail\n`;
+    writeFileSync(path.join(main, 'wide.txt'), prefix);
+    commitAll(main, 'wide');
+    const a = addWorktree('a');
+    const b = addWorktree('b');
+    append(a, 'wide.txt', 'from a\n');
+    commitAll(a, 'a');
+    append(b, 'wide.txt', 'from b\n');
+    commitAll(b, 'b');
+    git(main, 'merge', '--no-ff', '-q', '-m', 'Merge a', 'emberline/a');
+    expect(await heal(b)).toMatchObject({ healed: true, files: ['wide.txt'] });
+    const written = readFileSync(path.join(b, 'wide.txt'));
+    expect(written.includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(false);
+    expect(written.toString('utf8')).toBe(`${prefix}from b\nfrom a\n`);
+    expect(git(b, 'show', 'HEAD:wide.txt')).toBe(`${prefix}from b\nfrom a`);
   });
 
   it('changes nothing when the agent worked again', async () => {

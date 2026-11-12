@@ -210,9 +210,25 @@ const WRITE_FILE = [
   `printf '%s' "$@" | ${RUNNER_BIN.dd} of="$f" oflag=nofollow status=none`,
 ].join('\n');
 
-async function writeResolved(worktreePath: string, file: string, text: string): Promise<void> {
+/**
+ * `text` in pieces of at most `size` UTF-16 units (a pair's 2 when `size` is 1) for argv, never
+ * between the two halves of a surrogate pair: each piece is encoded to UTF-8 on its own, and a lone
+ * half becomes U+FFFD (the written file would carry EF BF BD twice where the emoji was).
+ */
+export function argChunks(text: string, size = ARG_CHUNK_CHARS): string[] {
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += ARG_CHUNK_CHARS) chunks.push(text.slice(i, i + ARG_CHUNK_CHARS));
+  for (let i = 0; i < text.length;) {
+    let end = Math.min(i + size, text.length);
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += end - i > 1 ? -1 : 1;
+    chunks.push(text.slice(i, end));
+    i = end;
+  }
+  return chunks;
+}
+
+async function writeResolved(worktreePath: string, file: string, text: string): Promise<void> {
+  const chunks = argChunks(text);
   await execFileChecked(
     systemCommand({
       file: RUNNER_BIN.sh,
