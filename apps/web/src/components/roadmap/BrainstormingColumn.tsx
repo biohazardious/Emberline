@@ -2,11 +2,15 @@ import type { AgentId, AgentModelId, BrainstormSuggestion, RoadmapCategory, Run 
 import { Bot, Brain, Rocket, Square, SquareCheck, Trash2, Zap } from 'lucide-react';
 import { Link } from 'wouter';
 import { PersonaBadge } from '../PersonaBadge';
+import { SectionState } from '../SectionState';
 import { CATEGORY_META, RouteBadgeSelect } from './RoadmapBadges';
 
 export function BrainstormingColumn({
   projectName,
   filteredSuggestions,
+  loading,
+  loadError,
+  onRetry,
   selectedSuggestions,
   onToggleSuggestion,
   onToggleSelectAllSuggestions,
@@ -27,6 +31,9 @@ export function BrainstormingColumn({
 }: {
   projectName: string | undefined;
   filteredSuggestions: BrainstormSuggestion[];
+  loading?: boolean;
+  loadError?: unknown;
+  onRetry?: () => void | Promise<void>;
   selectedSuggestions: ReadonlySet<string>;
   onToggleSuggestion: (id: string) => void;
   onToggleSelectAllSuggestions: () => void;
@@ -45,6 +52,17 @@ export function BrainstormingColumn({
   onQuickPromoteSuggestion: (sug: BrainstormSuggestion, autoStart: boolean) => void;
   onDismissSuggestion: (id: string) => void;
 }) {
+  if (loading || loadError !== undefined) {
+    return (
+      <SectionState
+        loading={loading}
+        error={loadError}
+        onRetry={onRetry}
+        loadingText="Loading AI brainstorming suggestions…"
+        errorPrefix="Could not load brainstorming suggestions"
+      />
+    );
+  }
   return (
     <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <header className="panel-head" style={{ marginBottom: 0 }}>

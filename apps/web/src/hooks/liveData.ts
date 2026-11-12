@@ -64,6 +64,12 @@ export function LiveEvents(): null {
   return null;
 }
 
+function useRefresh(refetch: () => Promise<unknown>): () => Promise<void> {
+  return useCallback(async () => {
+    await refetch();
+  }, [refetch]);
+}
+
 /** All runs, kept live by {@link LiveEvents}. */
 export function useRuns(): {
   runs: Run[] | undefined;
@@ -76,11 +82,12 @@ export function useRuns(): {
     queryFn: () => api<Run[]>('/api/runs'),
     staleTime: Infinity,
   });
-  const { refetch } = query;
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
-  return { runs: query.data, loading: query.isPending, error: query.error ?? undefined, refresh };
+  return {
+    runs: query.data,
+    loading: query.isPending,
+    error: query.error ?? undefined,
+    refresh: useRefresh(query.refetch),
+  };
 }
 
 /** Query options of a project's tickets, kept live by {@link LiveEvents} (shared by every reader). */
@@ -106,16 +113,12 @@ export function useTickets(projectId: string): {
       client.setQueryData<Ticket[]>(liveKeys.tickets(projectId), (list) => upsert(list, ticket)),
     [client, projectId],
   );
-  const { refetch } = query;
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
   return {
     tickets: query.data,
     loading: query.isPending,
     error: query.error ?? undefined,
     patchLocal,
-    refresh,
+    refresh: useRefresh(query.refetch),
   };
 }
 
@@ -137,15 +140,11 @@ export function useScheduler(): {
     (state: SchedulerState) => client.setQueryData(liveKeys.scheduler, state),
     [client],
   );
-  const { refetch } = query;
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
   return {
     scheduler: query.data,
     loading: query.isPending,
     error: query.error ?? undefined,
     setScheduler,
-    refresh,
+    refresh: useRefresh(query.refetch),
   };
 }

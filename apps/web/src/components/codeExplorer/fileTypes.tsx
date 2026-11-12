@@ -20,6 +20,7 @@ export interface OpenTab {
   loading: boolean;
   binary: boolean;
   sizeBytes: number;
+  error?: string;
 }
 
 export function formatBytes(bytes: number): string {

@@ -1,19 +1,14 @@
-import type {
-  AgentId,
-  FactorySettings,
-  Project,
-  ProjectRoadmapState,
-  RoadmapCategory,
-} from '@emberline/protocol';
+import type { AgentId, RoadmapCategory } from '@emberline/protocol';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { BrainstormingColumn } from '../components/roadmap/BrainstormingColumn';
 import { MilestonesColumn } from '../components/roadmap/MilestonesColumn';
 import { RoadmapHeaderPanel } from '../components/roadmap/RoadmapHeaderPanel';
-import { useRoadmapActions } from '../components/roadmap/useRoadmapActions';
 import { useRuns } from '../hooks/liveData';
-import { useApi } from '../hooks/useApi';
+import { useFactorySettings } from '../hooks/useFactorySettings';
+import { useProject } from '../hooks/useProjects';
+import { useProjectRoadmap } from '../hooks/useRoadmap';
+import { useRoadmapActions } from '../hooks/useRoadmapActions';
 import {
   countRoadmapCategories,
   countRoadmapStatuses,
@@ -33,30 +28,27 @@ export {
 
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();
-  const projects = useApi<Project[]>('/api/projects', 15_000);
-  const roadmapPoll = useApi<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap`, 6_000);
-  const factorySettingsPoll = useApi<FactorySettings>('/api/factory/settings', 20_000);
+  const { project } = useProject(projectId, 15_000);
+  const roadmapQuery = useProjectRoadmap(projectId);
+  const roadmap = roadmapQuery.data;
+  const settings = useFactorySettings(20_000).data;
   const enabledProviders: AgentId[] = useMemo(
-    () =>
-      factorySettingsPoll.data?.enabledProviders?.length
-        ? factorySettingsPoll.data.enabledProviders
-        : ['claude'],
-    [factorySettingsPoll.data],
+    () => (settings?.enabledProviders?.length ? settings.enabledProviders : ['claude']),
+    [settings],
   );
   const { runs } = useRuns();
-  const [localRoadmap, setLocalRoadmap] = useState<ProjectRoadmapState | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState<RoadmapCategory | 'all'>('all');
-  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(() => new Set());
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(() => new Set());
   const [brainstormFocus, setBrainstormFocus] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<RoadmapCategory | 'all'>('all');
+  const [quickAddText, setQuickAddText] = useState('');
+  const [quickAddTarget, setQuickAddTarget] = useState<string>('auto');
+  const [inlineMsInputs, setInlineMsInputs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [pendingBrainstormRunId, setPendingBrainstormRunId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (roadmapPoll.data) setLocalRoadmap(roadmapPoll.data);
-  }, [roadmapPoll.data]);
 
   const activeBrainstormRun = useMemo(() => {
     const list = runs ?? [];
@@ -78,16 +70,9 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     const matched = (runs ?? []).find((r) => r.id === pendingBrainstormRunId);
     if (matched && (matched.endedAt || matched.state === 'done' || matched.state === 'failed')) {
       setPendingBrainstormRunId(null);
-      void roadmapPoll.refresh();
+      void roadmapQuery.refresh();
     }
-  }, [runs, pendingBrainstormRunId, roadmapPoll]);
-
-  const [quickAddText, setQuickAddText] = useState('');
-  const [quickAddTarget, setQuickAddTarget] = useState<string>('auto');
-  const [inlineMsInputs, setInlineMsInputs] = useState<Record<string, string>>({});
-
-  const project = useMemo(() => projects.data?.find((p) => p.id === projectId), [projects.data, projectId]);
-  const roadmap = localRoadmap ?? roadmapPoll.data;
+  }, [runs, pendingBrainstormRunId, roadmapQuery]);
 
   const filterKey = `emberline.roadmap.filter.${projectId}`;
   const [itemFilter, setItemFilter] = useState<RoadmapFilter>(() => {
@@ -175,25 +160,35 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
     setBusy,
     isAgentBrainstorming,
     setPendingBrainstormRunId,
-    setLocalRoadmap,
+    setRoadmap: roadmapQuery.setData,
     setBanner,
     setError,
   });
 
   if (!roadmap) {
-    if (roadmapPoll.error) {
-      return (
-        <ViewErrorBanner
-          label="Could not load Interactive Roadmap"
-          error={roadmapPoll.error}
-          onRetry={roadmapPoll.refresh}
-        />
-      );
-    }
     return (
-      <section className="panel" aria-busy="true">
-        <ViewLoadingState label="Loading Interactive Roadmap & AI Brainstorming Studio…" compact />
-      </section>
+      <RoadmapHeaderPanel
+        projectName={project?.name}
+        roadmap={undefined}
+        loading={roadmapQuery.loading}
+        loadError={roadmapQuery.error}
+        onRetry={roadmapQuery.refresh}
+        busy={busy}
+        isAgentBrainstorming={isAgentBrainstorming}
+        onAutoGenerate={(mode) => void actions.handleAutoGenerateRoadmap(mode)}
+        onOpenBoard={() => navigate(`/projects/${projectId}/board`)}
+        quickAddTarget={quickAddTarget}
+        onQuickAddTargetChange={setQuickAddTarget}
+        quickAddText={quickAddText}
+        onQuickAddTextChange={setQuickAddText}
+        onSmartQuickAdd={(e) => void actions.handleSmartQuickAdd(e)}
+        selectedSuggestionsCount={0}
+        selectedItemsCount={0}
+        onClearSelection={() => undefined}
+        onDispatchSelected={() => undefined}
+        banner={banner}
+        error={error}
+      />
     );
   }
 

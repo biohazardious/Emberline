@@ -17,12 +17,16 @@ import {
 } from '../../roadmapFilter';
 import { SearchInput } from '../BoardFilterBar';
 import { PersonaBadge } from '../PersonaBadge';
+import { SectionState } from '../SectionState';
 import { CATEGORY_META, ROADMAP_STATUS_LABEL, ROADMAP_STATUS_MARK, RouteBadgeSelect } from './RoadmapBadges';
 
 export function MilestonesColumn({
   projectId,
   totalMilestoneCount,
   filteredRoadmap,
+  loading,
+  loadError,
+  onRetry,
   itemFilter,
   onItemFilterChange,
   filterActive,
@@ -49,6 +53,9 @@ export function MilestonesColumn({
     shown: number;
     total: number;
   };
+  loading?: boolean;
+  loadError?: unknown;
+  onRetry?: () => void | Promise<void>;
   itemFilter: RoadmapFilter;
   onItemFilterChange: (updater: (prev: RoadmapFilter) => RoadmapFilter) => void;
   filterActive: boolean;
@@ -68,6 +75,17 @@ export function MilestonesColumn({
   onChangeRoute: (id: string, agent: AgentId, model: AgentModelId) => void;
   busy: string | null;
 }) {
+  if (loading || loadError !== undefined) {
+    return (
+      <SectionState
+        loading={loading}
+        error={loadError}
+        onRetry={onRetry}
+        loadingText="Loading project milestones…"
+        errorPrefix="Could not load project milestones"
+      />
+    );
+  }
   return (
     <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <header className="panel-head" style={{ marginBottom: 0 }}>
@@ -137,6 +155,11 @@ export function MilestonesColumn({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {filteredRoadmap.milestones.length === 0 && (
+          <p className="muted small" style={{ margin: '4px 0' }}>
+            {filterActive ? 'No roadmap milestones match the filter.' : 'No milestones defined yet.'}
+          </p>
+        )}
         {filteredRoadmap.milestones.map(({ milestone: ms, items: shownItems }) => {
           const doneCount = ms.items.filter((i) => i.status === 'done').length;
           const pct = ms.items.length > 0 ? Math.round((doneCount / ms.items.length) * 100) : 0;

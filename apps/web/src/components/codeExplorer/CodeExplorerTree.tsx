@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
 import { SearchInput } from '../BoardFilterBar';
-import { ViewLoadingState } from '../ErrorBoundary';
+import { ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
 import { describeFileType, FileTypeIcon, formatBytes, getFileDownloadUrl } from './fileTypes';
 
 export function CodeExplorerTree({
@@ -24,6 +24,7 @@ export function CodeExplorerTree({
   loading,
   hasData,
   hasError,
+  loadError,
   filterText,
   onFilterTextChange,
   collapsedDirs,
@@ -45,6 +46,7 @@ export function CodeExplorerTree({
   loading: boolean;
   hasData: boolean;
   hasError: boolean;
+  loadError?: unknown;
   filterText: string;
   onFilterTextChange: (next: string) => void;
   collapsedDirs: ReadonlySet<string>;
@@ -246,6 +248,14 @@ export function CodeExplorerTree({
         }}
       >
         {loading && !hasData && !hasError && <ViewLoadingState compact label="Loading workspace files…" />}
+        {loadError !== undefined && !hasData && (
+          <ViewErrorBanner
+            compact
+            label="Could not load workspace files"
+            error={loadError}
+            onRetry={onRefresh}
+          />
+        )}
         {visibleEntries.map((entry) => {
           const depth = entry.path.split('/').length - 1;
           const isDir = entry.kind === 'directory';
@@ -354,7 +364,7 @@ export function CodeExplorerTree({
             </div>
           );
         })}
-        {visibleEntries.length === 0 && !loading && (
+        {visibleEntries.length === 0 && !loading && !hasError && loadError === undefined && (
           <p className="muted small" style={{ padding: '8px' }}>
             {filterText.trim() ? 'No files match the filter.' : 'No matching files in workspace.'}
           </p>

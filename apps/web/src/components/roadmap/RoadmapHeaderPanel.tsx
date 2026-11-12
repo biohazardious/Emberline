@@ -1,10 +1,14 @@
 import type { ProjectRoadmapState } from '@emberline/protocol';
 import { Bot, Inbox, Landmark, Rocket, Sparkles, SquareCheck, SquareKanban, Target } from 'lucide-react';
 import type { FormEvent } from 'react';
+import { SectionState } from '../SectionState';
 
 export function RoadmapHeaderPanel({
   projectName,
   roadmap,
+  loading,
+  loadError,
+  onRetry,
   busy,
   isAgentBrainstorming,
   onAutoGenerate,
@@ -22,7 +26,10 @@ export function RoadmapHeaderPanel({
   error,
 }: {
   projectName: string | undefined;
-  roadmap: ProjectRoadmapState;
+  roadmap: ProjectRoadmapState | undefined;
+  loading?: boolean;
+  loadError?: unknown;
+  onRetry?: () => void | Promise<void>;
   busy: string | null;
   isAgentBrainstorming: boolean;
   onAutoGenerate: (mode: 'instant' | 'agent') => void;
@@ -39,6 +46,18 @@ export function RoadmapHeaderPanel({
   banner: string | null;
   error: string | null;
 }) {
+  if (!roadmap) {
+    return (
+      <SectionState
+        loading={loading}
+        error={loadError}
+        onRetry={onRetry}
+        loadingText="Loading Interactive Roadmap & AI Brainstorming Studio…"
+        emptyText="No roadmap initialized for this project yet."
+        errorPrefix="Could not load Interactive Roadmap"
+      />
+    );
+  }
   const totalSelected = selectedSuggestionsCount + selectedItemsCount;
 
   return (

@@ -5,7 +5,7 @@ import { type FormEvent, type MouseEvent, useMemo } from 'react';
 import { Link } from 'wouter';
 import { monacoTheme } from '../../monaco';
 import { WORKTREE_EDIT_PARAM, worktreeYmlExplorerNote } from '../../projectSettings';
-import { ErrorBoundary } from '../ErrorBoundary';
+import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
 import { MonacoEditor } from '../MonacoEditor';
 import { PERSONA_LIST } from '../PersonaBadge';
 import {
@@ -29,6 +29,7 @@ export function CodeExplorerStage({
   onChangeActiveContent,
   saving,
   onSaveActiveFile,
+  onRetryActiveFile,
   onDeleteFile,
   themeMode,
   agentPersona,
@@ -49,6 +50,7 @@ export function CodeExplorerStage({
   onChangeActiveContent: (nextVal: string) => void;
   saving: boolean;
   onSaveActiveFile: () => void;
+  onRetryActiveFile?: (relPath: string) => void;
   onDeleteFile: (relPath: string) => void;
   themeMode: 'dark' | 'light';
   agentPersona: AgentPersona;
@@ -178,8 +180,14 @@ export function CodeExplorerStage({
       <div style={{ flex: 1, minHeight: 0, position: 'relative', overflowY: 'auto' }}>
         {activeTab ? (
           activeTab.loading ? (
-            <div style={{ padding: '24px' }} className="muted mono">
-              Loading {activeTab.path}…
+            <ViewLoadingState label={`Loading ${activeTab.path}…`} />
+          ) : activeTab.error ? (
+            <div style={{ padding: '16px' }}>
+              <ViewErrorBanner
+                label={`Could not load ${activeTab.path}`}
+                error={activeTab.error}
+                onRetry={onRetryActiveFile ? () => onRetryActiveFile(activeTab.path) : undefined}
+              />
             </div>
           ) : activeTab.binary ? (
             <div

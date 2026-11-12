@@ -1,34 +1,33 @@
 import type {
   AgentPersona,
   FactoryRequestResponse,
-  Project,
   UploadWorkspaceFilesResponse,
   WorkspaceFileContentResponse,
   WorkspaceFileEntry,
-  WorkspaceFileListResponse,
 } from '@emberline/protocol';
 import { isEmberlineDirPath, isWorktreeYmlPath } from '@emberline/protocol';
-import { FileCode2, Package, SquareKanban } from 'lucide-react';
 import { type FormEvent, type MouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { CodeExplorerStage } from '../components/codeExplorer/CodeExplorerStage';
+import { CodeExplorerToolbar } from '../components/codeExplorer/CodeExplorerToolbar';
 import { CodeExplorerTree } from '../components/codeExplorer/CodeExplorerTree';
 import { type OpenTab, readFileAsBase64 } from '../components/codeExplorer/fileTypes';
-import { ViewErrorBanner } from '../components/ErrorBoundary';
 import { PERSONA_BY_ID } from '../components/PersonaBadge';
 import { useRuns } from '../hooks/liveData';
-import { useApi } from '../hooks/useApi';
+import { useProject } from '../hooks/useProjects';
 import { useThemeMode } from '../hooks/useThemeMode';
+import { useWorkspaceFileLoader, useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
 
 export function CodeExplorerPage({ projectId }: { projectId: string }) {
-  const projects = useApi<Project[]>('/api/projects', 15_000);
+  const {
+    project,
+    loading: projectLoading,
+    error: projectError,
+    refresh: refreshProject,
+  } = useProject(projectId, 15_000);
   const { runs } = useRuns();
-  const project = useMemo(
-    () => (projects.data ?? []).find((p) => p.id === projectId),
-    [projects.data, projectId],
-  );
   const projectRuns = useMemo(() => (runs ?? []).filter((r) => r.projectId === projectId), [runs, projectId]);
+  const themeMode = useThemeMode();
 
   const [targetId, setTargetId] = useState<string>('main');
   const [filterText, setFilterText] = useState('');
@@ -45,32 +44,31 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   const [agentPersona, setAgentPersona] = useState<AgentPersona>('coder');
   const [dispatchingAgent, setDispatchingAgent] = useState(false);
 
-  const fileList = useApi<WorkspaceFileListResponse>(
-    `/api/projects/${projectId}/files?targetId=${encodeURIComponent(targetId)}`,
-    6_000,
-  );
+  const fileList = useWorkspaceFiles(projectId, targetId);
+  const loadWorkspaceFile = useWorkspaceFileLoader(projectId, targetId);
 
   const openFile = useCallback(
-    async (relPath: string) => {
+    async (relPath: string, forceReload = false) => {
       setError(null);
       setActivePath(relPath);
-      if (tabs.some((t) => t.path === relPath)) return;
+      const existing = tabs.find((t) => t.path === relPath);
+      if (existing && !existing.error && !forceReload) return;
 
-      setTabs((prev) => [
-        ...prev,
-        {
+      setTabs((prev) => {
+        const nextTab: OpenTab = {
           path: relPath,
           content: '',
           savedContent: '',
           loading: true,
           binary: false,
           sizeBytes: 0,
-        },
-      ]);
+        };
+        return prev.some((t) => t.path === relPath)
+          ? prev.map((t) => (t.path === relPath ? nextTab : t))
+          : [...prev, nextTab];
+      });
       try {
-        const res = await api<WorkspaceFileContentResponse>(
-          `/api/projects/${projectId}/files/content?targetId=${encodeURIComponent(targetId)}&path=${encodeURIComponent(relPath)}`,
-        );
+        const res = await loadWorkspaceFile(relPath);
         setTabs((prev) =>
           prev.map((t) =>
             t.path === relPath
@@ -81,6 +79,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                   loading: false,
                   binary: res.binary,
                   sizeBytes: res.sizeBytes,
+                  error: undefined,
                 }
               : t,
           ),
@@ -90,7 +89,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         setTabs((prev) => prev.filter((t) => t.path !== relPath));
       }
     },
-    [projectId, targetId, tabs],
+    [tabs, loadWorkspaceFile],
   );
 
   useEffect(() => {
@@ -98,13 +97,10 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     const files = (fileList.data?.entries ?? []).filter((f: WorkspaceFileEntry) => f.kind === 'file');
     if (files.length === 0) return;
     const preferred =
-      files.find((f: WorkspaceFileEntry) => f.path === 'PROJECT.md') ??
-      files.find((f: WorkspaceFileEntry) => f.path === 'README.md') ??
-      files.find(
-        (f: WorkspaceFileEntry) =>
-          f.path === 'src/App.tsx' || f.path === 'src/main.ts' || f.path === 'src/index.ts',
-      ) ??
-      files.find((f: WorkspaceFileEntry) => f.path === 'index.html') ??
+      files.find((f) => f.path === 'PROJECT.md') ??
+      files.find((f) => f.path === 'README.md') ??
+      files.find((f) => f.path === 'src/App.tsx' || f.path === 'src/main.ts' || f.path === 'src/index.ts') ??
+      files.find((f) => f.path === 'index.html') ??
       files[0];
     if (preferred) void openFile(preferred.path);
   }, [fileList.data, tabs.length, activePath, openFile]);
@@ -179,7 +175,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         const firstUploaded = res.uploadedPaths[0];
         if (firstUploaded) {
           setTabs((prev) => prev.filter((t) => !res.uploadedPaths.includes(t.path)));
-          await openFile(firstUploaded);
+          await openFile(firstUploaded, true);
         }
       } catch (err) {
         setError(errorMessage(err));
@@ -199,7 +195,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         content: '',
       });
       await fileList.refresh();
-      await openFile(cleaned);
+      await openFile(cleaned, true);
       return true;
     } catch (err) {
       setError(errorMessage(err));
@@ -258,6 +254,15 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
     }
   };
 
+  const toggleDir = (dirPath: string) => {
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+  };
+
   const visibleEntries = useMemo(() => {
     const all = fileList.data?.entries ?? [];
     const q = filterText.trim().toLowerCase();
@@ -269,104 +274,30 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
       }
       return true;
     });
-  }, [fileList.data, filterText, collapsedDirs]);
-
-  const toggleDir = (dirPath: string) => {
-    setCollapsedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(dirPath)) next.delete(dirPath);
-      else next.add(dirPath);
-      return next;
-    });
-  };
-
-  const themeMode = useThemeMode();
+  }, [fileList.data?.entries, filterText, collapsedDirs]);
 
   return (
     <div className="code-explorer-page">
-      <div
-        className="panel"
-        style={{
-          padding: '10px 14px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '10px',
+      <CodeExplorerToolbar
+        projectId={projectId}
+        project={project}
+        projectLoading={projectLoading}
+        projectError={projectError}
+        onRetryProject={refreshProject}
+        workspacePath={fileList.data?.workspacePath}
+        targetId={targetId}
+        onChangeTargetId={(next) => {
+          setTargetId(next);
+          setTabs([]);
+          setActivePath(null);
         }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', minWidth: 0 }}>
-          <span className="badge badge-soft mono" style={{ fontWeight: 600 }}>
-            <FileCode2 className="icon" aria-hidden /> Code Explorer
-          </span>
-          <strong>{project?.name ?? projectId}</strong>
-          <span className="muted mono small" style={{ overflowWrap: 'anywhere' }}>
-            {fileList.data?.workspacePath ?? project?.path}
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            flexWrap: 'wrap',
-            minWidth: 0,
-            maxWidth: '100%',
-          }}
-        >
-          <label className="small muted" htmlFor="code-target-select">
-            Target:
-          </label>
-          <select
-            id="code-target-select"
-            className="input"
-            style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '4px 8px', fontSize: '0.78rem' }}
-            value={targetId}
-            onChange={(e) => {
-              setTargetId(e.target.value);
-              setTabs([]);
-              setActivePath(null);
-            }}
-          >
-            <option value="main">Main Workspace ({project?.defaultBranch ?? 'main'})</option>
-            {projectRuns.map((r) => (
-              <option key={r.id} value={r.id}>
-                Worktree · {r.title ?? r.branch} ({r.state})
-              </option>
-            ))}
-          </select>
-
-          <Link href={`/projects/${projectId}/board`} className="btn btn-sm btn-ghost">
-            <SquareKanban className="icon" aria-hidden /> Kanban Board
-          </Link>
-          <a
-            href={`/api/projects/${projectId}/export.tar.gz`}
-            className="btn btn-sm btn-ghost"
-            title="Download workspace as .tar.gz archive"
-          >
-            <Package className="icon" aria-hidden /> Download .tar.gz
-          </a>
-        </div>
-      </div>
-
-      {Boolean(fileList.error && !fileList.data) && (
-        <ViewErrorBanner
-          label="Could not load workspace files"
-          error={fileList.error}
-          onRetry={fileList.refresh}
-        />
-      )}
-      {error && (
-        <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
-          {error}
-        </div>
-      )}
-      {statusMessage && (
-        <div className="banner banner-ok" style={{ margin: 0 }}>
-          {statusMessage}
-        </div>
-      )}
+        projectRuns={projectRuns}
+        fileListError={fileList.error}
+        hasFileListData={Boolean(fileList.data)}
+        onRetryFileList={fileList.refresh}
+        error={error}
+        statusMessage={statusMessage}
+      />
 
       <div className="code-explorer-grid" style={{ flex: 1, minHeight: 0, display: 'grid', gap: '10px' }}>
         <CodeExplorerTree
@@ -377,6 +308,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           loading={fileList.loading}
           hasData={Boolean(fileList.data)}
           hasError={Boolean(fileList.error)}
+          loadError={fileList.error}
           filterText={filterText}
           onFilterTextChange={setFilterText}
           collapsedDirs={collapsedDirs}
@@ -407,6 +339,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           }}
           saving={saving}
           onSaveActiveFile={() => void saveActiveFile()}
+          onRetryActiveFile={(relPath) => void openFile(relPath, true)}
           onDeleteFile={(p) => void handleDeleteFile(p)}
           themeMode={themeMode}
           agentPersona={agentPersona}

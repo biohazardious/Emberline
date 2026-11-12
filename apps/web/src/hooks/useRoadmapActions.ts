@@ -9,7 +9,7 @@ import type {
   RoadmapItem,
 } from '@emberline/protocol';
 import type { Dispatch, FormEvent, SetStateAction } from 'react';
-import { api, errorMessage } from '../../api';
+import { api, errorMessage } from '../api';
 
 export interface UseRoadmapActionsParams {
   projectId: string;
@@ -31,7 +31,10 @@ export interface UseRoadmapActionsParams {
   setBusy: Dispatch<SetStateAction<string | null>>;
   isAgentBrainstorming: boolean;
   setPendingBrainstormRunId: Dispatch<SetStateAction<string | null>>;
-  setLocalRoadmap: Dispatch<SetStateAction<ProjectRoadmapState | null>>;
+  setRoadmap: (
+    updater:
+      ProjectRoadmapState | ((prev: ProjectRoadmapState | undefined) => ProjectRoadmapState | undefined),
+  ) => void;
   setBanner: Dispatch<SetStateAction<string | null>>;
   setError: Dispatch<SetStateAction<string | null>>;
 }
@@ -56,7 +59,7 @@ export function useRoadmapActions({
   setBusy,
   isAgentBrainstorming,
   setPendingBrainstormRunId,
-  setLocalRoadmap,
+  setRoadmap,
   setBanner,
   setError,
 }: UseRoadmapActionsParams) {
@@ -74,7 +77,7 @@ export function useRoadmapActions({
       });
       const elapsed = Date.now() - startedAt;
       if (elapsed < 550) await new Promise((r) => setTimeout(r, 550 - elapsed));
-      setLocalRoadmap(res.roadmap);
+      setRoadmap(res.roadmap);
       if (mode === 'agent' && res.agentRun) {
         setPendingBrainstormRunId(res.agentRun.id);
         setBanner(
@@ -107,7 +110,7 @@ export function useRoadmapActions({
           autoStart,
         },
       );
-      setLocalRoadmap(res.roadmap);
+      setRoadmap(res.roadmap);
       setSelectedSuggestions(new Set());
       setSelectedItems(new Set());
       setBanner(
@@ -145,7 +148,7 @@ export function useRoadmapActions({
           `/api/projects/${projectId}/roadmap/items/${sug.id}`,
           'DELETE',
         );
-        setLocalRoadmap(afterDelete ?? next);
+        setRoadmap(afterDelete ?? next);
         setBanner(`Added "${sug.title}" to Milestone ${targetMs?.code ?? 'M2'}.`);
       } else {
         const res = await api<DispatchRoadmapItemsResponse>(
@@ -153,7 +156,7 @@ export function useRoadmapActions({
           'POST',
           { suggestionIds: [sug.id], autoStart: true },
         );
-        setLocalRoadmap(res.roadmap);
+        setRoadmap(res.roadmap);
         setBanner(
           `Added "${sug.title}" to Roadmap, created Ticket ${res.createdTickets[0]?.key ?? ''}, and dispatched ${sug.preferredAgent} (${sug.preferredModel})!`,
         );
@@ -167,7 +170,7 @@ export function useRoadmapActions({
 
   const handleChangeRoute = async (id: string, preferredAgent: AgentId, preferredModel: AgentModelId) => {
     setError(null);
-    setLocalRoadmap((prev) =>
+    setRoadmap((prev) =>
       !prev
         ? prev
         : {
@@ -186,7 +189,7 @@ export function useRoadmapActions({
         preferredAgent,
         preferredModel,
       });
-      setLocalRoadmap(next);
+      setRoadmap(next);
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -203,7 +206,7 @@ export function useRoadmapActions({
         'POST',
         { suggestionIds: filteredSuggestions.map((s) => s.id), autoStart: true },
       );
-      setLocalRoadmap(res.roadmap);
+      setRoadmap(res.roadmap);
       setSelectedSuggestions(new Set());
       setBanner(
         `Promoted all ${res.createdTickets.length} Brainstorming idea(s) to the Roadmap & Kanban Board and started the autonomous multi-agent pipeline!`,
@@ -226,7 +229,7 @@ export function useRoadmapActions({
         'POST',
         { mode, instructions: quickAddText.trim() || brainstormFocus.trim() },
       );
-      setLocalRoadmap(res.roadmap);
+      setRoadmap(res.roadmap);
       if (mode === 'agent' && res.agentRun) {
         setPendingBrainstormRunId(res.agentRun.id);
         setBanner(
@@ -256,7 +259,7 @@ export function useRoadmapActions({
         const next = await api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/milestones`, 'POST', {
           title: raw,
         });
-        setLocalRoadmap(next);
+        setRoadmap(next);
         setQuickAddText('');
         setQuickAddTarget('auto');
         setBanner(`Created new milestone "${raw}".`);
@@ -265,7 +268,7 @@ export function useRoadmapActions({
           milestoneId: quickAddTarget || 'auto',
           title: raw,
         });
-        setLocalRoadmap(next);
+        setRoadmap(next);
         setQuickAddText('');
         setBanner(`Auto-routed "${raw}" to the right milestone, specialist persona & AI model!`);
       }
@@ -286,7 +289,7 @@ export function useRoadmapActions({
         milestoneId: msId,
         title: raw,
       });
-      setLocalRoadmap(next);
+      setRoadmap(next);
       setInlineMsInputs((prev) => ({ ...prev, [msId]: '' }));
       setBanner(`Added "${raw}" to ${msCode} (auto-assigned specialist & model).`);
     } catch (err) {
@@ -299,7 +302,7 @@ export function useRoadmapActions({
   const handleClearAllSuggestions = () => {
     void api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items/__all_suggestions__`, 'DELETE')
       .then((next) => {
-        setLocalRoadmap(next);
+        setRoadmap(next);
         setSelectedSuggestions(new Set());
       })
       .catch((e: unknown) => setError(errorMessage(e)));
@@ -307,7 +310,7 @@ export function useRoadmapActions({
 
   const handleDismissSuggestion = (sugId: string) => {
     void api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items/${sugId}`, 'DELETE')
-      .then(setLocalRoadmap)
+      .then(setRoadmap)
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
@@ -316,13 +319,13 @@ export function useRoadmapActions({
     void api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items/${item.id}`, 'PATCH', {
       status: nextStatus,
     })
-      .then(setLocalRoadmap)
+      .then(setRoadmap)
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
   const handleDeleteItem = (itemId: string) => {
     void api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/items/${itemId}`, 'DELETE')
-      .then(setLocalRoadmap)
+      .then(setRoadmap)
       .catch((e: unknown) => setError(errorMessage(e)));
   };
 
@@ -334,7 +337,7 @@ export function useRoadmapActions({
       autoStart: true,
     })
       .then((res) => {
-        setLocalRoadmap(res.roadmap);
+        setRoadmap(res.roadmap);
         setBanner(
           `Dispatched item to Kanban Board (${res.createdTickets[0]?.key ?? 'ready'}) and started autonomous execution!`,
         );
@@ -350,7 +353,7 @@ export function useRoadmapActions({
       autoStart: true,
     })
       .then((res) => {
-        setLocalRoadmap(res.roadmap);
+        setRoadmap(res.roadmap);
         setBanner(
           `Dispatched Milestone ${msCode} (${res.createdTickets.length} new ticket(s)) to the AI Coding Factory!`,
         );
@@ -364,7 +367,7 @@ export function useRoadmapActions({
     setError(null);
     void api<ProjectRoadmapState>(`/api/projects/${projectId}/roadmap/milestones/${msId}`, 'DELETE')
       .then((next) => {
-        setLocalRoadmap(next);
+        setRoadmap(next);
         setBanner(`Removed milestone ${msCode} (any remaining items were preserved).`);
       })
       .catch((err: unknown) => setError(errorMessage(err)))

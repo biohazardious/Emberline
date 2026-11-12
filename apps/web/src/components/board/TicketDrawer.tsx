@@ -1,24 +1,26 @@
 import type { AgentPersona, PermissionMode, Run, Ticket, TicketStatus } from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { Link } from 'wouter';
-import { api, errorMessage } from '../api';
-import { useQueryParam } from '../hooks/navigation';
-import { drawerFailure, drawerMergeStep, mergeStepRetired, type PendingMergeStep } from '../reviewComments';
-import { dependencyCandidates } from '../ticketDeps';
-import { timeAgo } from '../time';
-import { BOARD_COLUMNS, BOARD_PRIORITIES, IssueChips } from './BoardCard';
+import { api, errorMessage } from '../../api';
+import { useQueryParam } from '../../hooks/navigation';
+import {
+  drawerFailure,
+  drawerMergeStep,
+  mergeStepRetired,
+  type PendingMergeStep,
+} from '../../reviewComments';
+import { timeAgo } from '../../time';
+import { ErrorBoundary } from '../ErrorBoundary';
+import { PersonaBadge } from '../PersonaBadge';
+import { RunEventTimeline, RunFailureBanner } from '../RunInspector';
+import { RunStatePill } from '../RunStatePill';
+import { ico } from '../SectionState';
+import { DRAWER_VIEWS, type DrawerCtx, type DrawerView } from './boardMeta';
 import { DrawerAgentSection } from './DrawerAgentSection';
-import { ErrorBoundary } from './ErrorBoundary';
-import { PersonaBadge, PersonaPicker, TaskTemplateBar } from './PersonaBadge';
-import { RunEventTimeline, RunFailureBanner } from './RunInspector';
-import { RunStatePill } from './RunStatePill';
+import { DrawerDetailsSection } from './DrawerDetailsSection';
 
-const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
-const ReviewView = lazy(() => import('./ReviewView').then((m) => ({ default: m.ReviewView })));
-
-const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
-type DrawerView = (typeof DRAWER_VIEWS)[number];
+const TerminalView = lazy(() => import('../TerminalView').then((m) => ({ default: m.TerminalView })));
+const ReviewView = lazy(() => import('../ReviewView').then((m) => ({ default: m.ReviewView })));
 
 export function TicketDrawer({
   ticket,
@@ -84,7 +86,7 @@ export function TicketDrawer({
     }
   };
   const mergeStep = drawerMergeStep(mergeNext, ticket.status, error);
-  const [depError, setDepError] = useState<string>();
+
   const [confirmStart, setConfirmStart] = useState(armStart > 0);
   useEffect(() => {
     if (armStart > 0) {
@@ -131,31 +133,13 @@ export function TicketDrawer({
       onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona }));
     });
 
-  const setDependsOn = async (next: string[]) => {
-    setBusy('deps');
-    setDepError(undefined);
-    try {
-      onChanged(await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { dependsOn: next }));
-    } catch (e) {
-      setDepError(errorMessage(e));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const byId = new Map(allTickets.map((t) => [t.id, t]));
-  const candidates = dependencyCandidates(ticket, allTickets);
-
   const start = () => {
     if (ticket.blockedBy.length > 0 && !confirmStart) {
       setConfirmStart(true);
       return;
     }
     setConfirmStart(false);
-    void startNow();
-  };
-
-  const startNow = () =>
-    act('start', async () => {
+    void act('start', async () => {
       if (dirty) await api<Ticket>(`/api/tickets/${ticket.id}`, 'PATCH', { title, body, priority, persona });
       const res = await api<{ ticket: Ticket; run: Run }>(`/api/tickets/${ticket.id}/start`, 'POST', {
         permissionMode: mode,
@@ -163,6 +147,7 @@ export function TicketDrawer({
       });
       onChanged(res.ticket);
     });
+  };
 
   const send = () =>
     act('send', async () => {
@@ -185,6 +170,38 @@ export function TicketDrawer({
       if (!run) return;
       await api(`/api/runs/${run.id}/${name}`, 'POST', name === 'resume' ? {} : undefined);
     });
+
+  const ctx: DrawerCtx = {
+    t: ticket,
+    all: allTickets,
+    run,
+    title,
+    setTitle,
+    body,
+    setBody,
+    prio: priority,
+    setPrio: setPriority,
+    persona,
+    setPersona,
+    mode,
+    setMode,
+    follow: followUp,
+    setFollow: setFollowUp,
+    view: viewTab,
+    setView: setViewTab,
+    dirty,
+    busy,
+    setBusy,
+    confirm: confirmStart,
+    save,
+    start,
+    send,
+    runAct: runAction,
+    changed: onChanged,
+    move: onMove,
+    discard: onDiscard,
+    accept: onAccept,
+  };
 
   return (
     <div className="drawer-backdrop" onClick={onClose}>
@@ -219,7 +236,7 @@ export function TicketDrawer({
                 className={viewTab === 'details' ? 'active' : ''}
                 onClick={() => setViewTab('details')}
               >
-                Spec & Agent
+                Spec &amp; Agent
               </button>
               {run.worktreePath && (
                 <button
@@ -229,7 +246,7 @@ export function TicketDrawer({
                   className={viewTab === 'review' ? 'active' : ''}
                   onClick={() => setViewTab('review')}
                 >
-                  Review & Diff
+                  Review &amp; Diff
                 </button>
               )}
               {run.terminalId && (
@@ -255,7 +272,7 @@ export function TicketDrawer({
             </div>
           )}
           <button id="drawer-close" className="icon-btn" aria-label="Close" onClick={onClose}>
-            <X className="icon" aria-hidden />
+            {ico(X)}
           </button>
         </header>
 
@@ -265,7 +282,7 @@ export function TicketDrawer({
               <Suspense
                 fallback={
                   <div className="empty" aria-busy="true">
-                    Loading diff & review…
+                    Loading diff &amp; review…
                   </div>
                 }
               >
@@ -292,201 +309,9 @@ export function TicketDrawer({
           </div>
         )}
 
-        {viewTab === 'details' && (
-          <>
-            <TaskTemplateBar
-              onSelect={(tpl) => {
-                setPersona(tpl.persona);
-                setMode(tpl.permissionMode);
-                if (!title.trim()) setTitle(tpl.titlePlaceholder);
-                setBody(tpl.promptTemplate);
-              }}
-            />
-            <input
-              id="drawer-title"
-              className="input drawer-title"
-              value={title}
-              maxLength={200}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <IssueChips external={ticket.external} />
-            <textarea
-              id="drawer-body"
-              className="input drawer-body"
-              rows={5}
-              placeholder="Details, acceptance criteria, files to look at… (sent to the assigned agent with the title)"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-            />
-            {ticket.completion && (
-              <section className="drawer-completion" aria-label="Completion">
-                <label className="drawer-label">
-                  Completion
-                  {ticket.completion.blockers.length > 0 && (
-                    <span
-                      className="badge mono"
-                      style={{ marginLeft: 8, borderColor: 'var(--warn)', color: 'var(--warn)' }}
-                    >
-                      blocked
-                    </span>
-                  )}
-                </label>
-                <p style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>{ticket.completion.summary}</p>
-                {ticket.completion.blockers.length > 0 && (
-                  <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>
-                    {ticket.completion.blockers.map((b) => (
-                      <li key={b}>{b}</li>
-                    ))}
-                  </ul>
-                )}
-                {ticket.completion.handoff && (
-                  <>
-                    <div className="muted small">Handoff for dependent tickets</div>
-                    <p className="small" style={{ margin: '2px 0', whiteSpace: 'pre-wrap' }}>
-                      {ticket.completion.handoff}
-                    </p>
-                  </>
-                )}
-                <div className="muted small mono">
-                  <Link href={`/runs/${ticket.completion.runId}/review`}>
-                    run {ticket.completion.runId.slice(0, 8)}
-                  </Link>
-                  {' · '}
-                  {timeAgo(ticket.completion.at)}
-                </div>
-              </section>
-            )}
-            <label className="drawer-label">Specialist Persona</label>
-            <PersonaPicker value={persona} onChange={setPersona} />
-            <div className="drawer-row">
-              <div className="segmented" role="radiogroup" aria-label="Priority">
-                {BOARD_PRIORITIES.map((label, value) => (
-                  <button
-                    key={label}
-                    type="button"
-                    role="radio"
-                    aria-checked={priority === value}
-                    className={priority === value ? 'active' : ''}
-                    onClick={() => setPriority(value)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <button
-                id="drawer-save"
-                className="btn btn-sm"
-                disabled={!dirty || !!busy || !title.trim()}
-                onClick={() => void save()}
-              >
-                {busy === 'save' ? 'Saving…' : 'Save'}
-              </button>
-            </div>
+        {viewTab === 'details' && <DrawerDetailsSection ctx={ctx} />}
 
-            <label className="drawer-label" htmlFor="drawer-dep-add">
-              Depends on
-            </label>
-            <div className="dep-editor">
-              {ticket.dependsOn.length === 0 && <p className="muted small">No dependencies.</p>}
-              <ul className="dep-list">
-                {ticket.dependsOn.map((id) => {
-                  const dep = byId.get(id);
-                  return (
-                    <li key={id} className="dep-item">
-                      {dep ? (
-                        <>
-                          <Link
-                            href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`}
-                            className="mono dep-key"
-                          >
-                            {dep.key}
-                          </Link>
-                          <span className="dep-title">{dep.title}</span>
-                          <span className="badge badge-soft">{dep.status.replace('_', ' ')}</span>
-                        </>
-                      ) : (
-                        <span className="mono muted dep-title">{id}</span>
-                      )}
-                      <button
-                        type="button"
-                        className="icon-btn"
-                        aria-label={`Remove dependency ${dep?.key ?? id}`}
-                        disabled={!!busy}
-                        onClick={() => void setDependsOn(ticket.dependsOn.filter((d) => d !== id))}
-                      >
-                        <X className="icon" aria-hidden />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-              <select
-                id="drawer-dep-add"
-                className="input"
-                value=""
-                disabled={!!busy || candidates.length === 0}
-                onChange={(e) => e.target.value && void setDependsOn([...ticket.dependsOn, e.target.value])}
-              >
-                <option value="">
-                  {candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}
-                </option>
-                {candidates.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.key} {c.title}
-                  </option>
-                ))}
-              </select>
-              {depError && (
-                <p className="form-error" role="alert">
-                  {depError}
-                </p>
-              )}
-            </div>
-
-            <label className="drawer-label" htmlFor="drawer-status">
-              Column
-            </label>
-            <div
-              id="drawer-status"
-              className="segmented segmented-wrap"
-              role="radiogroup"
-              aria-label="Column"
-            >
-              {BOARD_COLUMNS.map((c) => (
-                <button
-                  key={c.status}
-                  type="button"
-                  role="radio"
-                  aria-checked={ticket.status === c.status}
-                  className={ticket.status === c.status ? 'active' : ''}
-                  onClick={() => onMove(c.status)}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <DrawerAgentSection
-          ticket={ticket}
-          run={run}
-          title={title}
-          busy={busy}
-          mode={mode}
-          onModeChange={setMode}
-          followUp={followUp}
-          onFollowUpChange={setFollowUp}
-          confirmStart={confirmStart}
-          showOutputs={viewTab !== 'events'}
-          showingTerminal={viewTab === 'terminal'}
-          onToggleTerminal={() => setViewTab(viewTab === 'terminal' ? 'details' : 'terminal')}
-          onStart={start}
-          onSend={send}
-          onRunAction={runAction}
-          onDiscard={onDiscard}
-          onAccept={onAccept}
-        />
+        <DrawerAgentSection ctx={ctx} />
 
         {error && (
           <p className="form-error" role="alert">

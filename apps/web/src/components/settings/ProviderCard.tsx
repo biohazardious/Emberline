@@ -16,78 +16,95 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { ProviderMark } from '../ProviderMark';
-import { OAUTH_LOGIN_PROVIDERS, TIER_COLORS } from './providerRoutingHelpers';
+import { ico } from '../SectionState';
+import {
+  OAUTH_LOGIN_PROVIDERS,
+  type ProviderSectionForm,
+  ST_COL_6,
+  ST_DESC_73,
+  ST_ROW_BETWEEN,
+  ST_ROW_WRAP6,
+  TIER_COLORS,
+} from './settingsMeta';
 
-export interface ProviderRegistryCardProps {
-  providerId: AgentId;
-  isEnabled: boolean;
-  settings: FactorySettings | null;
-  toolStatus?: CliToolStatus;
-  busyToolProvider: AgentId | null;
-  updatingAllTools: boolean;
-  launchingLoginProvider: AgentId | null;
-  antigravityAck: boolean;
-  setAntigravityAck: (value: boolean) => void;
-  anthropicApiKey: string;
-  setAnthropicApiKey: (value: string) => void;
-  geminiApiKey: string;
-  setGeminiApiKey: (value: string) => void;
-  openaiApiKey: string;
-  setOpenaiApiKey: (value: string) => void;
-  onToggleEnabled: (providerId: AgentId) => void;
-  onToolchainAction: (
-    providerId: AgentId,
-    action: 'install' | 'update' | 'uninstall',
-    spawnTerminal?: boolean,
-  ) => void;
-  onStartLogin: (providerId: AgentId) => void;
+const MAKE_LOGIN_CMD: Partial<Record<AgentId, string>> = {
+  antigravity: 'make agy-login',
+  claude: 'make claude-login',
+  gemini: 'make gemini-login',
+  codex: 'make codex-login',
+  copilot: 'make copilot-login',
+};
+
+function ApiKeyField({
+  label,
+  configured,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string;
+  configured: boolean;
+  placeholder: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <label className="field" style={{ gap: 3, marginTop: 2 }}>
+      <span className="muted mono" style={{ fontSize: '0.67rem' }}>
+        {label}
+      </span>
+      <input
+        type="password"
+        autoComplete="new-password"
+        className="input mono"
+        style={{ padding: '5px 8px', fontSize: '0.76rem' }}
+        placeholder={configured ? '•••••••••••••••• (Configured)' : placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
 }
 
-export function ProviderRegistryCard({
+export function ProviderCard({
   providerId,
-  isEnabled,
+  form,
   settings,
   toolStatus,
   busyToolProvider,
   updatingAllTools,
   launchingLoginProvider,
-  antigravityAck,
-  setAntigravityAck,
-  anthropicApiKey,
-  setAnthropicApiKey,
-  geminiApiKey,
-  setGeminiApiKey,
-  openaiApiKey,
-  setOpenaiApiKey,
   onToggleEnabled,
   onToolchainAction,
   onStartLogin,
-}: ProviderRegistryCardProps) {
+}: {
+  providerId: AgentId;
+  form: ProviderSectionForm;
+  settings: FactorySettings;
+  toolStatus: CliToolStatus | undefined;
+  busyToolProvider: AgentId | null;
+  updatingAllTools: boolean;
+  launchingLoginProvider: AgentId | null;
+  onToggleEnabled: () => void;
+  onToolchainAction: (action: 'install' | 'update' | 'uninstall', spawnTerminal: boolean) => void;
+  onStartLogin: () => void;
+}) {
+  const { enabledProviders, antigravityAck, setAntigravityAck, apiKeys, patchApiKeys } = form;
+  const isEnabled = enabledProviders.includes(providerId);
   const entry = PROVIDER_REGISTRY[providerId];
-  const authStatus = settings?.providerAuth?.[providerId];
+  const authStatus = settings.providerAuth?.[providerId];
   const isToolBusy = busyToolProvider === providerId || Boolean(toolStatus?.installing);
   const supportsOAuthLogin = OAUTH_LOGIN_PROVIDERS.includes(providerId);
   const isKeyConfigured =
     providerId === 'claude'
-      ? Boolean(settings?.anthropicKeyConfigured)
+      ? Boolean(settings.anthropicKeyConfigured)
       : providerId === 'gemini' || providerId === 'antigravity'
-        ? Boolean(settings?.geminiKeyConfigured)
+        ? Boolean(settings.geminiKeyConfigured)
         : providerId === 'codex'
-          ? Boolean(settings?.openaiKeyConfigured)
+          ? Boolean(settings.openaiKeyConfigured)
           : false;
   const isAuthReady = Boolean(authStatus?.authenticated || isKeyConfigured);
-  const makeLoginCmd =
-    providerId === 'antigravity'
-      ? 'make agy-login'
-      : providerId === 'claude'
-        ? 'make claude-login'
-        : providerId === 'gemini'
-          ? 'make gemini-login'
-          : providerId === 'codex'
-            ? 'make codex-login'
-            : providerId === 'copilot'
-              ? 'make copilot-login'
-              : null;
+  const makeLoginCmd = MAKE_LOGIN_CMD[providerId];
 
   return (
     <div
@@ -106,15 +123,8 @@ export function ProviderRegistryCard({
         transition: 'all 0.15s ease',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '8px',
-          }}
-        >
+      <div style={ST_COL_6}>
+        <div style={ST_ROW_BETWEEN}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
             <ProviderMark id={entry.id} />
             <strong style={{ fontSize: '0.9rem' }}>{entry.label}</strong>
@@ -122,7 +132,7 @@ export function ProviderRegistryCard({
           <button
             type="button"
             className={`btn btn-xs ${isEnabled ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => onToggleEnabled(providerId)}
+            onClick={onToggleEnabled}
             title={
               isEnabled
                 ? 'Click to disable this provider and hide its models'
@@ -148,7 +158,7 @@ export function ProviderRegistryCard({
           </label>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+        <div style={ST_ROW_WRAP6}>
           <span
             className="badge mono"
             style={{
@@ -168,18 +178,14 @@ export function ProviderRegistryCard({
           >
             {isToolBusy ? (
               <>
-                <LoaderCircle className="icon icon-spin" aria-hidden /> Installing{' '}
-                {toolStatus?.binaryName ?? providerId}…
+                {ico(LoaderCircle, true)} Installing {toolStatus?.binaryName ?? providerId}…
               </>
             ) : toolStatus?.installed ? (
               <>
-                <Package className="icon" aria-hidden /> {toolStatus.binaryName} (
-                {toolStatus.version ?? 'installed'})
+                {ico(Package)} {toolStatus.binaryName} ({toolStatus.version ?? 'installed'})
               </>
             ) : (
-              <>
-                <TriangleAlert className="icon" aria-hidden /> CLI Not Installed
-              </>
+              <>{ico(TriangleAlert)} CLI Not Installed</>
             )}
           </span>
           <span
@@ -196,7 +202,7 @@ export function ProviderRegistryCard({
           </span>
         </div>
 
-        <div className="muted small" style={{ fontSize: '0.73rem', lineHeight: 1.35 }}>
+        <div className="muted small" style={ST_DESC_73}>
           {entry.description}
         </div>
 
@@ -246,12 +252,12 @@ export function ProviderRegistryCard({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+        <div style={ST_ROW_WRAP6}>
           <button
             type="button"
             className="btn btn-xs btn-ghost"
             disabled={isToolBusy || updatingAllTools}
-            onClick={() => onToolchainAction(providerId, toolStatus?.installed ? 'update' : 'install', false)}
+            onClick={() => onToolchainAction(toolStatus?.installed ? 'update' : 'install', false)}
             style={{
               borderColor: toolStatus?.installed
                 ? 'color-mix(in srgb, var(--ok) 40%, transparent)'
@@ -266,40 +272,34 @@ export function ProviderRegistryCard({
             }
           >
             {isToolBusy ? (
-              <>
-                <LoaderCircle className="icon icon-spin" aria-hidden /> Working…
-              </>
+              <>{ico(LoaderCircle, true)} Working…</>
             ) : toolStatus?.installed ? (
-              <>
-                <RotateCw className="icon" aria-hidden /> Update CLI
-              </>
+              <>{ico(RotateCw)} Update CLI</>
             ) : (
-              <>
-                <Download className="icon" aria-hidden /> Install CLI
-              </>
+              <>{ico(Download)} Install CLI</>
             )}
           </button>
           <button
             type="button"
             className="btn btn-xs btn-ghost"
             disabled={isToolBusy || updatingAllTools}
-            onClick={() => onToolchainAction(providerId, toolStatus?.installed ? 'update' : 'install', true)}
+            onClick={() => onToolchainAction(toolStatus?.installed ? 'update' : 'install', true)}
             style={{ fontSize: '0.7rem' }}
             title="Run CLI install/update inside an interactive terminal so you can watch live output"
           >
-            <Terminal className="icon" aria-hidden /> Terminal
+            {ico(Terminal)} Terminal
           </button>
           {toolStatus?.installed && (
             <button
               type="button"
               className="btn btn-xs btn-ghost"
               disabled={isToolBusy || updatingAllTools}
-              onClick={() => onToolchainAction(providerId, 'uninstall', false)}
+              onClick={() => onToolchainAction('uninstall', false)}
               style={{ fontSize: '0.68rem', color: 'var(--bad)' }}
               title={`Uninstall ${entry.shortLabel} CLI from /opt/ai-tools`}
               aria-label={`Uninstall ${entry.shortLabel} CLI`}
             >
-              <Trash2 className="icon" aria-hidden />
+              {ico(Trash2)}
             </button>
           )}
         </div>
@@ -322,20 +322,12 @@ export function ProviderRegistryCard({
         )}
 
         {supportsOAuthLogin && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
-              flexWrap: 'wrap',
-            }}
-          >
+          <div style={{ ...ST_ROW_BETWEEN, flexWrap: 'wrap' }}>
             <button
               type="button"
               className="btn btn-xs btn-ghost"
               disabled={launchingLoginProvider !== null || (providerId === 'antigravity' && !antigravityAck)}
-              onClick={() => onStartLogin(providerId)}
+              onClick={onStartLogin}
               style={{
                 borderColor: 'color-mix(in srgb, var(--info) 45%, transparent)',
                 color: 'var(--info)',
@@ -344,17 +336,11 @@ export function ProviderRegistryCard({
               title="Opens an interactive browser terminal inside the runner container to authenticate via official CLI OAuth (auto-installs CLI if missing)"
             >
               {launchingLoginProvider === providerId ? (
-                <>
-                  <LoaderCircle className="icon icon-spin" aria-hidden /> Opening Terminal…
-                </>
+                <>{ico(LoaderCircle, true)} Opening Terminal…</>
               ) : isAuthReady && authStatus?.method === 'oauth_cli' ? (
-                <>
-                  <RefreshCw className="icon" aria-hidden /> Re-Login CLI Account
-                </>
+                <>{ico(RefreshCw)} Re-Login CLI Account</>
               ) : (
-                <>
-                  <KeyRound className="icon" aria-hidden /> CLI OAuth Login (Terminal)
-                </>
+                <>{ico(KeyRound)} CLI OAuth Login (Terminal)</>
               )}
             </button>
             {makeLoginCmd && (
@@ -370,56 +356,37 @@ export function ProviderRegistryCard({
         )}
 
         {isEnabled && providerId === 'claude' && (
-          <label className="field" style={{ gap: 3, marginTop: 2 }}>
-            <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-              Anthropic API Key (Optional Override · CLI OAuth used by default)
-            </span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              className="input mono"
-              style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-              placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-ant-...'}
-              value={anthropicApiKey}
-              onChange={(e) => setAnthropicApiKey(e.target.value)}
-            />
-          </label>
+          <ApiKeyField
+            label="Anthropic API Key (Optional Override · CLI OAuth used by default)"
+            configured={isKeyConfigured}
+            placeholder="sk-ant-..."
+            value={apiKeys.anthropic}
+            onChange={(anthropic) => patchApiKeys({ anthropic })}
+          />
         )}
 
         {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
-          <label className="field" style={{ gap: 3, marginTop: 2 }}>
-            <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-              {providerId === 'gemini'
+          <ApiKeyField
+            label={
+              providerId === 'gemini'
                 ? 'Google Gemini API Key (recommended)'
-                : 'Google Gemini API Key (optional)'}
-            </span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              className="input mono"
-              style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-              placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'AIzaSy...'}
-              value={geminiApiKey}
-              onChange={(e) => setGeminiApiKey(e.target.value)}
-            />
-          </label>
+                : 'Google Gemini API Key (optional)'
+            }
+            configured={isKeyConfigured}
+            placeholder="AIzaSy..."
+            value={apiKeys.gemini}
+            onChange={(gemini) => patchApiKeys({ gemini })}
+          />
         )}
 
         {isEnabled && providerId === 'codex' && (
-          <label className="field" style={{ gap: 3, marginTop: 2 }}>
-            <span className="muted mono" style={{ fontSize: '0.67rem' }}>
-              OpenAI API Key (Optional Override · ChatGPT Account OAuth supported)
-            </span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              className="input mono"
-              style={{ padding: '5px 8px', fontSize: '0.76rem' }}
-              placeholder={isKeyConfigured ? '•••••••••••••••• (Configured)' : 'sk-proj-...'}
-              value={openaiApiKey}
-              onChange={(e) => setOpenaiApiKey(e.target.value)}
-            />
-          </label>
+          <ApiKeyField
+            label="OpenAI API Key (Optional Override · ChatGPT Account OAuth supported)"
+            configured={isKeyConfigured}
+            placeholder="sk-proj-..."
+            value={apiKeys.openai}
+            onChange={(openai) => patchApiKeys({ openai })}
+          />
         )}
       </div>
     </div>
