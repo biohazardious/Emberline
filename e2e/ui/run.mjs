@@ -3,12 +3,14 @@
  * Ticket-to-merge regression suite (make e2e): Playwright drives the real web UI against the isolated
  * core + runner stack, with the fake forge (e2e/fake-forge.mjs) as the remote and e2e/fake-claude.mjs as
  * the agent. Scenarios run in order and share one project: import it, run tickets through every
- * state a person sees, and merge into main. Usage: node e2e/ui/run.mjs http://core:7420
+ * state a person sees, merge into main, then follow the history and cut a release on the Git page.
+ * Usage: node e2e/ui/run.mjs http://core:7420
  */
 import assert from 'node:assert/strict';
 import {
   api,
   ensureForgeAccount,
+  FORGE,
   hasClass,
   mainFile,
   scenario,
@@ -278,3 +280,29 @@ await scenario(
     }
   },
 );
+
+await scenario('git page: commits, then release', async (page) => {
+  await page.goto(`${origin(page)}/projects/${project.id}/git`);
+  // The first scenario's agent commit, with its file and diff.
+  await page
+    .locator('.git-commit-list .commit-row-main', { hasText: 'e2e: add e2e-work.txt' })
+    .first()
+    .click();
+  await page.getByRole('list', { name: 'Changed files' }).getByText('e2e-work.txt').waitFor();
+  await page.locator('.git-diff-pane .monaco-diff-editor').waitFor();
+
+  // The working branch is main here: the release tags main as it is, with the person's notes.
+  await page.getByRole('tab', { name: 'Release' }).click();
+  const notes = '### Added\n\n- The first release, cut from the Git page (e2e).';
+  await page.getByLabel('Version', { exact: true }).fill('v0.1.0');
+  await page.getByLabel('Release notes', { exact: true }).fill(notes);
+  await page.getByRole('button', { name: 'Approve and publish' }).click();
+  const job = page.getByRole('region', { name: 'Release job' });
+  await job.getByRole('heading', { name: 'Release v0.1.0 done' }).waitFor({ timeout: 180_000 });
+  await job.getByRole('link', { name: 'Release v0.1.0 on the forge' }).waitFor();
+  const { releases } = await (await fetch(`${FORGE}/_e2e/releases`)).json();
+  const published = releases.find((r) => r.repo === REPO && r.tag_name === 'v0.1.0');
+  assert.equal(published?.body, notes, `the forge release: ${JSON.stringify(releases)}`);
+  const head = await (await fetch(`${FORGE}/_e2e/head/e2e/${REPO}`)).json();
+  assert.equal(head.tags['v0.1.0'], head.main, 'the tag is on the pushed main');
+});

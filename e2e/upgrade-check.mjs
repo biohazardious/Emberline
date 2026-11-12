@@ -11,7 +11,8 @@
  *                                    previous release's migrations with every seeded row
  *   matrix                           every migration step of this release: from any database state, the
  *                                    upgrade snapshots first and breaks no seeded row
- *   api <base-url> ops-missing|ops-ok  what the web app's banner reads (GET /api/system)
+ *   api <base-url> ops-missing|ops-ok  what the web app's banner reads (GET /api/system), and the Git
+ *                                    page's defaults for the seeded project (GET /api/projects/:id/git)
  */
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
@@ -345,11 +346,16 @@ async function api(base, expect) {
     assert.equal(refused.json.error, 'ops_missing', 'the API answers with the error code ops_missing');
   }
   const projects = await call('GET', '/api/projects');
-  assert.ok(
-    projects.json.some((p) => p.slug === 'upgrade-project'),
-    'the seeded project is listed by the API',
+  const seeded = projects.json.find((p) => p.slug === 'upgrade-project');
+  assert.ok(seeded, 'the seeded project is listed by the API');
+  // Settings stored before the Git page: auto-pull is on, and the factory works on the default branch.
+  const git = await call('GET', `/api/projects/${seeded.id}/git`);
+  assert.equal(git.status, 200, `GET /git answered ${git.status}`);
+  assert.equal(git.json.autoPull, true, 'auto-pull is on after the upgrade');
+  assert.equal(git.json.workingBranch, git.json.defaultBranch, 'the working branch is the default branch');
+  console.log(
+    `api: ops banner ${wantMissing ? 'shown' : 'clear'}; seeded project listed; Git page: auto-pull on, working branch ${git.json.workingBranch}`,
   );
-  console.log(`api: ops banner ${wantMissing ? 'shown' : 'clear'}; seeded project listed`);
 }
 
 const [mode, a, b] = process.argv.slice(2);

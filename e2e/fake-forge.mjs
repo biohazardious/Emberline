@@ -1,8 +1,11 @@
 /**
  * Fake Gitea for make e2e (see apps/core/src/test-fake-forge.ts, the unit-test twin).
- * REST under /api/v1 and git smart HTTP through `git http-backend` (CGI). Two debug routes without
- * auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of refs/heads/main
- * (`main`) and of every branch (`heads`, by name) in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on it, as a push from elsewhere.
+ * REST under /api/v1 (repositories and releases) and git smart HTTP through `git http-backend` (CGI).
+ * Debug routes without auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of
+ * refs/heads/main (`main`), of every branch (`heads`, by name) and of every tag (`tags`, the commit an
+ * annotated tag points to) in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on main, as
+ * a push from elsewhere (the JSON body may name its `branch`, `subject`, and a top-level `file` with
+ * its `content`); GET /_e2e/releases lists the releases created through the API.
  * POST /_e2e/hold makes fetches (git-upload-pack) wait, GET /_e2e/held counts the waiting ones and
  * POST /_e2e/release lets them through: a clone that is running while the test looks around.
  */
@@ -83,6 +86,9 @@ function userOf(header) {
   return pass === token && [username, 'x-access-token', 'oauth2'].includes(user) ? username : null;
 }
 
+/** The releases created through POST /api/v1/repos/<owner>/<repo>/releases, in order. */
+const releases = [];
+
 /** Fetches waiting for /_e2e/release while /_e2e/hold is on. */
 let holding = false;
 const held = [];
@@ -106,41 +112,65 @@ createServer((req, res) => {
       if (head[1].includes('..') || head[2].includes('..')) return json(res, 400, { message: 'bad name' });
       const dir = path.join(root, head[1], `${head[2]}.git`);
       const heads = {};
+      const tags = {};
       if (existsSync(dir)) {
         const refs = execFileSync(
           'git',
-          ['--git-dir', dir, 'for-each-ref', '--format=%(objectname) %(refname:strip=2)', 'refs/heads'],
+          [
+            '--git-dir',
+            dir,
+            'for-each-ref',
+            // %(*objectname): the commit an annotated tag points to (empty for a branch).
+            '--format=%(objectname) %(*objectname) %(refname)',
+            'refs/heads',
+            'refs/tags',
+          ],
           { encoding: 'utf8' },
         );
         for (const line of refs.split('\n').filter(Boolean)) {
-          const [sha, name] = line.split(' ');
-          heads[name] = sha;
+          const [sha, peeled, ref] = line.split(' ');
+          if (ref.startsWith('refs/heads/')) heads[ref.slice('refs/heads/'.length)] = sha;
+          else tags[ref.slice('refs/tags/'.length)] = peeled || sha;
         }
       }
-      return json(res, 200, { main: heads.main ?? null, heads });
+      return json(res, 200, { main: heads.main ?? null, heads, tags });
     }
     const outside = /^\/_e2e\/commit\/([^/]+)\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'POST' && outside) {
       if (outside[1].includes('..') || outside[2].includes('..'))
         return json(res, 400, { message: 'bad name' });
       const dir = path.join(root, outside[1], `${outside[2]}.git`);
-      const g = (args, env) =>
+      let ask = {};
+      try {
+        ask = JSON.parse((await readBody(req)) || '{}');
+      } catch {
+        return json(res, 400, { message: 'invalid JSON' });
+      }
+      const branch = `refs/heads/${ask.branch ?? 'main'}`;
+      const g = (args, env, input) =>
         execFileSync('git', ['--git-dir', dir, ...args], {
           encoding: 'utf8',
           env: { ...process.env, ...env },
+          ...(input === undefined ? {} : { input }),
         }).trim();
-      const parent = g(['rev-parse', 'refs/heads/main']);
+      const parent = g(['rev-parse', branch]);
       const who = {
         GIT_AUTHOR_NAME: 'outside',
         GIT_AUTHOR_EMAIL: 'o@e',
         GIT_COMMITTER_NAME: 'outside',
         GIT_COMMITTER_EMAIL: 'o@e',
       };
-      const commit = g(
-        ['commit-tree', g(['rev-parse', `${parent}^{tree}`]), '-p', parent, '-m', 'pushed from elsewhere'],
-        who,
-      );
-      g(['update-ref', 'refs/heads/main', commit, parent]);
+      const subject = ask.subject ?? 'pushed from elsewhere';
+      let tree = g(['rev-parse', `${parent}^{tree}`]);
+      if (typeof ask.file === 'string' && /^[\w.-]+$/.test(ask.file)) {
+        const blob = g(['hash-object', '-w', '--stdin'], {}, ask.content ?? '');
+        const kept = g(['ls-tree', tree])
+          .split('\n')
+          .filter((line) => line && line.split('\t')[1] !== ask.file);
+        tree = g(['mktree'], {}, `${[...kept, `100644 blob ${blob}\t${ask.file}`].join('\n')}\n`);
+      }
+      const commit = g(['commit-tree', tree, '-p', parent, '-m', subject], who);
+      g(['update-ref', branch, commit, parent]);
       return json(res, 200, { main: commit });
     }
     if (req.method === 'POST' && url.pathname === '/_e2e/hold') {
@@ -148,6 +178,7 @@ createServer((req, res) => {
       return json(res, 200, { holding });
     }
     if (req.method === 'GET' && url.pathname === '/_e2e/held') return json(res, 200, { held: held.length });
+    if (req.method === 'GET' && url.pathname === '/_e2e/releases') return json(res, 200, { releases });
     if (req.method === 'POST' && url.pathname === '/_e2e/release') {
       holding = false;
       for (const go of held.splice(0)) go();
@@ -197,6 +228,36 @@ createServer((req, res) => {
         full_name: `${owner}/${body.name}`,
         clone_url: `http://localhost:1/${owner}/${body.name}.git`,
         html_url: `http://localhost:1/${owner}/${body.name}`,
+      });
+    }
+    // Gitea's releases API, as core's forge service calls it (apps/core/src/test-fake-forge.ts is the twin).
+    const release =
+      req.method === 'POST' ? /^\/api\/v1\/repos\/([^/]+)\/([^/]+)\/releases$/.exec(url.pathname) : null;
+    if (release) {
+      let body;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return json(res, 400, { message: 'invalid JSON' });
+      }
+      const [, owner, repo] = release;
+      if (releases.some((r) => r.owner === owner && r.repo === repo && r.tag_name === body.tag_name))
+        return json(res, 409, { message: 'release tag already exists' });
+      releases.push({ owner, repo, tag_name: body.tag_name, name: body.name, body: body.body });
+      return json(res, 201, { html_url: `http://forge:3000/${owner}/${repo}/releases/tag/${body.tag_name}` });
+    }
+    const byTag =
+      req.method === 'GET'
+        ? /^\/api\/v1\/repos\/([^/]+)\/([^/]+)\/releases\/tags\/([^/]+)$/.exec(url.pathname)
+        : null;
+    if (byTag) {
+      const [, owner, repo, tag] = byTag;
+      const found = releases.find(
+        (r) => r.owner === owner && r.repo === repo && r.tag_name === decodeURIComponent(tag),
+      );
+      if (!found) return json(res, 404, { message: 'not found' });
+      return json(res, 200, {
+        html_url: `http://forge:3000/${owner}/${repo}/releases/tag/${found.tag_name}`,
       });
     }
     json(res, 404, { message: 'not found' });

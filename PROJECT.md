@@ -59,6 +59,11 @@ Each story names where it is verified today (tests listed in [`docs/TESTING.md`]
   toast names the first zod issue; nothing is half-imported.
 - **US-8 Stays mine.** As the operator, forge tokens and CLI logins never leave core and the runner home volume;
   there is no account sharing or quota pooling (non-goals, DESIGN §1).
+- **US-9 Git page.** As the operator, the factory merges into a working branch I pick (say `develop`), commits pushed
+  elsewhere come in by themselves, I follow the history and each commit's diff, manage branches, and promote the
+  working branch into main and release it (tag, CHANGELOG.md, forge release with agent-drafted notes) only when I
+  approve. _Edge cases:_ a switch is refused while runs are live or waiting to merge; a conflicting pull leaves the
+  branch as it was; a rewritten origin waits for **Match origin**, which keeps a backup ref; no push is ever forced.
 
 ### 1.3 Milestone 1 user stories (workspace, layering, wire contracts)
 
@@ -84,7 +89,7 @@ Milestone 1 serves the contributor and the adapter author. Its acceptance criter
 - **Backend:** Fastify (REST + `@fastify/websocket`) in `apps/core`, plus `apps/ptyd`, a node-pty host behind a Unix-socket RPC, so agents outlive core restarts.
 - **Database:** SQLite through better-sqlite3 and Drizzle ORM (WAL mode, SQL migrations in `apps/core/drizzle`). It is one embedded file for a single-user install and needs no server.
 - **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`, error/filter UI primitives in `apps/web/src/error-filter.css`, and responsive workbench breakpoints in `apps/web/src/responsive.css`. No CSS framework.
-- **Testing:** Vitest for unit and integration tests across all packages (how to run them and what covers which workflow: [`docs/TESTING.md`](docs/TESTING.md)). `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack, and `e2e/ui/run.mjs` is a Playwright ticket-to-merge regression suite on the same stack (wizard import from a git URL, a card following the agent, an Inbox question, a blocking review comment closing the merge gate, a usage-limit pause that auto-resumes). It uses the fake forge (`e2e/fake-forge.mjs`) and a scripted Claude stand-in (`e2e/fake-claude.mjs`, set as `EMBERLINE_CLAUDE_COMMAND`); a failed scenario leaves a trace zip and screenshot in `e2e-results/`, which CI uploads. `e2e/isolation.sh` (with `e2e/isolation/run.mjs`), run by `make e2e` after the smoke test, is the isolation regression suite: SECURITY.md's "The shared runner" guarantees as named tests SR-01–SR-20 (table in `docs/TESTING.md`), checked from an agent terminal (ptyd, inherited terminals, ops and core processes, SSH keys, the browser daemon) and from ops, a container named `docker` and the host (cookie replays, the git gateway, volume scan, mounts); reverting the 0.7.0 terminal-inheritance fix fails SR-05/SR-06. `make e2e-upgrade` (`e2e/upgrade-paths.sh`, CI step) seeds 0.5/0.6/0.7 data volumes, upgrades them to the current images and checks the pre-migration snapshot, seeded rows, secrets, the ops-missing banner and a snapshot rollback; it fails if any migration lacks a snapshot or breaks a seeded row.
+- **Testing:** Vitest for unit and integration tests across all packages (how to run them and what covers which workflow: [`docs/TESTING.md`](docs/TESTING.md)). `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack, and `e2e/ui/run.mjs` is a Playwright ticket-to-merge regression suite on the same stack (wizard import from a git URL, a card following the agent, an Inbox question, a blocking review comment closing the merge gate, a usage-limit pause that auto-resumes, a release cut on the Git page). It uses the fake forge (`e2e/fake-forge.mjs`) and a scripted Claude stand-in (`e2e/fake-claude.mjs`, set as `EMBERLINE_CLAUDE_COMMAND`); a failed scenario leaves a trace zip and screenshot in `e2e-results/`, which CI uploads. `e2e/isolation.sh` (with `e2e/isolation/run.mjs`), run by `make e2e` after the smoke test, is the isolation regression suite: SECURITY.md's "The shared runner" guarantees as named tests SR-01–SR-20 (table in `docs/TESTING.md`), checked from an agent terminal (ptyd, inherited terminals, ops and core processes, SSH keys, the browser daemon) and from ops, a container named `docker` and the host (cookie replays, the git gateway, volume scan, mounts); reverting the 0.7.0 terminal-inheritance fix fails SR-05/SR-06. `make e2e-upgrade` (`e2e/upgrade-paths.sh`, CI step) seeds 0.5/0.6/0.7 data volumes, upgrades them to the current images and checks the pre-migration snapshot, seeded rows, secrets, the ops-missing banner and a snapshot rollback; it fails if any migration lacks a snapshot or breaks a seeded row, and checks that an upgraded project has auto-pull on and its default branch as the working branch.
 - **Authentication:** A single admin account with an argon2id password set through a one-time setup token. HTTP-only session cookies, plus a per-login key sent as the CSRF header and the WebSocket subprotocol (DESIGN §3.8).
 - **Wire contracts:** zod schemas in `packages/protocol` validate every boundary: REST bodies, WebSocket events, hook payloads, ptyd RPC and `.emberline/worktree.yml`.
 - **Deploy target:** Docker Compose (`compose.yaml`). One multi-stage `Dockerfile` builds the `core` and `runner` images and a `check` stage that serves as the CI gate.
@@ -200,6 +205,21 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   per ticket, a move or delete of a ticket with a live run (`run_active`) and a bulk close of a ticket with a run branch
   (`merge_required`: closing it from the drawer merges it). The board's **Select** mode (`hooks/useBoardSelection.ts`,
   `boardSelection.ts`, `components/BoardBulkBar.tsx`, `board-bulk.css`) keeps refused tickets selected and lists why.
+
+- **Git page:** types in `packages/protocol/src/api/git.ts` (`GitPageStatus`, `GitCommitsPage`, `GitBranch`, `GitSync`,
+  `ReleaseJob`, `ReleaseDraft`); `apps/core/src/git-page/` (`history.ts` commits and diffs, `branches.ts` branches and the
+  working branch, `sync.ts` pull and auto-pull every `AUTO_PULL_INTERVAL_MS` (2 minutes), `release.ts` the release job,
+  `release-notes.ts` the agent's draft) behind `GitPageService`, routes in `routes/git.ts`, and the page in
+  `apps/web/src/pages/GitPage.tsx` with `components/git/*`. Its state lives in the project's repository settings JSON
+  (`db/project-settings.ts`: `workingBranch`, `autoPull` (absent: on), `sync`, `pulledOids`, `releaseDraft`, `releaseJob`).
+  Routes, all under `/api/projects/:id/git`: `GET` (status) and `PATCH` (`{ autoPull }`); `GET /commits?ref=&cursor=`,
+  `GET /commits/:sha`, `GET /commits/:sha/file?path=`; `GET /compare?base=&head=`, `GET /compare/file?base=&head=&path=`;
+  `GET /branches`, `POST /branches` (`{ name, from: main | working }`), `DELETE /branches/:name?remote=1`;
+  `POST /working-branch` (`{ branch }`); `POST /fetch`, `POST /pull`, `POST /pull/ticket`, `POST /match-origin` (`{ branch }`);
+  `POST /release/draft`; `POST /release` (`{ mode: publish | promote_only, version, notes, head }`, 202, the job runs in the
+  background), `POST /release/retry` (202) and `POST /release/undo-promote`. The release steps run in order
+  `promote → checks → changelog → push_main → tag → push_tag → forge_release → sync_working`; the checks run in core's own
+  worktree under the compose project `emberline-release-<id8>`, and the forge release goes through `ForgeService.createRelease`.
 
 Every value that crosses a process boundary is parsed with its zod schema on arrival. New contracts go into
 `packages/protocol` first, then core and web consume them.

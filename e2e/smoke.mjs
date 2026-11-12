@@ -45,11 +45,12 @@ async function step(name, fn) {
   }
 }
 
-/** Polls `fn` until it returns true; fails with `message` after `ms`. */
+/** Polls `fn` until it returns a truthy value, and returns it; fails with `message` after `ms`. */
 async function until(fn, message, ms = 30_000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (await fn()) return;
+    const value = await fn();
+    if (value) return value;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(message);
@@ -272,6 +273,10 @@ await step(
   async () => {
     const base = `/api/projects/${project.id}/repository`;
     const forgeMain = async () => (await (await fetch('http://forge:3000/_e2e/head/e2e/smoke')).json()).main;
+    // Auto-pull (on by default) would merge the commit from elsewhere below into main and end the
+    // divergence this check looks at; the Git page checks turn it on again.
+    const off = await api('PATCH', `/api/projects/${project.id}/git`, { autoPull: false });
+    assert.equal(off.json?.autoPull, false, off.text);
     // The default branch as the target; new opt-ins push to the integration branch (next step).
     const opted = await api('PATCH', base, { keepMainPushed: true, pushTarget: 'default_branch' });
     assert.equal(opted.json.keepMainPushed, true, opted.text);
@@ -340,6 +345,161 @@ await step(
     await api('PATCH', base, { keepMainPushed: false });
   },
 );
+
+const FORGE = 'http://forge:3000';
+const forgeHead = async () => await (await fetch(`${FORGE}/_e2e/head/e2e/smoke`)).json();
+const branchTip = async (name) =>
+  (await api('GET', `/api/projects/${project.id}/git/branches`)).json.find((b) => b.name === name)?.tip;
+
+await step('git page: a push from elsewhere is pulled by itself', async () => {
+  const git = `/api/projects/${project.id}/git`;
+  const on = await api('PATCH', git, { autoPull: true });
+  assert.equal(on.json?.autoPull, true, on.text);
+  // Main here has merges origin lacks, and origin's main a commit from elsewhere (the checks above):
+  // this one adds CHANGELOG.md, which the release below writes its notes into.
+  const pushed = await (
+    await fetch(`${FORGE}/_e2e/commit/e2e/smoke`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subject: 'docs: start a changelog',
+        file: 'CHANGELOG.md',
+        content: '# Changelog\n\n## [Unreleased]\n',
+      }),
+    })
+  ).json();
+  const read = await api('POST', `${git}/fetch`);
+  assert.equal(read.status, 200, read.text);
+  // No Pull: the auto-pull tick (every 2 minutes) merges origin's main in by itself.
+  const commit = await until(
+    async () =>
+      (await api('GET', `${git}/commits`)).json?.commits?.find((c) => c.sha === pushed.main && c.fromOrigin),
+    'auto-pull never brought the commit from elsewhere in',
+    150_000,
+  );
+  assert.equal(commit.subject, 'docs: start a changelog');
+  assert.equal(commit.byFactory, false);
+  const status = (await api('GET', git)).json;
+  assert.ok(['pulled', 'up_to_date'].includes(status.sync.state), JSON.stringify(status.sync));
+  assert.equal(status.main, 'ahead', 'main holds the merge of origin, not pushed yet');
+  // A release from a working branch needs main pushed first.
+  const push = await api('POST', `/api/projects/${project.id}/repository/push-main`);
+  assert.equal(push.status, 200, push.text);
+  assert.equal((await forgeHead()).main, await branchTip('main'));
+});
+
+await step('git page: the factory works on develop and main stays put', async () => {
+  const git = `/api/projects/${project.id}/git`;
+  const made = await api('POST', `${git}/branches`, { name: 'develop', from: 'main' });
+  assert.equal(made.status, 200, made.text);
+  const set = await api('POST', `${git}/working-branch`, { branch: 'develop' });
+  assert.equal(set.status, 200, set.text);
+  const status = (await api('GET', git)).json;
+  assert.equal(status.workingBranch, 'develop', JSON.stringify(status));
+  assert.equal(status.checkedOut, 'develop');
+  const mainBefore = await branchTip('main');
+  const ticket = await api('POST', `/api/projects/${project.id}/tickets`, {
+    title: 'Work on develop [e2e:work:develop]',
+    status: 'backlog',
+  });
+  assert.equal(ticket.status, 201, ticket.text);
+  const started = await api('POST', `/api/tickets/${ticket.json.id}/start`, {});
+  assert.equal(started.status, 201, started.text);
+  await until(
+    async () => (await api('GET', `/api/tickets/${ticket.json.id}`)).json?.status === 'review',
+    'the ticket never reached Review',
+    120_000,
+  );
+  // As the board's Done does: merge the run, then move the card.
+  const merged = await api('POST', `/api/projects/${project.id}/sync-worktree`, {
+    runId: started.json.run.id,
+  });
+  assert.equal(merged.json?.ok, true, merged.text);
+  const done = await api('PATCH', `/api/tickets/${ticket.json.id}`, { status: 'done' });
+  assert.equal(done.json?.status, 'done', done.text);
+  const compare = (await api('GET', `${git}/compare?base=main&head=develop`)).json;
+  assert.ok(compare.ahead >= 1 && compare.behind === 0, JSON.stringify(compare));
+  assert.ok(
+    compare.files.some((f) => f.path === 'e2e-work-develop.txt'),
+    `develop has the merge: ${JSON.stringify(compare.files)}`,
+  );
+  assert.equal(await branchTip('main'), mainBefore, 'main stays where it was');
+  assert.equal((await forgeHead()).main, mainBefore, "origin's main stays where it was");
+});
+
+await step('git page: promote and release', async () => {
+  const git = `/api/projects/${project.id}/git`;
+  // The e2e's Claude is the scripted stand-in (fake-claude.mjs): a stored key counts it as signed in.
+  const key = await api('PATCH', '/api/factory/settings', { anthropicApiKey: 'sk-ant-e2e-stand-in' });
+  assert.equal(key.status, 200, key.text);
+  const asked = await api('POST', `${git}/release/draft`);
+  assert.equal(asked.status, 200, asked.text);
+  const draft = await until(async () => {
+    const d = (await api('GET', git)).json.releaseDraft;
+    return d && d.status !== 'drafting' ? d : null;
+  }, 'the draft never finished');
+  const cleared = await api('PATCH', '/api/factory/settings', { anthropicApiKey: null });
+  assert.equal(cleared.status, 200, cleared.text);
+  assert.equal(draft.status, 'ready', JSON.stringify(draft));
+  assert.equal(draft.bump, 'minor');
+  assert.equal(draft.version, 'v0.1.0');
+  assert.match(draft.notes, /^### Added/);
+
+  const status = (await api('GET', git)).json;
+  assert.equal(status.release.ok, true, JSON.stringify(status.release));
+  const head = status.releaseSummary.head;
+  assert.equal(head, await branchTip('develop'));
+  const started = await api('POST', `${git}/release`, {
+    mode: 'publish',
+    version: draft.version,
+    notes: draft.notes,
+    head,
+  });
+  assert.equal(started.status, 202, started.text);
+  const job = await until(
+    async () => {
+      const j = (await api('GET', git)).json.releaseJob;
+      return j && j.state !== 'running' ? j : null;
+    },
+    'the release never finished',
+    180_000,
+  );
+  assert.equal(job.state, 'done', JSON.stringify(job));
+  const steps = Object.fromEntries(job.steps.map((s) => [s.name, s.status]));
+  // No approved checks in this project: that step is skipped, everything else runs.
+  assert.deepEqual(steps, {
+    promote: 'done',
+    checks: steps.checks === 'skipped' ? 'skipped' : 'done',
+    changelog: 'done',
+    push_main: 'done',
+    tag: 'done',
+    push_tag: 'done',
+    forge_release: 'done',
+    sync_working: 'done',
+  });
+
+  const main = await branchTip('main');
+  const forge = await forgeHead();
+  assert.equal(forge.main, main, 'main is pushed');
+  assert.equal(forge.tags['v0.1.0'], main, 'the tag is pushed, on main');
+  assert.equal(await branchTip('develop'), main, 'develop follows main after the release');
+  const [release, promote] = (await api('GET', `${git}/commits?ref=main`)).json.commits;
+  assert.equal(release.subject, 'chore(release): v0.1.0');
+  assert.equal(promote.subject, 'Merge develop into main');
+  assert.deepEqual(promote.parents, [job.previousMain, head]);
+  // Read from the main workspace, which is on develop: the same commit as main now.
+  const changelog = await api('GET', `/api/projects/${project.id}/files/content?path=CHANGELOG.md`);
+  assert.match(
+    changelog.json?.content ?? '',
+    /^## \[Unreleased\]\n\n## \[0\.1\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n/m,
+    changelog.text,
+  );
+  const { releases } = await (await fetch(`${FORGE}/_e2e/releases`)).json();
+  const published = releases.find((r) => r.repo === 'smoke' && r.tag_name === 'v0.1.0');
+  assert.ok(published, `the forge release: ${JSON.stringify(releases)}`);
+  assert.equal(published.body, draft.notes);
+  assert.equal(job.releaseUrl, `${FORGE}/e2e/smoke/releases/tag/v0.1.0`);
+});
 
 await step('demo is served sandboxed through a capability URL', async () => {
   const entry = await api('GET', `/api/projects/${project.id}/demo/main/`);

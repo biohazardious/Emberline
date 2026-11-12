@@ -4,17 +4,44 @@
  * (SessionStart, UserPromptSubmit, ticket_complete, Stop, StopFailure), over HTTP with the run's token,
  * and picks its behaviour from a marker in the ticket prompt:
  *
- *   [e2e:work]    commits a file, finishes after a short while
+ *   [e2e:work]    commits a file, finishes after a short while ([e2e:work:NAME]: the file e2e-work-NAME.txt)
  *   [e2e:ask]     commits a file and opens a question picker; finishes when a person answers on its terminal
  *   [e2e:review]  commits a file and waits for the file `.e2e-go` in the worktree, so a test can review first
  *   [e2e:append:NAME] appends a `NAME` target to Makefile and a `NAME` section to PROJECT.md (both files exist in main)
  *   [e2e:limit]   hits a usage limit once; after the reset it gets "Continue where you left off." and finishes
  *
- * A prompt without a marker behaves like [e2e:work]. Test-only: the runner image has no real Claude here.
+ * A prompt without a marker behaves like [e2e:work]. Called with --json-schema (`claude -p … --output-format
+ * json`, as the release-notes draft calls it), it prints the CLI's result envelope instead: the
+ * release-notes answer in `structured_output`, or an error for any other schema.
+ * Test-only: the runner image has no real Claude here.
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+/** One structured answer and out: no run, no hooks. */
+if (process.argv.includes('--json-schema')) {
+  const schema = JSON.parse(process.argv[process.argv.indexOf('--json-schema') + 1] ?? '{}');
+  const notesSchema = Boolean(schema.properties?.bump && schema.properties?.notes);
+  const envelope = notesSchema
+    ? {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        structured_output: {
+          bump: 'minor',
+          notes: '### Added\n\n- A file the factory wrote on the working branch (e2e).',
+        },
+      }
+    : {
+        type: 'result',
+        subtype: 'error',
+        is_error: true,
+        result: 'fake claude answers only the release-notes schema',
+      };
+  console.log(JSON.stringify(envelope));
+  process.exit(0);
+}
 
 const runId = process.env.EMBERLINE_RUN_ID ?? '';
 const token = process.env.EMBERLINE_HOOK_TOKEN ?? '';
@@ -75,7 +102,7 @@ async function finish(summary, blockers = []) {
   await hook('Stop');
 }
 
-const fileName = `e2e-${mode}.txt`;
+const fileName = mode === 'work' && marker?.[2] ? `e2e-work-${marker[2]}.txt` : `e2e-${mode}.txt`;
 console.log(`fake claude ready (${mode}${resumed ? ', resumed' : ''})`);
 
 async function main() {
