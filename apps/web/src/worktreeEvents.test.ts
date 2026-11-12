@@ -7,6 +7,8 @@ describe('WORKTREE_EVENT_LABELS', () => {
       'worktree_copied',
       'worktree_copy_skipped',
       'worktree_setup_pending',
+      'worktree_toolchain_installed',
+      'worktree_toolchain_failed',
       'worktree_setup_started',
       'worktree_setup_finished',
       'worktree_setup_failed',

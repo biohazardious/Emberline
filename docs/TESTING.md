@@ -20,23 +20,23 @@ engine) is absent; they run in the `make ci` stage.
 
 ## Where each core workflow is covered
 
-| Workflow (PROJECT.md §3.3)              | Tests                                                                                          |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Board: tickets, columns, dependencies   | `apps/core/src/tickets.test.ts`, `ticket-dependencies.test.ts`, `ticket-bulk-route.test.ts`    |
-| Runs and run events                     | `apps/core/src/runs.test.ts`, `apps/core/src/transcript-usage.test.ts`                         |
-| Scheduling and usage-limit resume       | `apps/core/src/scheduler.test.ts`, `packages/adapter-claude/src`                               |
-| Review: diffs, comments, rounds, gate   | `apps/core/src/review*.test.ts`, `worktree-merge.test.ts`, `post-merge.test.ts`                |
-| Factory (planning, tickets file ingest) | `apps/core/src/factory.test.ts`, `tickets-file-ingest.test.ts`                                 |
-| Worktree config and gates               | `apps/core/src/worktree-config.test.ts`, `project-gates*.test.ts`                              |
-| Compose and container previews          | `apps/core/src/compose-preview.test.ts`, `container-preview.test.ts`, `agent-preview.test.ts`  |
-| Authentication and route coverage       | `apps/core/src/auth-coverage.test.ts`, `session-binding.test.ts`                               |
-| Wire contracts                          | `packages/protocol/src` (`ptyd.test.ts`, `hooks.test.ts` for the frame and hook schemas)       |
-| PTY host and framing                    | `apps/ptyd/src/{server,session,framing,drop}.test.ts`                                          |
-| Hooks and MCP server                    | `packages/hook/src/mcp-server.test.ts`                                                         |
-| Web UI domain logic                     | `apps/web/src/*.test.ts` (board filter, selection, attention, error boundaries, answer dialog) |
-| Layer lint (AC-1.3, 1.4)                | `apps/core/src/m1-layers.test.ts` (ESLint API against the real `eslint.config.js`)             |
-| Manifests, hermetic env, no skips       | `apps/core/src/m1-guards.test.ts` (AC-1.5, 1.9, 1.11)                                          |
-| Whole stack                             | `e2e/smoke.mjs`                                                                                |
+| Workflow (PROJECT.md §3.3)               | Tests                                                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Board: tickets, columns, dependencies    | `apps/core/src/tickets.test.ts`, `ticket-dependencies.test.ts`, `ticket-bulk-route.test.ts`                |
+| Runs and run events                      | `apps/core/src/runs.test.ts`, `apps/core/src/transcript-usage.test.ts`                                     |
+| Scheduling and usage-limit resume        | `apps/core/src/scheduler.test.ts`, `packages/adapter-claude/src`                                           |
+| Review: diffs, comments, rounds, gate    | `apps/core/src/review*.test.ts`, `worktree-merge.test.ts`, `post-merge.test.ts`                            |
+| Factory (planning, tickets file ingest)  | `apps/core/src/factory.test.ts`, `tickets-file-ingest.test.ts`                                             |
+| Worktree config and gates                | `apps/core/src/worktree-config.test.ts`, `project-gates*.test.ts`                                          |
+| Compose and container previews           | `apps/core/src/compose-preview.test.ts`, `container-preview.test.ts`, `agent-preview.test.ts`              |
+| Authentication and route coverage        | `apps/core/src/auth-coverage.test.ts`, `session-binding.test.ts`                                           |
+| Wire contracts                           | `packages/protocol/src` (`ptyd.test.ts`, `hooks.test.ts` for the frame and hook schemas)                   |
+| Package layering, manifests, hygiene     | `apps/core/src/workspace-layers.test.ts`, `workspace-manifests.test.ts` (PROJECT.md AC-1.3–1.5, 1.9, 1.11) |
+| Layer lint probes, manifests, env, skips | `apps/core/src/m1-layers.test.ts`, `m1-guards.test.ts` (AC-1.3, 1.4, 1.5, 1.9, 1.11)                       |
+| PTY host and framing                     | `apps/ptyd/src/{server,session,framing,drop}.test.ts`                                                      |
+| Hooks and MCP server                     | `packages/hook/src/mcp-server.test.ts`                                                                     |
+| Web UI domain logic                      | `apps/web/src/*.test.ts` (board filter, selection, attention, error boundaries, answer dialog)             |
+| Whole stack                              | `e2e/smoke.mjs`                                                                                            |
 
 ## Adding tests
 
