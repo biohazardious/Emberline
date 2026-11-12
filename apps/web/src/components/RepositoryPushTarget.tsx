@@ -48,7 +48,10 @@ export function PushTargetFields({ s, busy, onSave }: { s: RepositoryStatus; bus
           disabled={busy}
           onChange={() => onSave('push-target', { pushTarget: 'default_branch' })}
         />
-        The default branch (<span className="mono">{s.defaultBranch}</span>)
+        {/* One flex item, so the label's gap does not open up the parentheses. */}
+        <span>
+          The default branch (<span className="mono">{s.defaultBranch}</span>)
+        </span>
       </label>
       <p className="muted small">{keepPushedText(s)}</p>
     </fieldset>

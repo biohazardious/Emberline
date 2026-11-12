@@ -93,8 +93,11 @@ export function ProjectSshKey({ project, originUrl }: { project: Project; origin
           </label>
           {s.choice === 'shared' && !s.shared && (
             <p className="muted small ssh-key-detail">
-              Create it in <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>, or use this project&apos;s own
-              key.
+              {/* One grid item: the link stays in the sentence. */}
+              <span>
+                Create it in <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>, or use this project&apos;s
+                own key.
+              </span>
             </p>
           )}
           <label className="ssh-key-option">
