@@ -16,6 +16,11 @@ const status = {
   mainState: 'ahead',
   ahead: 1,
   keepMainPushed: false,
+  pushTarget: 'integration_branch',
+  integrationBranch: 'emberline/integration',
+  keepPushedBranch: 'emberline/integration',
+  commitIdentity: null,
+  factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
   originHasCredentials: false,
   originMasked: false,
 } as unknown as RepositoryStatus;
@@ -39,8 +44,10 @@ describe('static render', () => {
       '/api/forge/accounts': accounts,
     });
     expect(html).toContain('Push main to origin');
-    // Both forms are there (only with the cached status) and start closed.
-    expect(html.match(/<details class="repo-form">/g)).toHaveLength(2);
+    // Commit identity, Connect and Create are there (only with the cached status) and start closed.
+    expect(html.match(/<details class="repo-form">/g)).toHaveLength(3);
+    expect(html).toContain('Keep main pushed pushes to');
+    expect(html).toContain('Keep main pushed pushes main to emberline/integration after each merge');
   });
 
   it('renders empty feedback regions before any result (A-10)', () => {

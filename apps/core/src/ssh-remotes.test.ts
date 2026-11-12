@@ -168,6 +168,7 @@ describe.skipIf(!SSHD)('ssh remotes through the gateway', () => {
     expect(((await send('POST', repo('refresh'))).json() as RepositoryStatus).mainState).toBe('up_to_date');
 
     commit(projectPath, 'next.txt');
+    await t.repository.update(projectId, { pushTarget: 'default_branch' });
     expect(await t.repository.pushMainQuietly(projectId, tip())).toEqual({ ok: true });
     expect(bareMain()).toBe(tip());
 

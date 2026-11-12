@@ -24,6 +24,11 @@ const status = {
   mainState: 'in_sync',
   ahead: 0,
   keepMainPushed: false,
+  pushTarget: 'integration_branch',
+  integrationBranch: 'emberline/integration',
+  keepPushedBranch: 'emberline/integration',
+  commitIdentity: null,
+  factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
   originHasCredentials: false,
   originMasked: false,
 } as unknown as RepositoryStatus;
