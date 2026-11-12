@@ -28,6 +28,12 @@ export const DIVERGED_MESSAGE =
 /** An integration branch someone else pushed to: Emberline fast-forwards its own branch and never forces it. */
 export const integrationDivergedMessage = (branch: string) =>
   `The remote's ${branch} has commits this project's main doesn't have (someone pushed to it). Emberline never forces it: merge ${branch} into main on the forge or delete it there, then push again.`;
+/** The working branch moved on after the merge (not to a later Emberline merge): nothing is pushed. */
+export const workingMovedMessage = (branch: string) =>
+  `${branch}'s latest commit is not this merge, so Keep pushed did not push it. Check ${branch}, then push it from a terminal.`;
+/** Someone pushed to origin's working branch: Emberline fast-forwards it and never forces it. */
+export const workingDivergedMessage = (branch: string) =>
+  `The remote's ${branch} has commits this project's ${branch} doesn't have. Emberline never forces it: pull them in, then the next merge pushes it again.`;
 const CREDENTIALS_IN_URL = 'Remove the user name and token from the URL; Emberline uses the forge account.';
 const BAD_URL =
   'Enter a repository URL such as https://github.com/you/app.git or git@github.com:you/app.git.';

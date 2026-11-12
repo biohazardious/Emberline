@@ -665,3 +665,84 @@ describe('keep main pushed to an integration branch', () => {
     expect(status.keepPushedBranch).toBe(INTEGRATION);
   });
 });
+
+describe('keep pushed with a working branch', () => {
+  const remoteBranch = (branch: string) => {
+    try {
+      return git(forge.bare('alice', 'app'), 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+    } catch {
+      return '';
+    }
+  };
+  /** main published once, then `develop` checked out and chosen as the working branch. */
+  const onDevelop = async () => {
+    await t.repository.pushMain(projectId);
+    git(projectPath, 'checkout', '-q', '-b', 'develop');
+    writeRepositorySettings(t.db, projectId, {
+      keepMainPushed: true,
+      pushTarget: 'integration_branch',
+      workingBranch: 'develop',
+    });
+    return { main: remoteMain(), check: readRepositorySettings(t.db, projectId).lastRemoteCheck };
+  };
+
+  it('with a working branch, a merge pushes that branch and never main', async () => {
+    const before = await onDevelop();
+    const res = await merge('w1', worktree('w1'));
+    noteMerge('w1', res);
+    await t.mainPush.idle();
+    expect(notes('w1')).toEqual([]);
+    expect(remoteBranch('develop')).toBe(res.commitOid);
+    expect(remoteMain()).toBe(before.main);
+    expect(remoteBranch('emberline/integration')).toBe('');
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/develop')).toBe(res.commitOid);
+    // main's upstream and the read of origin's main are main's alone.
+    expect(readRepositorySettings(t.db, projectId).lastRemoteCheck).toEqual(before.check);
+    expect(readRepositorySettings(t.db, projectId).lastMainPushError).toBeNull();
+    // A later merge fast-forwards it.
+    const next = await merge('w2', worktree('w2'));
+    noteMerge('w2', next);
+    await t.mainPush.idle();
+    expect(remoteBranch('develop')).toBe(next.commitOid);
+    expect(remoteMain()).toBe(before.main);
+  });
+
+  it('a working branch that moved after the merge is not pushed, and someone else’s push to it is never forced', async () => {
+    await onDevelop();
+    const res = await merge('w3', worktree('w3'));
+    commit(projectPath, 'agent.txt'); // develop moves after the merge
+    noteMerge('w3', res);
+    await t.mainPush.idle();
+    expect(remoteBranch('develop')).toBe('');
+    const [moved] = notes('w3').map((n) => (n.payload as { reason: string }).reason);
+    expect(moved).toContain('develop');
+
+    git(projectPath, 'reset', '-q', '--hard', 'HEAD~1');
+    noteMerge('w3', res);
+    await t.mainPush.idle();
+    expect(remoteBranch('develop')).toBe(res.commitOid);
+    const elsewhere = path.join(t.dir, 'elsewhere');
+    execFileSync('git', ['clone', '-q', '-b', 'develop', forge.bare('alice', 'app'), elsewhere]);
+    commit(elsewhere, 'theirs.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'develop');
+    const theirs = git(elsewhere, 'rev-parse', 'HEAD');
+    const ours = await merge('w4', worktree('w4'));
+    noteMerge('w4', ours);
+    await t.mainPush.idle();
+    expect(remoteBranch('develop')).toBe(theirs);
+    const [diverged] = notes('w4').map((n) => (n.payload as { reason: string }).reason);
+    expect(diverged).toContain('develop');
+    expect(diverged).not.toContain("project's main");
+  });
+
+  it('a merge into a branch that is not the working branch says so, and nothing is pushed', async () => {
+    await onDevelop();
+    git(projectPath, 'checkout', '-q', '-b', 'side');
+    const before = forge.seen.filter((r) => r.path.endsWith('git-receive-pack')).length;
+    noteMerge('s2', await merge('s2', worktree('s2')));
+    await t.mainPush.idle();
+    expect(forge.seen.filter((r) => r.path.endsWith('git-receive-pack')).length).toBe(before);
+    const [reason] = notes('s2').map((n) => (n.payload as { reason: string }).reason);
+    expect(reason).toContain('The merge went into side');
+  });
+});

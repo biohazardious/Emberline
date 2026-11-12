@@ -15,6 +15,7 @@ import {
   type RemoteCheck,
   type RepositorySettings,
   readRepositorySettings,
+  workingBranchOf,
   writeRepositorySettings,
 } from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
@@ -52,6 +53,8 @@ import {
   shortGitError,
   sshSetupError,
   validateRepositoryUrl,
+  workingDivergedMessage,
+  workingMovedMessage,
 } from './git.js';
 
 const isGitRepo = (dir: string) =>
@@ -99,7 +102,7 @@ function keepPushedBranch(settings: RepositorySettings, defaultBranch: string): 
 }
 
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
-interface Snapshot {
+export interface Snapshot {
   path: string;
   branch: string;
   defaultBranch: string;
@@ -232,6 +235,16 @@ export class RepositoryService {
     return this.status(projectId);
   }
 
+  /**
+   * For the Git page's remote actions: `fn` runs in this project's remote-ops order (one refresh,
+   * push or such action at a time), with the workspace and origin's access read under the
+   * main-workspace lock. `fn` makes its network call with no lock and takes the lock again itself
+   * for any local change.
+   */
+  async remoteAction<T>(projectId: string, fn: (ws: Snapshot) => Promise<T>): Promise<T> {
+    return this.remoteOps.run(projectId, async () => fn(await this.snapshot(projectId)));
+  }
+
   /** The workspace and origin, read under the main-workspace lock (local only). */
   private async snapshot(projectId: string): Promise<Snapshot> {
     return withMainWorkspaceLock(this.project(projectId).path, async () => {
@@ -319,8 +332,11 @@ export class RepositoryService {
         writeRepositorySettings(this.db, projectId, { lastMainPushError: null });
         return { ok: true };
       }
-      reason =
-        result.branch === result.defaultBranch ? DIVERGED_MESSAGE : integrationDivergedMessage(result.branch);
+      reason = result.onWorking
+        ? workingDivergedMessage(result.branch)
+        : result.branch === result.defaultBranch
+          ? DIVERGED_MESSAGE
+          : integrationDivergedMessage(result.branch);
     } catch (error) {
       // Nothing was decided: the push is tried again once the runner is back.
       if (isRunnerUnavailable(error))
@@ -379,20 +395,36 @@ export class RepositoryService {
    * `superseded`: the tip is a later Emberline merge, whose own push publishes it), to the branch its
    * push target names. An integration branch is Emberline's own: it is fast-forwarded like main and
    * never forced, and a push someone made to it rejects Emberline's like a remote main that moved on.
-   * `branch` is the remote branch it went to.
+   * With a working branch other than the default branch, checked out, Keep pushed reads and pushes
+   * that branch instead, to its own name (`onWorking`), by the same rules; the push target does not
+   * apply. `branch` is the remote branch it went to.
    */
   private async push(
     projectId: string,
     { mergeOid }: { mergeOid: string | null | undefined },
-  ): Promise<{ outcome: 'pushed' | 'rejected' | 'superseded'; branch: string; defaultBranch: string }> {
+  ): Promise<{
+    outcome: 'pushed' | 'rejected' | 'superseded';
+    branch: string;
+    defaultBranch: string;
+    onWorking: boolean;
+  }> {
     return this.remoteOps.run(projectId, async () => {
       const plan = await withMainWorkspaceLock(this.project(projectId).path, async () => {
         const ws = await this.workspace(projectId);
-        const tip = await branchTip(ws.path, ws.defaultBranch);
+        const settings = readRepositorySettings(this.db, projectId);
+        const working = workingBranchOf(settings, ws.defaultBranch);
+        // Keep pushed with a working branch of its own, checked out: the factory merges into it, so
+        // it is what is pushed, to its own name on origin. Main is pushed by Promote and Release.
+        const onWorking = mergeOid !== undefined && working !== ws.defaultBranch && ws.branch === working;
+        const local = onWorking ? working : ws.defaultBranch;
+        const tip = await branchTip(ws.path, local);
         const branch =
           mergeOid === undefined
             ? ws.defaultBranch
-            : keepPushedBranch(readRepositorySettings(this.db, projectId), ws.defaultBranch);
+            : onWorking
+              ? working
+              : keepPushedBranch(settings, ws.defaultBranch);
+        const movedMessage = onWorking ? workingMovedMessage(working) : MAIN_MOVED_MESSAGE;
         if (mergeOid === undefined) {
           if (ws.branch !== ws.defaultBranch) {
             throw conflict(
@@ -404,40 +436,44 @@ export class RepositoryService {
         } else {
           // A full id compared as is: a prefix is never resolved (an agent can plant a commit that matches it).
           const full = mergeOid !== null && FULL_OID.test(mergeOid) ? mergeOid : null;
-          if (!full || !tip) throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+          if (!full || !tip) throw conflict(movedMessage, 'main_moved');
           if (tip.sha !== full) {
             // A later Emberline merge on top of this one: its own push publishes both. A rewind to an
             // older merge (this one not in the tip's history) is "moved".
             if (isEmberlineMergeCommit(ws.path, tip.sha) && (await isAncestorCommit(ws.path, full, tip.sha)))
-              return { superseded: true as const, branch, defaultBranch: ws.defaultBranch };
+              return { superseded: true as const, branch, defaultBranch: ws.defaultBranch, onWorking };
             // The merge went into the branch checked out instead (it never was on the default branch).
             if (
+              !onWorking &&
               ws.branch !== ws.defaultBranch &&
               (await isAncestorCommit(ws.path, full, `refs/heads/${ws.branch}`)) &&
               !(await isAncestorCommit(ws.path, full, `refs/heads/${ws.defaultBranch}`))
             )
               throw conflict(
-                `The merge went into ${ws.branch}, which is checked out in the main workspace; Keep main pushed pushes only ${ws.defaultBranch}.`,
+                working === ws.defaultBranch
+                  ? `The merge went into ${ws.branch}, which is checked out in the main workspace; Keep main pushed pushes only ${ws.defaultBranch}.`
+                  : `The merge went into ${ws.branch}, which is checked out in the main workspace; Keep pushed pushes only ${working}, the working branch.`,
                 'merged_elsewhere',
               );
-            throw conflict(MAIN_MOVED_MESSAGE, 'main_moved');
+            throw conflict(movedMessage, 'main_moved');
           }
         }
         return {
           superseded: false as const,
+          onWorking,
           ...ws,
           branch,
           oid: tip.sha,
           ...(await this.access(projectId, ws.path)),
         };
       });
-      const { branch, defaultBranch } = plan;
-      if (plan.superseded) return { outcome: 'superseded', branch, defaultBranch };
+      const { branch, defaultBranch, onWorking } = plan;
+      if (plan.superseded) return { outcome: 'superseded', branch, defaultBranch, onWorking };
       const result = await pushBranch(plan.path, plan.access, branch, plan.oid);
       if (result === 'rejected') {
         // Only the default branch's read shows in status (main against origin's main).
         if (branch === defaultBranch) await this.readRemote(projectId, plan);
-        return { outcome: result, branch, defaultBranch };
+        return { outcome: result, branch, defaultBranch, onWorking };
       }
       await withMainWorkspaceLock(plan.path, async () => {
         if (!(await this.originStill(projectId, plan))) return; // origin changed meanwhile: its own read counts
@@ -459,7 +495,7 @@ export class RepositoryService {
           // the project was deleted meanwhile
         }
       });
-      return { outcome: result, branch, defaultBranch };
+      return { outcome: result, branch, defaultBranch, onWorking };
     });
   }
 

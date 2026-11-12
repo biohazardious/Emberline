@@ -20,4 +20,18 @@ export function registerGitRoutes(app: FastifyInstance, git: GitPageService): vo
   app.get<P & { Querystring: Q }>('/api/projects/:id/git/compare/file', async (r) =>
     git.compareFile(r.params.id, r.query.base, r.query.head, r.query.path),
   );
+  app.get<P>('/api/projects/:id/git/branches', async (r) => git.branches(r.params.id));
+  app.post<P>('/api/projects/:id/git/branches', async (r) => {
+    await git.createBranch(r.params.id, r.body);
+    return { ok: true };
+  });
+  // A branch name holds slashes (feature/login): the client sends it URL-encoded as one segment.
+  app.delete<{ Params: { id: string; name: string }; Querystring: { remote?: string } }>(
+    '/api/projects/:id/git/branches/:name',
+    async (r) => git.deleteBranch(r.params.id, r.params.name, r.query.remote === '1'),
+  );
+  app.post<P>('/api/projects/:id/git/working-branch', async (r) => {
+    await git.setWorkingBranch(r.params.id, r.body);
+    return { ok: true };
+  });
 }

@@ -51,7 +51,7 @@ export function isPlainRefName(name: string): boolean {
  * `fallback`; any other failure (the runner, an output over the cap, a crash) is thrown, never
  * shown as an empty answer.
  */
-const absentWhen =
+export const absentWhen =
   <T>(fallback: T, ...codes: number[]) =>
   (error: unknown): T => {
     const code = (error as { code?: unknown } | null)?.code;

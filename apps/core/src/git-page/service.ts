@@ -1,4 +1,12 @@
-import type { GitCommitDetail, GitCommitsPage, GitCompare, GitFileDiff } from '@emberline/protocol';
+import {
+  CreateBranchBody,
+  type GitBranch,
+  type GitCommitDetail,
+  type GitCommitsPage,
+  type GitCompare,
+  type GitFileDiff,
+  SetWorkingBranchBody,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { readRepositorySettings, workingBranchOf } from '../db/project-settings.js';
@@ -8,6 +16,13 @@ import type { ForgeService } from '../forge/service.js';
 import type { RepositoryService } from '../repository/service.js';
 import type { RunService } from '../runs/service.js';
 import type { TicketService } from '../tickets/service.js';
+import {
+  createBranch,
+  type DeleteBranchResult,
+  deleteBranch,
+  listBranches,
+  setWorkingBranch,
+} from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
 
 /** What the Git page needs from the rest of core; later actions add to this. */
@@ -17,7 +32,11 @@ export interface GitPageDeps {
   tickets: TicketService;
 }
 
-/** The Git page's server side. History and compare read the main workspace's git objects only. */
+/**
+ * The Git page's server side. History, compare and the branch list read the main workspace's git
+ * objects only; branch changes run under the main-workspace lock, and a remote delete in
+ * RepositoryService's remote-ops order.
+ */
 export class GitPageService {
   constructor(
     private readonly db: Db,
@@ -58,5 +77,25 @@ export class GitPageService {
     path: string | undefined,
   ): Promise<GitFileDiff> {
     return compareFileDiff(this.project(projectId).path, base ?? '', head ?? '', path ?? '');
+  }
+
+  branches(projectId: string): Promise<GitBranch[]> {
+    return listBranches(this.db, this.project(projectId), readRepositorySettings(this.db, projectId));
+  }
+
+  async createBranch(projectId: string, raw: unknown): Promise<void> {
+    const project = this.project(projectId);
+    const body = CreateBranchBody.parse(raw ?? {});
+    const working = workingBranchOf(readRepositorySettings(this.db, projectId), project.defaultBranch);
+    await createBranch(project, body.name, body.from, working);
+  }
+
+  deleteBranch(projectId: string, name: string, remote: boolean): Promise<DeleteBranchResult> {
+    return deleteBranch(this.db, this.project(projectId), name, remote, this.repository);
+  }
+
+  async setWorkingBranch(projectId: string, raw: unknown): Promise<void> {
+    const body = SetWorkingBranchBody.parse(raw ?? {});
+    await setWorkingBranch(this.db, this.project(projectId), body.branch);
   }
 }
