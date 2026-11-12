@@ -46,6 +46,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     release: { ok: true, reason: null },
     releaseJob: null,
     releaseDraft: null,
+    releaseSummary: { head: null, commits: 0, tickets: 0, checks: [] },
     backups: [],
     ...over,
   }) as GitPageStatus;

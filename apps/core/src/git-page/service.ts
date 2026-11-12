@@ -32,6 +32,7 @@ import { aheadBehind, mainBranchState, originUrls, realGit, remoteUrlForDisplay 
 import type { RepositoryService } from '../repository/service.js';
 import type { RunService } from '../runs/service.js';
 import type { TicketService } from '../tickets/service.js';
+import { approvedChecks } from '../worktree-config/load.js';
 import {
   classify,
   createBranch,
@@ -42,7 +43,14 @@ import {
   refTip,
   setWorkingBranch,
 } from './branches.js';
-import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
+import {
+  commitDetail,
+  commitFileDiff,
+  compareFileDiff,
+  compareRefs,
+  listCommits,
+  ticketKeyOf,
+} from './history.js';
 import { currentReleaseDraft, DraftJobs, draftReleaseNotes } from './release-notes.js';
 import { latestVersionTag, ReleaseJobs } from './release.js';
 import {
@@ -250,6 +258,7 @@ export class GitPageService {
       release: { ok: false, reason: 'The project folder is not a git repository.' },
       releaseJob: this.releases.current(projectId),
       releaseDraft: this.releaseDraft(projectId),
+      releaseSummary: { head: null, commits: 0, tickets: 0, checks: [] },
       backups: [],
     };
     const dir = project.path;
@@ -300,7 +309,45 @@ export class GitPageService {
         parseForgeRemote(origin) !== null &&
         credentialAccountForRemote(this.db, origin) !== null,
       release: { ok: reason === null, reason },
+      releaseSummary: await this.releaseSummary(projectId, dir, main, working, workingTip),
       backups: await listBackups(dir),
+    };
+  }
+
+  /**
+   * What a release would carry: main..working, or the commits on main since the latest tag when the
+   * working branch is main. Tickets are counted from the same 300 commits the release notes read.
+   */
+  private async releaseSummary(
+    projectId: string,
+    dir: string,
+    main: string,
+    working: string,
+    workingTip: string | null,
+  ): Promise<GitPageStatus['releaseSummary']> {
+    const checks = Object.entries(approvedChecks(this.db, projectId) ?? {})
+      .filter(([, command]) => command)
+      .map(([name]) => name);
+    if (!workingTip) return { head: null, commits: 0, tickets: 0, checks };
+    let range = workingTip;
+    if (working !== main) range = `${main}..${working}`;
+    else {
+      const tag = await latestVersionTag(dir, `refs/heads/${main}`);
+      range = tag ? `${tag}..${main}` : main;
+    }
+    const count = await realGit(['rev-list', '--count', range, '--'], dir).catch(() => null);
+    const subjects = await realGit(['log', '--format=%s', '-n', '300', range, '--'], dir).catch(() => null);
+    const keys = new Set<string>();
+    for (const subject of subjects?.stdout.split('\n') ?? []) {
+      const key = ticketKeyOf(subject);
+      if (key) keys.add(key);
+    }
+    const commits = Number(count?.stdout.trim());
+    return {
+      head: workingTip,
+      commits: Number.isSafeInteger(commits) ? commits : 0,
+      tickets: keys.size,
+      checks,
     };
   }
 

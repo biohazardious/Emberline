@@ -6,6 +6,7 @@ import { api } from '../api';
 import { SectionState } from '../components/SectionState';
 import { GitBranchesTab } from '../components/git/GitBranchesTab';
 import { GitCommitsTab } from '../components/git/GitCommitsTab';
+import { GitReleaseTab } from '../components/git/GitReleaseTab';
 import { GitStatusStrip } from '../components/git/GitStatusStrip';
 import { GIT_TABS, type GitTab, gitRefetchMs, tabFromHash } from '../gitPage';
 
@@ -83,8 +84,7 @@ export function GitPage({ projectId }: { projectId: string }) {
                 ) : tab === 'branches' ? (
                   <GitBranchesTab projectId={projectId} status={data} />
                 ) : (
-                  /* Task 13 fills this tab. */
-                  <p className="muted">{TAB_LABEL[tab]} is coming.</p>
+                  <GitReleaseTab projectId={projectId} status={data} />
                 )}
               </div>
             </div>

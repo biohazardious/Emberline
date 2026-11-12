@@ -195,3 +195,37 @@
   color: var(--muted);
   background: var(--surface-2);
 }
+
+.git-release {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+}
+.git-release-field {
+  display: grid;
+  gap: 4px;
+}
+.git-release-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.git-release-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.git-release-step {
+  display: flex;
+  gap: 8px;
+}
+.git-release-step-failed {
+  color: var(--danger, inherit);
+}
+.git-release-step-skipped,
+.git-release-step-pending {
+  opacity: 0.65;
+}

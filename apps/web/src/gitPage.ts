@@ -1,4 +1,11 @@
-import type { BranchRemoteState, GitBranch, GitPageStatus, GitSync } from '@emberline/protocol';
+import type {
+  BranchRemoteState,
+  GitBranch,
+  GitPageStatus,
+  GitSync,
+  ReleaseJob,
+  ReleaseStepName,
+} from '@emberline/protocol';
 
 const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 
@@ -89,4 +96,98 @@ export function gitRefetchMs(status: GitPageStatus | undefined): number {
   return status?.releaseJob?.state === 'running' || status?.releaseDraft?.status === 'drafting'
     ? 5_000
     : 60_000;
+}
+
+/** The host of origin's URL for a sentence ("github.com"); "origin" when it has none. */
+function originHost(url: string | null): string {
+  if (!url) return 'origin';
+  try {
+    return new URL(url).host || 'origin';
+  } catch {
+    return /@([^:/]+)[:/]/.exec(url)?.[1] ?? 'origin';
+  }
+}
+
+/** One line of the release's plan, or of a job's progress. */
+export interface ReleaseLine {
+  name: ReleaseStepName;
+  text: string;
+}
+
+/** The plain-words label of a release step, for the plan and for a job that ran it. */
+export function releaseStepText(
+  name: ReleaseStepName,
+  status: GitPageStatus,
+  version: string | null,
+  working = status.workingBranch,
+): string {
+  const main = status.defaultBranch;
+  const { checks } = status.releaseSummary;
+  switch (name) {
+    case 'promote':
+      return `Merge ${working} into ${main}`;
+    case 'checks':
+      return checks.length > 0
+        ? `Run the checks on ${main}: ${checks.join(', ')}`
+        : 'No approved checks; none run';
+    case 'changelog':
+      return 'Add the notes to CHANGELOG.md in the release commit';
+    case 'push_main':
+      return `Push ${main} to origin`;
+    case 'tag':
+      return version ? `Tag ${version}` : 'Tag the release';
+    case 'push_tag':
+      return 'Push the tag to origin';
+    case 'forge_release':
+      return status.forgeRelease
+        ? `Create the release on ${originHost(status.originUrl)}`
+        : `No forge account for ${originHost(status.originUrl)}: only the tag is pushed`;
+    case 'sync_working':
+      return `Bring ${working} up to date with ${main}`;
+  }
+}
+
+/** What approving would do, in order: one line per step that will run. */
+export function releasePlan(
+  status: GitPageStatus,
+  mode: 'publish' | 'promote_only',
+  version: string | null,
+): ReleaseLine[] {
+  const separate = status.workingBranch !== status.defaultBranch;
+  const publish = mode === 'publish';
+  const names: ReleaseStepName[] = [
+    ...(separate ? (['promote'] as const) : []),
+    'checks',
+    ...(publish ? (['changelog'] as const) : []),
+    'push_main',
+    ...(publish ? (['tag', 'push_tag', 'forge_release'] as const) : []),
+    ...(separate ? (['sync_working'] as const) : []),
+  ];
+  return names.map((name) => ({ name, text: releaseStepText(name, status, version) }));
+}
+
+/** The summary line: what the release carries. */
+export function releaseSummaryText(status: GitPageStatus): string {
+  const { commits, tickets } = status.releaseSummary;
+  if (status.workingBranch === status.defaultBranch) return `Release ${status.defaultBranch} as it is`;
+  return `${status.workingBranch} → ${status.defaultBranch}: ${commits} ${commits === 1 ? 'commit' : 'commits'}, ${tickets} ${tickets === 1 ? 'ticket' : 'tickets'}`;
+}
+
+/** The checks line under the summary. */
+export function releaseChecksText(status: GitPageStatus): string {
+  const { checks } = status.releaseSummary;
+  return checks.length > 0 ? `Checks: ${checks.join(', ')}` : 'No approved checks; the release runs none';
+}
+
+/** The next patch after the latest tag, keeping its "v"; v0.1.0 when there is no tag yet. */
+export function suggestedVersion(latestTag: string | null): string {
+  const m = latestTag ? /^(v?)(\d+)\.(\d+)\.(\d+)/.exec(latestTag) : null;
+  return m ? `${m[1]}${m[2]}.${m[3]}.${Number(m[4]) + 1}` : 'v0.1.0';
+}
+
+/** Undo promote is offered when the promote merged and main was not pushed yet; the server has the last word. */
+export function canUndoPromote(job: ReleaseJob): boolean {
+  if (job.state !== 'failed') return false;
+  const step = (name: ReleaseStepName) => job.steps.find((s) => s.name === name)?.status;
+  return step('promote') === 'done' && step('push_main') !== 'done' && step('push_main') !== 'running';
 }

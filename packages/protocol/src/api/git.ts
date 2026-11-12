@@ -201,6 +201,13 @@ export const GitPageStatus = z.object({
   release: z.object({ ok: z.boolean(), reason: z.string().nullable() }),
   releaseJob: ReleaseJob.nullable(),
   releaseDraft: ReleaseDraft.nullable(),
+  /** What a release would carry: the working tip, its commit and ticket counts, and the checks it runs. */
+  releaseSummary: z.object({
+    head: z.string().nullable(),
+    commits: z.number().int(),
+    tickets: z.number().int(),
+    checks: z.array(z.string()),
+  }),
   backups: z.array(z.string()),
 });
 export type GitPageStatus = z.infer<typeof GitPageStatus>;

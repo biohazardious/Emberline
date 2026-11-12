@@ -950,6 +950,37 @@ describe('release', () => {
   });
 });
 
+describe('the release summary', () => {
+  it('counts main..working with its distinct tickets and names the approved checks', async () => {
+    const head = await developWithTickets();
+    commit(projectPath, 'd.txt', 'd\n', 'fix(EMB-1): again');
+    const tip = git(projectPath, 'rev-parse', 'develop');
+    expect(tip).not.toBe(head);
+    let status = (await send('GET', gitUrl())).json() as GitPageStatus;
+    expect(status.releaseSummary).toEqual({ head: tip, commits: 3, tickets: 2, checks: [] });
+    approveChecks();
+    status = (await send('GET', gitUrl())).json() as GitPageStatus;
+    expect(status.releaseSummary.checks).toEqual(['build']);
+  });
+
+  it('counts the commits since the latest tag when the working branch is main', async () => {
+    git(projectPath, 'tag', '0.1.0');
+    commit(projectPath, 'e.txt', 'e\n', 'feat(EMB-7): e');
+    commit(projectPath, 'f.txt', 'f\n', 'chore: f');
+    let status = (await send('GET', gitUrl())).json() as GitPageStatus;
+    expect(status.releaseSummary).toEqual({
+      head: git(projectPath, 'rev-parse', 'main'),
+      commits: 2,
+      tickets: 1,
+      checks: [],
+    });
+    // Without a tag, all of main counts.
+    git(projectPath, 'tag', '-d', '0.1.0');
+    status = (await send('GET', gitUrl())).json() as GitPageStatus;
+    expect(status.releaseSummary.commits).toBe(Number(git(projectPath, 'rev-list', '--count', 'main')));
+  });
+});
+
 describe('the CHANGELOG section', () => {
   it('keeps the items under ## [Unreleased] there, and puts the version below them', () => {
     const text =
