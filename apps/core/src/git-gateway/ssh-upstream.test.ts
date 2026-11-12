@@ -135,6 +135,9 @@ describe('a server that logs in but never answers the git command', () => {
  * with the keys in `authorized_keys` and runs only git-upload-pack/git-receive-pack on the bare
  * repositories under `repos/`, through a forced command. `old*` repositories are served as by a
  * server without protocol v2; `cut` stops sending mid-pack, `drop` also kills the connection.
+ * The cut is `dd bs=1`, which passes each byte on as it comes: `head -c` (GNU coreutils 9.12)
+ * holds its output until the count is reached, so the server's first lines never left and
+ * the clone waited for the idle limit instead.
  */
 describe.skipIf(!SSHD)('the git gateway over ssh', () => {
   let dir: string;
@@ -195,9 +198,9 @@ describe.skipIf(!SSHD)('the git gateway over ssh', () => {
         'case "$name" in old*) unset GIT_PROTOCOL ;; esac',
         'echo "$svc $name${GIT_PROTOCOL:+ $GIT_PROTOCOL}" >> "$root/../log"',
         'case "$name" in',
-        '  cut.git) "$svc" "$root/$name" | head -c 20000 ;;',
+        '  cut.git) "$svc" "$root/$name" | dd bs=1 count=20000 status=none ;;',
         '  stall.git) exec sleep 30 ;;',
-        '  drop.git) "$svc" "$root/$name" | head -c 20000 | tee "$root/../drop-$$"',
+        '  drop.git) "$svc" "$root/$name" | dd bs=1 count=20000 status=none | tee "$root/../drop-$$"',
         '    [ "$(wc -c < "$root/../drop-$$")" -ge 20000 ] && kill -9 $PPID ;;',
         '  *) exec "$svc" "$root/$name" ;;',
         'esac',
