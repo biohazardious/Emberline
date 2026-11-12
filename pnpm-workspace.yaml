@@ -1,3 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# A dependency with an install script that is neither in pnpm.onlyBuiltDependencies nor in
+# pnpm.ignoredBuiltDependencies fails the install (see scripts/supply-chain/builds.ts).
+strictDepBuilds: true

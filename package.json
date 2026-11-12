@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p scripts",
+    "supply-chain": "node scripts/supply-chain/gate.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -35,6 +36,10 @@
       "better-sqlite3",
       "esbuild",
       "node-pty"
+    ],
+    "ignoredBuiltDependencies": [
+      "cpu-features",
+      "ssh2"
     ],
     "patchedDependencies": {
       "node-pty@1.1.0": "patches/node-pty@1.1.0.patch"

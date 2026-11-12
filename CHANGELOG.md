@@ -18,6 +18,12 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Codex runs read the reset time of a usage limit from Codex's own message ("try again at 3:42 PM", "try again at Oct 15th, 2026 9:05 AM"), and, when the output does not say, from the session's latest rate-limit record, so they resume at the reset instead of retrying every 15 minutes. "Quota exceeded. Check your plan and billing details." is a billing problem, not a limit.
 - Gemini runs read "Your quota will reset after 2h31m12s", "Please retry in 38.06s" and the interactive "Access resets at 3:45 PM GMT+3". A Gemini limit that names a model (Pro, Flash, Flash-Lite) pauses only that model's lane; a model with no quota at all on the account's tier (`limit: 0`) is no longer waited for.
 
+### Security
+
+- **Supply-chain release gate.** A new CI job, `supply-chain`, must pass before any image is published. It fails on a high or critical `pnpm audit --prod` advisory that `scripts/supply-chain/audit-allowlist.json` does not accept (each entry needs a reason and an expiry date). It also fails when `pnpm.onlyBuiltDependencies` grows beyond `better-sqlite3`, `esbuild` and `node-pty`, or when any other dependency brings an install script that nobody reviewed. `cpu-features` and `ssh2` are reviewed and stay unbuilt (`pnpm.ignoredBuiltDependencies`), and `strictDepBuilds` makes every install fail on a new one. Run it locally with `pnpm supply-chain` or `make supply-chain`. gitleaks now runs with `.gitleaks.toml` passed explicitly.
+- **Signed images with SBOMs.** Every published linux/amd64 image is signed with cosign keyless signing (GitHub OIDC, Sigstore) and carries a signed SPDX SBOM attestation. Releases attach the SBOMs. SECURITY.md explains how to verify both.
+- Upgraded dependencies with high advisories: `drizzle-orm` 0.45 (SQL injection through improperly escaped identifiers, GHSA-gpj5-g38j-94v9), `@fastify/static` 10 (route guard bypass and path traversal, GHSA-83w8-p2f5-377r and others), `body-parser` 2.4 through `@modelcontextprotocol/sdk` (DoS, GHSA-27r3-jxmh-p828). Also upgraded: `fastify` 5.12.6, `fast-uri`, `glob` and `minimatch`. `pnpm audit --prod` now reports no known vulnerabilities.
+
 ### Upgrade notes
 
 **Upgrade paths checked in CI.** `make e2e-upgrade` upgrades a data volume from each of these releases to the current images, on that release's own compose file, and runs these checks. The job fails on the first that does not hold:

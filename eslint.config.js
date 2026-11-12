@@ -91,7 +91,7 @@ export default tseslint.config(
   },
   {
     // Type-aware rules for source files: unhandled promises crashed core before (B4).
-    files: ['apps/*/src/**/*.{ts,tsx}', 'packages/*/src/**/*.ts'],
+    files: ['apps/*/src/**/*.{ts,tsx}', 'packages/*/src/**/*.ts', 'scripts/**/*.ts'],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
