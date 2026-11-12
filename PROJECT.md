@@ -76,6 +76,11 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
 - **Scheduling:** `QuotaWindow` and scheduled jobs live in SQLite, so restarts keep every timer (`api/scheduler.ts`, `api/usage.ts`).
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
+- **Compose preview environments:** one stack per worktree (`apps/core/src/docker/compose-preview.ts`): its own project name,
+  a host port from `EMBERLINE_PREVIEW_PORTS_DOCKER`, cpu/memory caps from `EMBERLINE_PREVIEW_CPUS` / `EMBERLINE_PREVIEW_MEMORY_MB`
+  (default 1 cpu, 1024 MB per container), and a refusal of fixed `container_name`/volume/network names (`docker/compose-isolation.ts`).
+  Torn down on prune and on ticket Done. `GET /api/projects/:id/container-preview/environments` returns
+  `ComposePreviewEnvironmentsResponse` (`api/previews.ts`: `starting | healthy | failed | stopped`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).
 - **Agent-written factory files:** `.emberline/new-tickets.json` / `tickets.json`, `roadmap-generated.json` and
   `brainstorm-suggestions.json` are contracts in `packages/protocol/src/api/agent-files.ts` (`NewTicketsFile`,

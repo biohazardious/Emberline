@@ -24,6 +24,8 @@ import {
   type AgentModelId,
   type AgentPersona,
   type BrowserAgentAction,
+  type ComposePreviewEnvironment,
+  type ComposePreviewEnvironmentsResponse,
   type CreateRunBody,
   type Credential,
   CreateRunBody as CreateRunBodySchema,
@@ -114,8 +116,10 @@ import {
   DOCKER_PROMPT_PARAGRAPH,
   DockerEngine,
   mainComposeProjectName,
+  mainPreviewComposeProjectName,
   previewComposeProjectName,
 } from '../docker/engine.js';
+import { MAX_LISTED_ENVIRONMENTS, toComposeEnvironment } from './compose-environments.js';
 import {
   buildDockerProjects,
   composeProjectsInUse,
@@ -261,6 +265,8 @@ interface StopPreviewOptions {
   onDown?: (project: string, down: Awaited<ReturnType<typeof composeDown>>) => void;
   /** The caller takes the preview project down itself (a project delete's teardown): no `down` here. */
   skipDown?: boolean;
+  /** Who stopped it, for the `preview_stopped` event (default `user`). */
+  source?: EventSource;
 }
 /** The id a run's setup commands run under, so a stop can kill the one that runs. */
 const setupExecId = (runId: string) => `setup-${runId}`;
@@ -3785,6 +3791,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       hostPort,
       engineHost: engineHostName(this.config.dockerHost),
       env,
+      limits: this.config.previewLimits,
     };
     const current = () => !job.cancelled && this.composeJobs.get(row.id) === job && this.hasRun(row.id);
     const reallocate = (taken: ReadonlySet<number>) =>
@@ -3948,11 +3955,81 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       });
     }
     this.record(row.id, {
-      source: 'user',
+      source: opts.source ?? 'user',
       type: 'preview_stopped',
       payload: { terminalId: current.terminalId },
     });
     return { ...(await this.previewStatus(row.id, requestHost)), detectedCommand: current.detectedCommand };
+  }
+
+  /**
+   * A ticket moved to Done: the compose preview of each of its runs that is not stopped is taken
+   * down with its volumes and built images (CLEANUP_DOWN), and its port freed. Never throws; a
+   * failed `down` is recorded as `preview_failed` (stopPreviewHeld), so the port stays held.
+   */
+  async teardownTicketPreviews(ticketId: string): Promise<void> {
+    const rows = this.db.select().from(runs).where(eq(runs.ticketId, ticketId)).all();
+    for (const row of rows) {
+      await this.previewRunLock
+        .run(row.id, async () => {
+          if (!this.hasRun(row.id)) return;
+          const status = await this.previewStatus(row.id);
+          if (status.kind !== 'compose' || status.status === 'stopped') return;
+          await this.stopPreviewHeld(row, undefined, { volumes: true, source: 'system' });
+        })
+        .catch((error: unknown) =>
+          this.log?.warn(
+            { runId: row.id, ticketId, error: (error as Error).message },
+            'compose preview: teardown on ticket done failed',
+          ),
+        );
+    }
+  }
+
+  /**
+   * Every compose stack of the project: the newest runs that started a compose preview (at most
+   * MAX_LISTED_ENVIRONMENTS), then the main workspace's when it has one configured.
+   */
+  async composePreviewEnvironments(
+    projectId: string,
+    requestHost?: string,
+  ): Promise<ComposePreviewEnvironmentsResponse> {
+    const started = this.db
+      .select({ runId: runEvents.runId, payload: runEvents.payload, ticketId: runs.ticketId })
+      .from(runEvents)
+      .innerJoin(runs, eq(runs.id, runEvents.runId))
+      .where(and(eq(runs.projectId, projectId), eq(runEvents.type, 'preview_started')))
+      .orderBy(desc(runEvents.id))
+      .all();
+    const owners = new Map<string, string | null>();
+    for (const row of started) {
+      if (owners.size >= MAX_LISTED_ENVIRONMENTS) break;
+      if (owners.has(row.runId) || (row.payload as PreviewPayload | null)?.kind !== 'compose') continue;
+      owners.set(row.runId, row.ticketId);
+    }
+    const environments: ComposePreviewEnvironment[] = [];
+    for (const [runId, ticketId] of owners) {
+      const status = await this.previewStatus(runId, requestHost);
+      if (status.kind !== 'compose') continue;
+      environments.push(
+        toComposeEnvironment(status, { runId, ticketId, project: this.previewProjectOf(runId) }),
+      );
+    }
+    const main = await this.mainPreviews.status(projectId, requestHost);
+    if (!main.unavailable || main.status !== 'stopped') {
+      environments.push(
+        toComposeEnvironment(main, {
+          runId: null,
+          ticketId: null,
+          project: mainPreviewComposeProjectName(projectId),
+        }),
+      );
+    }
+    return {
+      ports: this.config.previewPorts.docker,
+      limits: this.config.previewLimits,
+      environments,
+    };
   }
 
   /**
