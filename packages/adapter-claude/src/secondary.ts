@@ -104,7 +104,12 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     // wait on the PTY; --no-gitignore also keeps aider from editing the project's .gitignore.
     const quiet =
       '--no-gitignore --no-show-release-notes --no-show-model-warnings --no-check-update --analytics-disable --no-detect-urls ';
-    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${aiderModel}`;
+    // Aider's commits carry the session's commit identity as it is: no "(aider)" in the author or
+    // committer name, no "aider: " prefix and no Co-authored-by trailer.
+    const noAttribution =
+      '--no-attribute-author --no-attribute-committer --no-attribute-commit-message-author ' +
+      '--no-attribute-commit-message-committer --no-attribute-co-authored-by ';
+    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${noAttribution}${aiderModel}`;
     cliCmd = options.prompt ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   }
 

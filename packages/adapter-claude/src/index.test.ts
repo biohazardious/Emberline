@@ -333,6 +333,21 @@ describe('secondary CLIs start without first-run questions', () => {
     }
   });
 
+  it('aider: commits carry the session identity as it is, with no aider attribution', () => {
+    for (const prompt of [undefined, 'Fix the build']) {
+      const text = script(buildSecondaryCliLaunchSpec({ ...base, agent: 'aider', prompt }));
+      for (const flag of [
+        '--no-attribute-author',
+        '--no-attribute-committer',
+        '--no-attribute-commit-message-author',
+        '--no-attribute-commit-message-committer',
+        '--no-attribute-co-authored-by',
+      ]) {
+        expect(text).toContain(flag);
+      }
+    }
+  });
+
   it('the Claude fallback gets the same pre-answered dialogs', () => {
     const spec = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot' });
     expect(script(spec)).toContain('claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome');
