@@ -1,5 +1,5 @@
 import type { AgentPersona, Ticket, TicketStatus, Run } from '@emberline/protocol';
-import { Coins, Wrench } from 'lucide-react';
+import { Check, Coins, Wrench } from 'lucide-react';
 import { type DragEvent, type FormEvent, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { issueHref } from '../issueImport';
@@ -119,11 +119,18 @@ export function IssueChips({ external }: { external: Ticket['external'] }) {
   );
 }
 
+/** Selection mode: a click (shift-click for a range) or Enter/Space picks the card instead of opening it. */
+export interface CardSelection {
+  selected: boolean;
+  onToggle: (range: boolean) => void;
+}
+
 export function TicketCard({
   ticket,
   run,
   dragging,
   dropBefore,
+  selection,
   onOpen,
   onDragStart,
   onDragOver,
@@ -132,32 +139,41 @@ export function TicketCard({
   run: Run | undefined;
   dragging: boolean;
   dropBefore: boolean;
+  selection?: CardSelection;
   onOpen: () => void;
   onDragStart: (e: DragEvent<HTMLLIElement>) => void;
   onDragOver: (e: DragEvent<HTMLLIElement>) => void;
 }) {
   const live = run && !run.endedAt;
   const shortBranch = run?.branch?.replace(/^emberline\//, '');
+  const activate = (range: boolean) => (selection ? selection.onToggle(range) : onOpen());
   return (
     <>
       {dropBefore && <li className="drop-marker" aria-hidden="true" />}
       <li
         id={`ticket-${ticket.key}`}
-        className={`card prio-${ticket.priority}${dragging ? ' dragging' : ''}${live ? ` card-live card-${run.state}` : ''}`}
-        draggable
+        className={`card prio-${ticket.priority}${dragging ? ' dragging' : ''}${live ? ` card-live card-${run.state}` : ''}${selection ? ' card-selectable' : ''}${selection?.selected ? ' card-selected' : ''}`}
+        draggable={!selection}
         tabIndex={0}
+        role={selection ? 'checkbox' : undefined}
+        aria-checked={selection ? selection.selected : undefined}
         aria-label={`${ticket.key} ${ticket.title}`}
-        onClick={onOpen}
+        onClick={(e) => activate(e.shiftKey)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onOpen();
+            activate(e.shiftKey);
           }
         }}
         onDragStart={onDragStart}
         onDragOver={onDragOver}
       >
         <div className="card-top">
+          {selection && (
+            <span className="card-check" aria-hidden="true">
+              {selection.selected && <Check className="icon" />}
+            </span>
+          )}
           <span className="card-key mono">{ticket.key}</span>
           <PersonaBadge persona={ticket.persona} />
           {shortBranch && <span className="card-branch mono">{shortBranch}</span>}

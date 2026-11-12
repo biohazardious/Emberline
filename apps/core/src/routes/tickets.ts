@@ -1,4 +1,11 @@
-import { type Run, type Ticket, TicketExportQuery, TicketPromptBody } from '@emberline/protocol';
+import {
+  BulkTicketBody,
+  type BulkTicketResult,
+  type Run,
+  type Ticket,
+  TicketExportQuery,
+  TicketPromptBody,
+} from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
 import { contentDisposition } from '../security-headers.js';
 import { ticketExportCsv, ticketExportFileName } from '../tickets/export.js';
@@ -36,6 +43,13 @@ export function registerTicketRoutes(app: FastifyInstance, tickets: TicketServic
     reply.code(201);
     return ticket;
   });
+
+  /** One action (move, priority, persona, delete) over up to `BULK_TICKET_LIMIT` tickets. */
+  app.post<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/tickets/bulk',
+    async (request): Promise<BulkTicketResult> =>
+      tickets.bulk(request.params.projectId, BulkTicketBody.parse(request.body ?? {})),
+  );
 
   app.get<{ Params: { id: string } }>('/api/tickets/:id', async (request): Promise<Ticket> =>
     tickets.get(request.params.id),

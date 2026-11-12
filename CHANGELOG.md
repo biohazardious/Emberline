@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Bulk board actions.** The board's **Select** toggle turns cards into checkboxes (click, Space or Enter; shift-click picks a range; each column header offers All/None), and a toolbar moves, reprioritises, reassigns or deletes every picked ticket in one request (`POST /api/projects/:projectId/tickets/bulk`, up to 100 tickets). Tickets an agent is still working on, and tickets whose run branch would skip its merge when closed, are left as they were, stay selected and are listed with the reason. Escape leaves selection mode.
+
 ## [0.7.0] - 2026-11-11
 
 A security release with a compose change: Emberline's own commands move out of the agents' reach (a new `ops` service, and the runner's service and the Live Browser's daemon under users of their own), and Emberline reaches ssh repositories with SSH keys it makes and keeps in core, like forge tokens. Read the upgrade notes first: the compose file changes, and projects with an ssh origin need an Emberline key.
