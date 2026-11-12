@@ -152,6 +152,27 @@ describe('build-script gate', () => {
     expect(
       evaluateBuilds(config, [], [{ path: 'pnpm-workspace.yaml', text: 'strictDepBuilds: false\n' }]),
     ).toHaveLength(1);
+    // The .npmrc list form, other spellings and quoted keys.
+    for (const [path, text] of [
+      ['.npmrc', 'only-built-dependencies[]=core-js\n'],
+      ['.npmrc', 'only-built-dependencies[] = core-js\n'],
+      ['.npmrc', 'only_built_dependencies[]=core-js\n'],
+      ['.npmrc', 'never-built-dependencies[]=esbuild\n'],
+      ['.npmrc', 'dangerously_allow_all_builds=true\n'],
+      ['.npmrc', 'strict-dep-builds=false\n'],
+      ['pnpm-workspace.yaml', "'onlyBuiltDependencies': [core-js]\n"],
+      ['pnpm-workspace.yaml', '"dangerouslyAllowAllBuilds": true\n'],
+      ['pnpm-workspace.yaml', "strictDepBuilds: 'false'\n"],
+    ] as const) {
+      expect(evaluateBuilds(config, [], [{ path, text }]), text).toHaveLength(1);
+    }
+    expect(
+      evaluateBuilds(
+        config,
+        [],
+        [{ path: '.npmrc', text: 'strict-dep-builds=true\nauto-install-peers=true\n' }],
+      ),
+    ).toEqual([]);
     expect(() => readBuildConfig(manifest({ neverBuiltDependencies: [] }))).toThrow(
       /onlyBuiltDependencies only/,
     );

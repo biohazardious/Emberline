@@ -10,10 +10,14 @@ export const ALLOWED_BUILDS: readonly string[] = ['better-sqlite3', 'esbuild', '
  */
 export const REVIEWED_IGNORED_BUILDS: readonly string[] = ['cpu-features', 'ssh2'];
 
-/** Settings that would let build scripts run outside `pnpm.onlyBuiltDependencies`, in any spelling pnpm reads. */
+/**
+ * Settings that would let build scripts run outside `pnpm.onlyBuiltDependencies`, in any spelling pnpm
+ * reads: camelCase or kebab-case (`-` or `_`), a quoted key, and the .npmrc list form
+ * (`only-built-dependencies[]=pkg`).
+ */
 const BYPASS_SETTINGS = [
-  /^\s*(dangerously-?allow-?all-?builds|only-?built-?dependencies(-?file)?|never-?built-?dependencies)\s*[:=]/im,
-  /^\s*strict-?dep-?builds\s*[:=]\s*false/im,
+  /^\s*["']?(dangerously[-_]?allow[-_]?all[-_]?builds|only[-_]?built[-_]?dependencies([-_]?file)?|never[-_]?built[-_]?dependencies)["']?\s*(\[\s*\])?\s*[:=]/im,
+  /^\s*["']?strict[-_]?dep[-_]?builds["']?\s*[:=]\s*["']?false/im,
 ];
 
 export interface PnpmBuildConfig {
