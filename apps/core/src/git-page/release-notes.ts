@@ -66,7 +66,7 @@ export interface ReleaseRange {
 /** What goes into the next release: the commits of the working branch since main's last version tag. */
 export async function releaseRange(mainPath: string, main: string, working: string): Promise<ReleaseRange> {
   const baseTag = await realGit(
-    ['describe', '--tags', '--abbrev=0', ...VERSION_TAG_MATCH, main],
+    ['describe', '--tags', '--abbrev=0', ...VERSION_TAG_MATCH, `refs/heads/${main}`],
     mainPath,
   ).then(
     (r) => r.stdout.trim() || null,

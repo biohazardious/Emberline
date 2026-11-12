@@ -7,7 +7,7 @@ import { readRepositorySettings } from '../db/project-settings.js';
 import { tickets } from '../db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from '../test-utils.js';
 import { GitPageService } from './service.js';
-import { buildReleaseNotesPrompt, MAX_PROMPT_CHARS, suggestVersion } from './release-notes.js';
+import { buildReleaseNotesPrompt, MAX_PROMPT_CHARS, releaseRange, suggestVersion } from './release-notes.js';
 
 let t: TestApp;
 let cookie: string;
@@ -77,6 +77,19 @@ describe('suggestVersion', () => {
   ])('suggestVersion(%s, %s) = %s', (tag, bump, out) =>
     expect(suggestVersion(tag, bump as 'patch')).toBe(out),
   );
+});
+
+describe('releaseRange', () => {
+  it("reads main's last tag from the branch, not from a tag that shares main's name", async () => {
+    git('tag', 'v0.1.0');
+    git('tag', 'main');
+    commit('b.txt', 'feat: b');
+    git('tag', 'v0.2.0');
+    commit('c.txt', 'feat(EMB-3): c');
+    const range = await releaseRange(projectPath, 'main', 'main');
+    expect(range.baseTag).toBe('v0.2.0');
+    expect(range.commits.map((c) => c.subject)).toEqual(['feat(EMB-3): c']);
+  });
 });
 
 describe('release notes draft', () => {
