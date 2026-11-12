@@ -25,6 +25,7 @@ import {
   type StartTicketBody,
   StartTicketBody as StartTicketBodySchema,
   type Ticket,
+  type TicketExport,
   type TicketStatus,
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
@@ -64,6 +65,7 @@ import {
   syncWorktreeToMainWorkspace,
   type TicketsFileHooks,
 } from '../factory/service.js';
+import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import {
   type Edge,
@@ -2160,6 +2162,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       .orderBy(asc(tickets.position))
       .all();
     return this.withDependencies(rows);
+  }
+
+  /** The board as an export document; `statuses` narrows the rows, counts always cover every column. */
+  exportBoard(projectId: string, statuses: readonly TicketStatus[], now = new Date()): TicketExport {
+    const project = this.project(projectId);
+    return buildTicketExport(project, this.list(projectId), statuses, now);
   }
 
   get(id: string): Ticket {

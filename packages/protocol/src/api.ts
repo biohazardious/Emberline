@@ -9,6 +9,7 @@ export * from './api/answers.js';
 export * from './api/routing.js';
 export * from './api/scheduler.js';
 export * from './api/tickets.js';
+export * from './api/ticket-export.js';
 export * from './api/review.js';
 export * from './api/notifications.js';
 export * from './api/forge.js';

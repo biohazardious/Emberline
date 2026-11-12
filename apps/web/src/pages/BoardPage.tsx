@@ -24,6 +24,7 @@ import {
   worktreeMissing,
 } from '../reviewComments';
 import { BlueprintModal } from '../components/BlueprintModal';
+import { BoardExportMenu } from '../components/BoardExportMenu';
 import { IssueImportDialog } from '../components/IssueImportDialog';
 import { issueHref } from '../issueImport';
 import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
@@ -368,6 +369,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
               Import issues
             </button>
           )}
+          {project && <BoardExportMenu projectId={project.id} columns={COLUMNS} tickets={tickets} />}
           <QuickAdd projectId={projectId} onCreated={patchLocal} onError={setError} />
         </div>
       </header>
