@@ -13,6 +13,9 @@ vi.mock('./api', async (importOriginal) => ({
   api: vi.fn(),
 }));
 
+// The Commits tab imports the diff editor; Monaco does not load in a DOM test.
+vi.mock('./components/MonacoDiff', () => ({ MonacoDiff: () => null }));
+
 const sync = (over: Partial<GitSync> = {}): GitSync => ({
   state: 'idle',
   at: null,

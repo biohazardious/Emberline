@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { SectionState } from '../components/SectionState';
+import { GitCommitsTab } from '../components/git/GitCommitsTab';
 import { GitStatusStrip } from '../components/git/GitStatusStrip';
 import { GIT_TABS, type GitTab, gitRefetchMs, tabFromHash } from '../gitPage';
 
@@ -76,8 +77,12 @@ export function GitPage({ projectId }: { projectId: string }) {
                 id={`git-panel-${tab}`}
                 aria-labelledby={`git-tab-${tab}`}
               >
-                {/* Tasks 11 to 13 fill these tabs. */}
-                <p className="muted">{TAB_LABEL[tab]} is coming.</p>
+                {tab === 'commits' ? (
+                  <GitCommitsTab projectId={projectId} status={data} />
+                ) : (
+                  /* Tasks 12 and 13 fill these tabs. */
+                  <p className="muted">{TAB_LABEL[tab]} is coming.</p>
+                )}
               </div>
             </div>
           )}
