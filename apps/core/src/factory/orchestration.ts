@@ -125,6 +125,7 @@ ${attachmentSection}
    - Work that is truly independent gets no \`dependsOn\`, so it can run in parallel.
    - Keep chains short; do not chain tickets that do not need each other's output.
    - A ticket's priority (0–3) only breaks ties between tickets that are ready at the same time; dependencies, not priority, decide the order.
+   - **No duplicates:** before writing tickets, check the project's existing open and done tickets (listed under \`## Existing tickets\` at the end of this task when there are any). Never create a second ticket for a change one already covers (e.g. two "split the big pages" tickets); name the existing ticket's key in \`dependsOn\` instead.
    - **Every ticket body has a \`## Target Files\` section** listing, one per line, the repo-relative paths (globs allowed, e.g. \`apps/web/src/board/**\`) the ticket will create or edit. Emberline does not run two tickets at once whose target files overlap.
    - Two tickets of this batch that edit the same code file must not run in parallel: add a \`dependsOn\` between them (the one whose output the other builds on comes first).
    - Leave \`PROJECT.md\` edits to the ticket that owns that milestone; other tickets do not list or edit \`PROJECT.md\`.

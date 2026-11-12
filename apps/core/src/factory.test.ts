@@ -462,6 +462,7 @@ describe('dependency-aware PO prompt', () => {
       'Two tickets of this batch that edit the same code file must not run in parallel: add a `dependsOn` between them',
     );
     expect(prompt).toContain('Leave `PROJECT.md` edits to the ticket that owns that milestone');
+    expect(prompt).toContain('**No duplicates:** before writing tickets, check the project');
     // The example body's section is one the dispatcher reads.
     const example = /"ref": "android-shell".*?"body": "((?:[^"\\]|\\.)*)"/.exec(prompt)?.[1] ?? '';
     expect(claimedPaths(JSON.parse(`"${example}"`) as string)).toEqual(['android/**', 'capacitor.config.ts']);

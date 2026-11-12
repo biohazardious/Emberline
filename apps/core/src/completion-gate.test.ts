@@ -760,6 +760,33 @@ describe('dependency context in the dependent prompt', () => {
   });
 });
 
+describe("the planner's prompt lists the existing tickets", () => {
+  it('a product_owner ticket sees the open and done tickets, open first; other personas do not', async () => {
+    const project = await createProject();
+    const done = await createTicket(project.id, { title: 'Split the big pages', status: 'done' });
+    const open = await createTicket(project.id, { title: 'Virtualise the board', status: 'ready' });
+    const plan = await createTicket(project.id, {
+      title: '[Factory] Next milestone',
+      status: 'backlog',
+      persona: 'product_owner',
+      body: 'Plan it.',
+    });
+    const { run } = (await api('POST', `/api/tickets/${plan.id}/start`, {})).json() as { run: Run };
+    await waitFile(`token-${run.id}`);
+    const prompt = t.runs.get(run.id).prompt;
+    const section = prompt.slice(prompt.indexOf('## Existing tickets'));
+    expect(section).toContain(`- ${open.key} [ready] Virtualise the board`);
+    expect(section).toContain(`- ${done.key} [done] Split the big pages`);
+    expect(section.indexOf(open.key)).toBeLessThan(section.indexOf(done.key));
+    expect(section).not.toContain(plan.key);
+
+    const coder = await createTicket(project.id, { title: 'Fix it', status: 'backlog', persona: 'coder' });
+    const second = (await api('POST', `/api/tickets/${coder.id}/start`, {})).json() as { run: Run };
+    await waitFile(`token-${second.run.id}`);
+    expect(t.runs.get(second.run.id).prompt).not.toContain('## Existing tickets');
+  });
+});
+
 describe('the ticket completion and a new run', () => {
   it('a fresh run of the ticket clears its old completion and broadcasts the ticket', async () => {
     const project = await createProject();

@@ -33,11 +33,12 @@ import {
   type UpdateTicketBody,
   UpdateTicketBody as UpdateTicketBodySchema,
 } from '@emberline/protocol';
-import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, max, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, max, ne, or } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import type { AgentFileRejection } from '../factory/agent-files.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
 import { runCommit } from '../factory/commit-identity.js';
+import { EXISTING_TICKETS_MAX, existingTicketsSection } from './existing-tickets.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, settings, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
@@ -2471,13 +2472,27 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    * refused); a function builds its section for the room it is given.
    */
   private startPrompt(ticket: Ticket, extra: string | ((room: number) => string)): string {
-    const base = ticketPrompt(ticket);
+    const base = this.promptWithExistingTickets(ticket, ticketPrompt(ticket));
     const extraRoom = Math.max(0, RUN_PROMPT_MAX - base.length - 2);
     const built = (typeof extra === 'function' ? extra(extraRoom) : extra).trim();
     const section = built && extraRoom > 1 ? clipText(built, extraRoom) : '';
     const reserved = section ? section.length + 2 : 0;
     const withDeps = this.promptWithDependencyContext(ticket, base, RUN_PROMPT_MAX - reserved);
     return section ? `${withDeps}\n\n${section}` : withDeps;
+  }
+
+  /** A planning (`product_owner`) ticket's prompt plus the project's other tickets, so it writes no duplicates. */
+  private promptWithExistingTickets(ticket: Ticket, base: string): string {
+    if (ticket.persona !== 'product_owner') return base;
+    const rows = this.db
+      .select({ key: tickets.key, title: tickets.title, status: tickets.status })
+      .from(tickets)
+      .where(and(eq(tickets.projectId, ticket.projectId), ne(tickets.id, ticket.id)))
+      .orderBy(desc(tickets.createdAt))
+      .all();
+    const room = Math.min(EXISTING_TICKETS_MAX, RUN_PROMPT_MAX - base.length - 2);
+    const section = room > 0 ? existingTicketsSection(rows, room) : '';
+    return section ? `${base}\n\n${section}` : base;
   }
 
   /**
