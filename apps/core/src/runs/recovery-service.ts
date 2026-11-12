@@ -1,15 +1,15 @@
 import { existsSync } from 'node:fs';
 import { NEEDS_PERSON_INPUT, type RecoverResponse, type Run, type RunRecovery } from '@emberline/protocol';
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { projects, reviewComments, tickets } from '../db/schema.js';
+import { projects, reviewComments, runEvents, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { mainMoversFor, type MergeProbeResult, probeMerge, supersedingFor } from '../factory/merge-probe.js';
 import { mainWorkspaceBranch } from '../factory/merge.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { currentHold, handoffChain } from './hold-outcome.js';
-import { buildRecovery, type RecoveryInput } from './recovery.js';
+import { buildRecovery, type ConflictInFlight, type RecoveryInput } from './recovery.js';
 import { isHeldRun, type RunService } from './service.js';
 
 /** The handoff reason of a held run that continues in a successor. */
@@ -87,6 +87,7 @@ export class RecoveryService {
       movedBy,
       reviewComments: hold.type === 'review_blocked' ? this.openBlockingComments(run) : [],
       completionReminder: this.opts.completionReminder(run),
+      resolving: hold.type === 'merge_failed' ? this.conflictInFlight(run, hold.id) : null,
     });
     return { ...recovery, delivery: this.deliveryFor(run) };
   }
@@ -151,6 +152,34 @@ export class RecoveryService {
       await this.scheduler.tick();
       return { delivery, run: this.runs.getRun(successor.id) };
     });
+  }
+
+  /**
+   * The automatic conflict resolution started since the hold note `holdId` that is still going: the
+   * run's own agent asked and not ended, or a resolver run (conflict-ladder.ts) not ended yet.
+   */
+  private conflictInFlight(run: Run, holdId: number): ConflictInFlight | null {
+    const latest = this.db
+      .select({ type: runEvents.type, payload: runEvents.payload })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.runId, run.id),
+          gt(runEvents.id, holdId),
+          inArray(runEvents.type, ['conflict_resolution_requested', 'conflict_resolver_started']),
+        ),
+      )
+      .orderBy(desc(runEvents.id))
+      .get();
+    if (!latest) return null;
+    if (latest.type === 'conflict_resolution_requested') return run.endedAt ? null : { by: 'agent' };
+    const runId = (latest.payload as { runId?: unknown } | null)?.runId;
+    if (typeof runId !== 'string') return null;
+    try {
+      return this.runs.getRun(runId).endedAt ? null : { by: 'resolver', runId };
+    } catch {
+      return null; // removed meanwhile
+    }
   }
 
   /** Why a held run cannot take a prompt at all. */

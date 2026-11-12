@@ -239,6 +239,42 @@ describe('buildRecovery: merge_failed', () => {
   });
 });
 
+describe('buildRecovery: merge_failed while a conflict resolution is in flight', () => {
+  const conflicting = (resolving: RecoveryInput['resolving']) =>
+    buildRecovery(
+      input('merge_failed', { conflicts: ['app.js'] }, { probe: probe(['app.js', 'content']), resolving }),
+    );
+
+  it('a resolver run: the why says so and waiting for it comes first, not Resolve conflicts', () => {
+    const r = conflicting({ by: 'resolver', runId: 'abcdef12-3456' });
+    expectWellFormed('merge_failed', r);
+    expect(r.why).toBe(
+      'main moved on and 1 file now conflicts: app.js; resolver run abcdef12 is resolving it now',
+    );
+    expect(r.suggestions[0]).toMatchObject({ id: 'wait_for_resolver', kind: 'manual' });
+    expect(r.suggestions[0]?.label).toContain('abcdef12');
+    expect(r.suggestions.map((s) => s.id)).not.toContain('resolve_conflicts');
+  });
+
+  it("the run's own agent: waiting for it comes first", () => {
+    const r = conflicting({ by: 'agent' });
+    expectWellFormed('merge_failed', r);
+    expect(r.why).toMatch(/; the agent is resolving it now$/);
+    expect(r.suggestions.map((s) => s.id)).toEqual(['wait_for_agent', 'discard', 'resolve_by_hand']);
+  });
+
+  it('nothing in flight: Resolve conflicts stays first', () => {
+    expect(conflicting(null).suggestions[0]?.id).toBe('resolve_conflicts');
+  });
+
+  it('a branch that merges cleanly now offers Merge now even while a resolver runs', () => {
+    const r = buildRecovery(
+      input('merge_failed', { conflicts: ['app.js'] }, { probe: probe(), resolving: { by: 'agent' } }),
+    );
+    expect(r.suggestions[0]?.id).toBe('merge_now');
+  });
+});
+
 describe('buildRecovery: the other holds', () => {
   it('build_gate_failed: Fix the checks with the stored output, Run Build & Verify', () => {
     const r = buildRecovery(

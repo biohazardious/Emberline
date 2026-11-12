@@ -228,6 +228,24 @@ export async function mergeRunBranch(params: {
     });
   const first = await mergeOnce();
   if (!heal || !first || first.ok || first.conflicts.length === 0) return first;
+  return healThenMerge({ run, mainWorkspacePath, ticketKey, stale, heal, first, merge: mergeOnce });
+}
+
+/**
+ * Layer 2 after a conflicting `first` merge: heals the additive conflicts in the run's worktree and,
+ * once that landed, merges again with `merge`. A heal that did not land returns `first` with its
+ * `healFailure`; null when the agent worked again meanwhile.
+ */
+export async function healThenMerge<M extends RunMerge>(params: {
+  run: Pick<Run, 'id' | 'worktreePath'>;
+  mainWorkspacePath: string;
+  ticketKey: string | null;
+  stale: () => boolean;
+  heal: MergeHeal;
+  first: M;
+  merge: () => Promise<M | null>;
+}): Promise<M | null> {
+  const { run, mainWorkspacePath, ticketKey, stale, heal, first } = params;
   const healed = await healConflicts({
     worktreePath: run.worktreePath,
     mainWorkspacePath,
@@ -249,7 +267,7 @@ export async function mergeRunBranch(params: {
     return { ...first, healFailure: healed };
   }
   heal.note('conflict_auto_resolved', { files: healed.files, commitSha: healed.commitSha });
-  const retry = await mergeOnce();
+  const retry = await params.merge();
   if (!retry?.ok) return retry;
   return { ...retry, resolution: 'auto_resolved', autoResolved: healed.files };
 }

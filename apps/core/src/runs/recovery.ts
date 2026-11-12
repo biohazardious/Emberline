@@ -20,7 +20,15 @@ export interface RecoveryInput {
   reviewComments: string[];
   /** Appended to every prompt: the completion reminder for an agent with the tool, else '' (it cannot signal completion). */
   completionReminder: string;
+  /**
+   * An automatic conflict resolution under way since the hold (merge holds only): the run's own
+   * agent was asked, or a resolver run on the branch works on it. Null when none is.
+   */
+  resolving?: ConflictInFlight | null;
 }
+
+/** Who resolves a held run's merge conflict right now (conflict-ladder.ts). */
+export type ConflictInFlight = { by: 'agent' } | { by: 'resolver'; runId: string };
 
 type Recovery = Omit<RunRecovery, 'delivery'>;
 
@@ -113,7 +121,42 @@ const openReview = (): RecoverySuggestion =>
     detail: 'Look at the changes and decide there.',
   });
 
+/** What a person can do while an automatic resolution runs: wait for it (first), or take over. */
+function resolutionInFlight(
+  input: RecoveryInput,
+  resolving: ConflictInFlight,
+  body: { why: string; suggestions: RecoverySuggestion[] },
+): { why: string; suggestions: RecoverySuggestion[] } {
+  const { mainBranch } = input;
+  const wait =
+    resolving.by === 'resolver'
+      ? suggestion({
+          id: 'wait_for_resolver',
+          kind: 'manual',
+          label: `Wait for resolver run ${resolving.runId.slice(0, 8)}`,
+          detail: `It merges ${mainBranch} into the branch and resolves the conflicts; its finish merges ${input.ticketKey ?? 'the ticket'} and moves it to Done.`,
+        })
+      : suggestion({
+          id: 'wait_for_agent',
+          kind: 'manual',
+          label: 'Wait for the agent',
+          detail: `It was asked to merge ${mainBranch} and resolve the conflicts; its next finish merges the work.`,
+        });
+  const who = resolving.by === 'resolver' ? `resolver run ${resolving.runId.slice(0, 8)} is` : 'the agent is';
+  return {
+    why: `${body.why}; ${who} resolving it now`,
+    suggestions: [wait, ...body.suggestions.filter((s) => s.id !== 'resolve_conflicts')],
+  };
+}
+
 function mergeFailed(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } {
+  const body = mergeFailedBody(input);
+  // A branch that merges cleanly now needs nobody to resolve anything.
+  if (!input.resolving || body.suggestions[0]?.kind === 'merge') return body;
+  return resolutionInFlight(input, input.resolving, body);
+}
+
+function mergeFailedBody(input: RecoveryInput): { why: string; suggestions: RecoverySuggestion[] } {
   const { mainBranch, probe, ticketKey } = input;
   const main = shellWord(mainBranch);
   const manual = (files: string[]) =>

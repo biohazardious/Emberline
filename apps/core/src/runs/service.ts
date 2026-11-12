@@ -330,7 +330,7 @@ export const MAX_EVENTS_PER_RUN = 5000;
  * tool's check-in and the turn boundary it is checked against (`ticket_complete`,
  * `completion_tool_ready`, `UserPromptSubmit`), one-shot markers
  * (`auto_nudged`, `session_lost`, `tickets_imported`), the preview start/stop the status reads, the pipeline hold/merge notes (HOLD_EVENTS,
- * HOLD_ENDING_EVENTS, `conflict_resolution_requested`), `pr_created`, the issue write-back records, and the watchdog outcomes.
+ * HOLD_ENDING_EVENTS, `conflict_resolution_requested`, `conflict_resolver_started`), `pr_created`, the issue write-back records, and the watchdog outcomes.
  */
 export const PRUNE_PROTECTED_EVENT_TYPES = [
   'last_screen',
@@ -353,6 +353,8 @@ export const PRUNE_PROTECTED_EVENT_TYPES = [
   // ...and the person's check that ends it.
   'review_carried_verified',
   'conflict_resolution_requested',
+  // The ladder counts resolver runs per ticket and main head (conflict-ladder.ts).
+  'conflict_resolver_started',
   'pr_created',
   // The issue write-back reads these back so a comment or a close never repeats.
   'issue_commented',
@@ -554,6 +556,10 @@ export interface HandOffOptions {
   extraPrompt?: string;
   /** Also continue a cancelled run, when it is a held run the pipeline's finished-step stop alone cancelled. */
   allowSystemFinishedCancel?: boolean;
+  /** The successor's persona instead of the predecessor's (a conflict resolver run is a `coder`). */
+  persona?: AgentPersona;
+  /** Mark the successor unattended although its predecessor was not. */
+  unattended?: 'factory';
 }
 
 /** Why a run cannot be handed off right now, if it cannot. `continuesHeld`: its cancel does not count. */
@@ -1419,7 +1425,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       {
         projectId: row.projectId,
         prompt,
-        persona: row.persona as AgentPersona,
+        persona: opts.persona ?? (row.persona as AgentPersona),
         permissionMode: row.permissionMode as Run['permissionMode'],
       },
       {
@@ -1429,7 +1435,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
         routes,
         routeIndex,
         predecessor: { id: row.id, handoffCount: row.handoffCount + (opts.automatic ? 1 : 0) },
-        unattended: this.unattendedOrigin(row.id),
+        unattended: opts.unattended ?? this.unattendedOrigin(row.id),
       },
     );
     this.note(successor.id, 'handoff_from', {
