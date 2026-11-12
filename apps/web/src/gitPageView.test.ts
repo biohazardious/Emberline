@@ -34,6 +34,8 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     originUrl: 'https://github.com/o/app.git',
     working: 'up_to_date',
     main: 'up_to_date',
+    workingCounts: null,
+    mainCounts: null,
     checkedAt: null,
     autoPull: true,
     sync: sync(),
@@ -182,6 +184,44 @@ describe('Git page', () => {
     await waitFor(() =>
       expect(view.container.querySelector('a[href="/projects/p1/board?ticket=t9"]')).not.toBeNull(),
     );
+  });
+});
+
+describe('Git page, main workspace off the working branch', () => {
+  it('warns on a mismatch and switches back', async () => {
+    serve(status({ checkedOut: 'feature', workingMismatch: true }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.textContent).toContain(
+        'The main workspace is on feature, not the working branch develop. Factory merges wait until it is switched back.',
+      ),
+    );
+    await click(getButton('Switch back to develop'));
+    await waitFor(() => expect(calls).toEqual(['working {"branch":"develop"}']));
+  });
+
+  it('warns when the main workspace is detached', async () => {
+    serve(status({ checkedOut: null }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.textContent).toContain(
+        'The main workspace is not on a branch. Factory merges wait until a branch is checked out.',
+      ),
+    );
+    expect(queryButton(/Switch back/)).toBeNull();
+  });
+
+  it("counts origin's new commits, and shows a pulled banner as information", async () => {
+    serve(
+      status({
+        working: 'behind',
+        workingCounts: { ahead: 0, behind: 2 },
+        sync: sync({ state: 'pulled', message: 'develop now matches origin.' }),
+      }),
+    );
+    const view = await open();
+    await waitFor(() => expect(view.container.textContent).toContain('2 new commits on origin'));
+    expect(view.container.querySelector('.banner-info')?.textContent).toContain('now matches origin');
   });
 });
 

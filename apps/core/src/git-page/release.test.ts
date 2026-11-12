@@ -922,6 +922,8 @@ describe('release', () => {
       backups: [],
     });
     expect(before.originUrl).toContain('/alice/app.git');
+    // Nothing of either branch is on origin yet, so there is nothing to count against.
+    expect([before.workingCounts, before.mainCounts]).toEqual([null, null]);
 
     const res = await send('POST', gitUrl('/release'), publish(head));
     expect(res.statusCode).toBe(202);
@@ -940,6 +942,7 @@ describe('release', () => {
       mainBehindWorking: 0,
       latestTag: 'v0.2.0',
       main: 'up_to_date',
+      mainCounts: { ahead: 0, behind: 0 },
       release: { ok: false, reason: expect.stringContaining('nothing') },
     });
     expect((await send('POST', gitUrl('/release/retry'))).statusCode).toBe(409);

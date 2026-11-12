@@ -191,6 +191,9 @@ export const GitPageStatus = z.object({
   originUrl: z.string().nullable(),
   working: BranchRemoteState,
   main: BranchRemoteState,
+  /** Commits ahead of and behind origin's branch as last read; null when unknown (no origin, not read yet). */
+  workingCounts: z.object({ ahead: z.number().int(), behind: z.number().int() }).nullable(),
+  mainCounts: z.object({ ahead: z.number().int(), behind: z.number().int() }).nullable(),
   checkedAt: z.string().nullable(),
   autoPull: z.boolean(),
   sync: GitSync,

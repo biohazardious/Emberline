@@ -28,7 +28,7 @@ import { badRequest, conflict, notFound } from '../errors.js';
 import type { buildWorkspaceDemo } from '../factory/demo.js';
 import { credentialAccountForRemote } from '../forge/account-store.js';
 import { parseForgeRemote, type ForgeService } from '../forge/service.js';
-import { mainBranchState, originUrls, realGit, remoteUrlForDisplay } from '../repository/git.js';
+import { aheadBehind, mainBranchState, originUrls, realGit, remoteUrlForDisplay } from '../repository/git.js';
 import type { RepositoryService } from '../repository/service.js';
 import type { RunService } from '../runs/service.js';
 import type { TicketService } from '../tickets/service.js';
@@ -241,6 +241,8 @@ export class GitPageService {
       originUrl: null,
       working: 'unknown',
       main: 'unknown',
+      workingCounts: null,
+      mainCounts: null,
       checkedAt: settings.lastRemoteCheck?.at ?? null,
       autoPull: settings.autoPull,
       sync: settings.sync ?? IDLE_SYNC,
@@ -271,6 +273,14 @@ export class GitPageService {
       if (remote) return classify(dir, local, remote);
       return check && !check.error ? 'unpublished' : 'unknown';
     };
+    const counts = async (branch: string, local: string | null) => {
+      if (!origin || !local || !(await refTip(dir, `refs/remotes/origin/${branch}`))) return null;
+      try {
+        return await aheadBehind(dir, branch);
+      } catch {
+        return null;
+      }
+    };
     const reason = await this.releases.refusal(projectId);
     return {
       ...base,
@@ -283,6 +293,8 @@ export class GitPageService {
       originUrl: origin ? remoteUrlForDisplay(origin).display : null,
       working: await against(working, workingTip),
       main: await against(main, mainTip),
+      workingCounts: await counts(working, workingTip),
+      mainCounts: await counts(main, mainTip),
       forgeRelease:
         origin !== null &&
         parseForgeRemote(origin) !== null &&

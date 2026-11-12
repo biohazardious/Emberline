@@ -67,6 +67,8 @@ export function GitStatusStrip({
   const names = local.some((b) => b.name === status.workingBranch)
     ? local.map((b) => b.name)
     : [status.workingBranch, ...local.map((b) => b.name)];
+  const detached = status.checkedOut === null;
+  const mismatch = !detached && status.workingMismatch;
   const banner = syncText(status.sync);
   const matchBranch = status.sync.branch ?? status.workingBranch;
   const anyBusy = busy !== null;
@@ -108,7 +110,7 @@ export function GitStatusStrip({
         </span>
         {status.hasOrigin && (
           <span className="git-strip-item small">
-            {remoteStateText(status.working)}
+            {remoteStateText(status.working, status.workingCounts?.ahead, status.workingCounts?.behind)}
             <span className="muted">
               {status.checkedAt ? `read ${timeAgo(status.checkedAt)}` : 'not read yet'}
             </span>
@@ -154,9 +156,39 @@ export function GitStatusStrip({
         </p>
       )}
 
+      {detached && (
+        <div className="banner banner-warn" role="status">
+          <span>
+            The main workspace is not on a branch. Factory merges wait until a branch is checked out.
+          </span>
+        </div>
+      )}
+      {mismatch && (
+        <div className="banner banner-warn" role="status">
+          <span>
+            The main workspace is on {status.checkedOut}, not the working branch {status.workingBranch}.
+            Factory merges wait until it is switched back.
+          </span>
+          <div className="git-banner-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={anyBusy}
+              onClick={() =>
+                void run('branch', () =>
+                  api(`${base}/working-branch`, 'POST', { branch: status.workingBranch }),
+                )
+              }
+            >
+              Switch back to {status.workingBranch}
+            </button>
+          </div>
+        </div>
+      )}
+
       {banner !== null && (
         <div
-          className={`banner ${status.sync.state === 'idle' ? 'banner-info' : 'banner-warn'}`}
+          className={`banner ${status.sync.state === 'idle' || status.sync.state === 'pulled' ? 'banner-info' : 'banner-warn'}`}
           role="status"
         >
           <span>{banner}</span>
