@@ -22,15 +22,21 @@ beforeEach(() => {
 });
 afterEach(() => opened.close());
 
-/** A fresh host key as a server would offer it: type and base64 blob. */
-const hostKey = (type: 'ed25519' | 'ecdsa' | 'ecdsa521' = 'ed25519') => {
+/**
+ * A fresh host key as a server would offer it: type and base64 blob. ssh2 generates a public key it
+ * cannot parse back about once in 250 ed25519 keys, so a key is drawn again until it parses.
+ */
+const hostKey = (type: 'ed25519' | 'ecdsa' | 'ecdsa521' = 'ed25519'): { keyType: string; key: string } => {
   const pub = (
     type === 'ed25519'
       ? utils.generateKeyPairSync('ed25519')
       : utils.generateKeyPairSync('ecdsa', { bits: type === 'ecdsa' ? 256 : 521 })
   ).public;
   const [keyType, key] = pub.split(' ') as [string, string];
-  return { keyType, key };
+  const parsed = utils.parseKey(pub);
+  return parsed instanceof Error || Array.isArray(parsed) || parsed.type !== keyType
+    ? hostKey(type)
+    : { keyType, key };
 };
 
 const GITHUB_ED25519 = 'AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl';

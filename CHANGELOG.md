@@ -11,6 +11,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- `make e2e` now also runs a Playwright regression suite (`e2e/ui/run.mjs`) after the smoke test: it imports a project from a git URL through the wizard, runs tickets with a scripted agent, answers an Inbox question, checks that a blocking review comment keeps the merge gate closed until it is resolved, and waits out a usage limit until the run resumes by itself. CI runs it in the end-to-end step (10-minute limit) and uploads Playwright traces on failure.
 - A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
 
 ## [0.7.0] - 2026-11-11
