@@ -186,10 +186,16 @@ await scenario('review: a blocking comment closes the merge gate until it is res
   await page.goto(`${new URL(page.url()).origin}/runs/${run.id}/review`);
   await page.locator('.review-file-item', { hasText: 'e2e-review.txt' }).click();
   await page.getByRole('button', { name: 'Add file comment' }).click();
-  await page.getByRole('radio', { name: 'Blocking' }).check();
+  // The file tree's filter has a "Blocking (n)" radio too: pick the comment's own Priority group.
+  await page.getByRole('radiogroup', { name: 'Priority' }).getByRole('radio', { name: 'Blocking' }).check();
   await page.getByLabel('Comment', { exact: true }).fill('This must change before it merges');
   await page.getByRole('button', { name: 'Add comment' }).click();
-  await page.getByText('This must change before it merges').waitFor();
+  // The comment shows in its thread and, being blocking, among the merge gate's reasons.
+  await page.locator('.comment-chip-body', { hasText: 'This must change before it merges' }).waitFor();
+  await page
+    .getByRole('list', { name: 'Blocking reasons' })
+    .getByText('This must change before it merges')
+    .waitFor();
 
   await api('PUT', `/api/projects/${project.id}/files/content`, {
     targetId: run.id,
@@ -253,6 +259,8 @@ await scenario(
     const cards = [];
     for (const title of titles) cards.push(await addTicket(page, title));
     await startTicket(page, cards[0]);
+    // The first ticket's drawer stays open over the board: back to the board for the second card.
+    await page.goto(`${origin(page)}/projects/${project.id}/board`);
     await startTicket(page, cards[1]);
     for (const title of titles) await seeInColumn(page, title, 'review');
     for (const title of titles) {
