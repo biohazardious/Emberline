@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
 import { ReviewView } from './components/ReviewView';
-import { apiRoutes, cleanup, deferred, renderDom, settle, waitFor } from './domRender';
+import { apiRoutes, cleanup, deferred, renderDom, settle, typeInto, waitFor } from './domRender';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -226,5 +226,18 @@ describe('ReviewView: a late diff for a file already left', () => {
     expect(
       document.querySelector('[data-file-path][aria-selected="true"]')?.getAttribute('data-file-path'),
     ).toBe('a.ts');
+  });
+});
+
+describe('ReviewView: j/k after typing a filter', () => {
+  it('moves through the files the filter shows, not the list before it', async () => {
+    await openReview();
+    const filter = document.querySelector<HTMLInputElement>('input[aria-label="Filter changed files"]')!;
+    await typeInto(filter, 'c');
+    expect(
+      [...document.querySelectorAll('[data-file-path]')].map((el) => el.getAttribute('data-file-path')),
+    ).toEqual(['c.ts']);
+    await press('j');
+    expect(shownPath()).toBe('c.ts');
   });
 });

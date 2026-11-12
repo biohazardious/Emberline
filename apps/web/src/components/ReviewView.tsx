@@ -90,7 +90,7 @@ export function ReviewView({
     setSelectedFile,
     setKeyboardFocusedFile,
     selectFile,
-    visibleOrderedPaths: visiblePathsRef.current,
+    visibleOrderedPathsRef: visiblePathsRef,
     setFilterQuery,
     setFilterMode,
     shortcutSheetOpen,

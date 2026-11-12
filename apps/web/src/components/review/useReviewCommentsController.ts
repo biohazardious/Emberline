@@ -29,7 +29,11 @@ interface Params {
   setSelectedFile: (file: string | null) => void;
   setKeyboardFocusedFile: (file: string | null) => void;
   selectFile: (path: string, viaKeyboard?: boolean) => void;
-  visibleOrderedPaths: string[];
+  /**
+   * The files the tree shows, in order. A ref, read when a key is pressed: ReviewView fills it
+   * from comment state this hook returns, so a value passed in would be one render old.
+   */
+  visibleOrderedPathsRef: { readonly current: string[] };
   setFilterQuery: (q: string) => void;
   setFilterMode: (m: ReviewTreeFilterMode) => void;
   shortcutSheetOpen: boolean;
@@ -51,7 +55,7 @@ export function useReviewCommentsController({
   setSelectedFile,
   setKeyboardFocusedFile,
   selectFile,
-  visibleOrderedPaths,
+  visibleOrderedPathsRef,
   setFilterQuery,
   setFilterMode,
   shortcutSheetOpen,
@@ -178,7 +182,7 @@ export function useReviewCommentsController({
       setDraft(null);
       const inSummary = summary?.files.some((f) => f.path === target.filePath) ?? false;
       if (inSummary) {
-        if (!visibleOrderedPaths.includes(target.filePath)) {
+        if (!visibleOrderedPathsRef.current.includes(target.filePath)) {
           setFilterQuery('');
           setFilterMode('all');
         }
@@ -197,7 +201,7 @@ export function useReviewCommentsController({
       comments,
       setSubTab,
       summary,
-      visibleOrderedPaths,
+      visibleOrderedPathsRef,
       setFilterQuery,
       setFilterMode,
       setSelectedFile,
@@ -215,7 +219,6 @@ export function useReviewCommentsController({
   }, [focusedId, selectedFile, fileDiffPath, subTab]);
 
   const shortcutStateRef = useRef({
-    files: visibleOrderedPaths,
     selectedFile,
     comments,
     focusedCommentId: focusedId,
@@ -226,7 +229,6 @@ export function useReviewCommentsController({
     subTab,
   });
   shortcutStateRef.current = {
-    files: visibleOrderedPaths,
     selectedFile,
     comments,
     focusedCommentId: focusedId,
@@ -242,7 +244,7 @@ export function useReviewCommentsController({
       const st = shortcutStateRef.current;
       const openDialog = Boolean(document.querySelector('dialog[open]'));
       const action = resolveReviewShortcut(e, {
-        files: st.files,
+        files: visibleOrderedPathsRef.current,
         selectedFile: st.selectedFile,
         comments: st.comments,
         focusedCommentId: st.focusedCommentId,
@@ -275,7 +277,7 @@ export function useReviewCommentsController({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectFile, jumpToComment, patchComment, setShortcutSheetOpen]);
+  }, [selectFile, jumpToComment, patchComment, setShortcutSheetOpen, visibleOrderedPathsRef]);
 
   return {
     reviewData: reviewQuery.data,
