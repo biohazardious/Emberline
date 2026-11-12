@@ -17,7 +17,7 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ['{apps,packages}/*/src/**/*.test.ts'],
+    include: ['{apps,packages}/*/src/**/*.test.ts', 'scripts/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', 'workspaces/**'],
     // Web tests run in node too; one that renders into a DOM says `// @vitest-environment happy-dom`.
     environment: 'node',

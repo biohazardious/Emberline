@@ -1,0 +1,4 @@
+{
+  "$comment": "Accepted high/critical advisories for `pnpm audit --prod`. Each entry: GHSA id, the affected package, why it does not affect Emberline, and an expiry date (YYYY-MM-DD) after which the gate fails until it is fixed or re-reviewed. See SECURITY.md, Supply chain.",
+  "advisories": []
+}

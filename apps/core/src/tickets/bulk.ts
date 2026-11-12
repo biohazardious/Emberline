@@ -28,11 +28,27 @@ const COLUMN_ORDER = new Map(TicketStatus.options.map((status, index) => [status
 const boardOrder = (a: Ticket, b: Ticket) =>
   (COLUMN_ORDER.get(a.status) ?? 0) - (COLUMN_ORDER.get(b.status) ?? 0) || a.position - b.position;
 
+/**
+ * An agent is still working on the run's ticket: its turn is under way (not ended, not yet `done`
+ * or `failed`), or it is paused on a usage limit and will resume on its own. A run whose turn
+ * finished while its session stays open (held for review) is not live.
+ */
+export function isLiveRun(run: { state: string; endedAt: Date | null; cancelledAt: Date | null }): boolean {
+  if (run.state === 'rate_limited') return run.cancelledAt === null;
+  return run.endedAt === null && run.state !== 'done' && run.state !== 'failed';
+}
+
 function runFacts(db: Db, ticketIds: string[]): Map<string, RunFacts> {
   const facts = new Map<string, RunFacts>();
   if (ticketIds.length === 0) return facts;
   const rows = db
-    .select({ ticketId: runs.ticketId, branch: runs.branch, endedAt: runs.endedAt })
+    .select({
+      ticketId: runs.ticketId,
+      branch: runs.branch,
+      state: runs.state,
+      endedAt: runs.endedAt,
+      cancelledAt: runs.cancelledAt,
+    })
     .from(runs)
     .where(inArray(runs.ticketId, ticketIds))
     .all();
@@ -40,7 +56,7 @@ function runFacts(db: Db, ticketIds: string[]): Map<string, RunFacts> {
     if (!row.ticketId) continue;
     const seen = facts.get(row.ticketId) ?? { live: false, branch: false };
     facts.set(row.ticketId, {
-      live: seen.live || row.endedAt === null,
+      live: seen.live || isLiveRun(row),
       branch: seen.branch || Boolean(row.branch),
     });
   }

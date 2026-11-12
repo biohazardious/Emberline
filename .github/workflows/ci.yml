@@ -1,10 +1,13 @@
-# Lint, typecheck, test, secret scan and the end-to-end tests (smoke + Playwright) on every push and pull request.
+# Lint, typecheck, test, secret scan, the supply-chain gate and the end-to-end tests (smoke + Playwright)
+# on every push and pull request. No image is published unless all of them pass.
 # Pushes to main publish the images as `edge`; a version tag (v0.1.0) publishes them as `0.1.0`,
 # `0.1` and `latest` and creates a GitHub release from that version's CHANGELOG section.
 #
 # Images: ghcr.io/<owner>/emberline-core and ghcr.io/<owner>/emberline-runner (linux/amd64).
 # The GHCR push needs no secrets: the workflow's own token may write packages. A new package
 # starts private; make it public once in the package settings when the repository goes public.
+# Every published image gets an SPDX SBOM and a cosign keyless signature and SBOM attestation
+# (GitHub OIDC, Sigstore's public Fulcio and Rekor); SECURITY.md says how to verify them.
 
 name: CI
 
@@ -52,15 +55,41 @@ jobs:
         with:
           fetch-depth: 0
       - name: gitleaks (whole history)
-        run: docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.30.0 git /repo --redact --no-banner
+        run: >-
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.30.0
+          git /repo --config /repo/.gitleaks.toml --redact --no-banner --exit-code 1
+
+  supply-chain:
+    name: Dependency and build-script gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Node 24 runs scripts/supply-chain/*.ts directly (type stripping).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm (packageManager in package.json)
+        run: corepack enable && pnpm --version
+      # Fails on a dependency with an install script that package.json neither allows nor lists as reviewed.
+      - name: Install with strict build scripts
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=true
+      # onlyBuiltDependencies stays better-sqlite3, esbuild and node-pty; nothing else builds or bypasses it.
+      - name: Build-script policy
+        run: pnpm supply-chain builds
+      # High or critical advisories in production dependencies fail unless scripts/supply-chain/audit-allowlist.json
+      # accepts them (with a reason and an expiry date).
+      - name: pnpm audit --prod against the allowlist
+        run: pnpm supply-chain audit
 
   images:
     name: Images and end-to-end test
-    needs: [check, secrets]
+    needs: [check, secrets, supply-chain]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signing: the workflow's OIDC token gets the Fulcio certificate.
+      id-token: write
     env:
       PUSH: ${{ github.event_name != 'pull_request' }}
     steps:
@@ -157,24 +186,73 @@ jobs:
             org.opencontainers.image.licenses=AGPL-3.0-or-later
       - name: Push core
         if: env.PUSH == 'true'
+        id: push-core
         uses: docker/build-push-action@v6
         with:
           context: .
           target: core
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.core-meta.outputs.tags }}
           labels: ${{ steps.core-meta.outputs.labels }}
           cache-from: type=gha,scope=core
       - name: Push runner
         if: env.PUSH == 'true'
+        id: push-runner
         uses: docker/build-push-action@v6
         with:
           context: .
           target: runner
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.runner-meta.outputs.tags }}
           labels: ${{ steps.runner-meta.outputs.labels }}
           cache-from: type=gha,scope=runner
+
+      # SBOMs of the pushed digests (not of a tag, which can move), then keyless signatures and attestations.
+      - name: SBOM core
+        if: env.PUSH == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ env.OWNER }}/emberline-core@${{ steps.push-core.outputs.digest }}
+          format: spdx-json
+          output-file: emberline-core.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM runner
+        if: env.PUSH == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ env.OWNER }}/emberline-runner@${{ steps.push-runner.outputs.digest }}
+          format: spdx-json
+          output-file: emberline-runner.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: sigstore/cosign-installer@v3
+        if: env.PUSH == 'true'
+      - name: Sign images and attest SBOMs (cosign keyless)
+        if: env.PUSH == 'true'
+        env:
+          CORE: ghcr.io/${{ env.OWNER }}/emberline-core@${{ steps.push-core.outputs.digest }}
+          RUNNER: ghcr.io/${{ env.OWNER }}/emberline-runner@${{ steps.push-runner.outputs.digest }}
+        run: |
+          cosign sign --yes "$CORE"
+          cosign sign --yes "$RUNNER"
+          cosign attest --yes --type spdxjson --predicate emberline-core.spdx.json "$CORE"
+          cosign attest --yes --type spdxjson --predicate emberline-runner.spdx.json "$RUNNER"
+          {
+            echo "### Signed images"
+            echo "- \`$CORE\`"
+            echo "- \`$RUNNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload SBOMs
+        if: env.PUSH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: '*.spdx.json'
+          if-no-files-found: error
+          retention-days: 90
 
   release:
     name: GitHub release
@@ -185,6 +263,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: sbom
       - name: Release notes from CHANGELOG.md
         # The section between this version's heading and the next one.
         run: |
@@ -203,4 +285,5 @@ jobs:
         run: |
           flags=""
           case "$GITHUB_REF_NAME" in v0.*|*-*) flags="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --title "Emberline ${GITHUB_REF_NAME}" --notes-file notes.md $flags
+          gh release create "$GITHUB_REF_NAME" --title "Emberline ${GITHUB_REF_NAME}" --notes-file notes.md $flags \
+            sbom/emberline-core.spdx.json sbom/emberline-runner.spdx.json
