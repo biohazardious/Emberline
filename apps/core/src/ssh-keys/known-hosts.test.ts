@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { PINNED_SSH_HOST_KEYS } from '@emberline/protocol';
 import { utils } from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,13 +23,25 @@ beforeEach(() => {
 });
 afterEach(() => opened.close());
 
-/** A fresh host key as a server would offer it: type and base64 blob. */
+/** An SSH wire string: uint32 length, then the bytes. */
+const sshString = (bytes: Buffer) => {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(bytes.length);
+  return Buffer.concat([length, bytes]);
+};
+
+/**
+ * A fresh host key as a server would offer it: type and base64 blob. ed25519 blobs are built from
+ * node:crypto, because ssh2's generator drops a leading zero byte of the 32-byte public key
+ * (about 1 key in 450), which the validator rightly refuses.
+ */
 const hostKey = (type: 'ed25519' | 'ecdsa' | 'ecdsa521' = 'ed25519') => {
-  const pub = (
-    type === 'ed25519'
-      ? utils.generateKeyPairSync('ed25519')
-      : utils.generateKeyPairSync('ecdsa', { bits: type === 'ecdsa' ? 256 : 521 })
-  ).public;
+  if (type === 'ed25519') {
+    const spki = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' });
+    const blob = Buffer.concat([sshString(Buffer.from('ssh-ed25519')), sshString(spki.subarray(-32))]);
+    return { keyType: 'ssh-ed25519', key: blob.toString('base64') };
+  }
+  const pub = utils.generateKeyPairSync('ecdsa', { bits: type === 'ecdsa' ? 256 : 521 }).public;
   const [keyType, key] = pub.split(' ') as [string, string];
   return { keyType, key };
 };

@@ -74,6 +74,10 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   (source `hook | transcript | screen | user | system`). Types: `packages/protocol/src/api/{projects,tickets,runs}.ts`
   and `packages/adapter-sdk/src/index.ts`. Tables: `apps/core/src/db/schema.ts`.
 - **Scheduling:** `QuotaWindow` and scheduled jobs live in SQLite, so restarts keep every timer (`api/scheduler.ts`, `api/usage.ts`).
+  `quota_windows` is the pause table: lane (provider), `resets_at`, `resume_at`, reason and the run that hit the limit; open pauses
+  are served by `quota_windows_open_idx` (migration 0029). The scheduler keeps no queue, slot or pause state in memory: after every
+  pass it re-arms one timer for the next stored resume or retry time (`scheduler/next-wake.ts`), and on each ptyd connect
+  `Scheduler.recover()` first ends runs whose sessions ptyd no longer reports (freeing their slots), then resumes due pauses.
 - **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
 - **Factory tickets:** `.emberline/new-tickets.json`, ingested by core when a run finishes (`apps/core/src/tickets/`).

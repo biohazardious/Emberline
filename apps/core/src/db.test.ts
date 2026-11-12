@@ -194,6 +194,57 @@ describe('openDb', () => {
     expect(backups()).toHaveLength(1);
   });
 
+  it('0029: open quota pauses from before the migration survive it, in the database and its pre-migration backup', () => {
+    const file = path.join(dir, 'emberline.db');
+    createOutdatedDb(file);
+    const resumeAt = Date.now() + 3_600_000;
+    const old = new Database(file);
+    old
+      .prepare(
+        `insert into quota_windows (id, agent, credential, pool, exhausted_at, resets_at, resume_at, source, message, run_id)
+         values ('w-open', 'claude', 'login', '*', ?, ?, ?, 'hook', 'resets 11:59pm', 'r1')`,
+      )
+      .run(Date.now(), resumeAt - 60_000, resumeAt);
+    old.close();
+
+    const indexes = (db: Db) =>
+      (
+        db.$client
+          .prepare(
+            `select name from sqlite_master where type = 'index' and tbl_name = 'quota_windows' and name not like 'sqlite_%'`,
+          )
+          .all() as { name: string }[]
+      )
+        .map((row) => row.name)
+        .sort();
+    const openPause = (db: Db) =>
+      db.$client
+        .prepare(
+          `select id, resume_at as resumeAt from quota_windows where resumed_at is null order by resume_at`,
+        )
+        .all();
+
+    const migrated = openDb(file);
+    expect(openPause(migrated.db)).toEqual([{ id: 'w-open', resumeAt }]);
+    expect(indexes(migrated.db)).toEqual(['quota_windows_lane_idx', 'quota_windows_open_idx']);
+    const plan = (
+      migrated.db.$client
+        .prepare(`explain query plan select * from quota_windows where resumed_at is null order by resume_at`)
+        .all() as { detail: string }[]
+    ).map((row) => row.detail);
+    expect(plan).toEqual(['SEARCH quota_windows USING INDEX quota_windows_open_idx (resumed_at=?)']);
+    migrated.close();
+
+    // The snapshot taken before 0029 is an older database that still opens and migrates.
+    const [backup] = backups();
+    const restored = path.join(dir, 'restored.db');
+    cpSync(path.join(dir, backup!), restored);
+    const fromBackup = openDb(restored);
+    expect(openPause(fromBackup.db)).toEqual([{ id: 'w-open', resumeAt }]);
+    expect(indexes(fromBackup.db)).toEqual(['quota_windows_lane_idx', 'quota_windows_open_idx']);
+    fromBackup.close();
+  });
+
   it('0022: review comments keep their rows, gain typed defaults and accept file-level (null line) comments', () => {
     const file = path.join(dir, 'emberline.db');
     createOutdatedDb(file);
