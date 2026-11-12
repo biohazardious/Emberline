@@ -13,7 +13,8 @@ import { readRepositorySettings, workingBranchOf } from '../db/project-settings.
 import { tickets } from '../db/schema.js';
 import { badRequest, notFound } from '../errors.js';
 import { commitIdentityFor } from '../factory/commit-identity.js';
-import { realGit, unlessRunnerUnavailable } from '../repository/git.js';
+import { isRunnerUnavailable } from '../command-exec.js';
+import { realGit } from '../repository/git.js';
 import { FULL_OID } from '../repository/service.js';
 import { resolveSafeWorktreePath } from '../runs/git.js';
 
@@ -33,16 +34,40 @@ export function ticketKeyOf(subject: string): string | null {
 
 const isFactoryMerge = (subject: string) => MERGE_KEY.test(subject);
 
+/**
+ * Whether `name` is a plain ref name by git's own rules (`git check-ref-format`), so that a revision
+ * expression such as `main~3`, `main^`, `main@{1}` or `a..b` is never taken for a ref.
+ */
+export function isPlainRefName(name: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f~^:?*[\\]/.test(name) || name.includes('..') || name.includes('@{')) return false;
+  if (name === '@' || name.startsWith('/') || name.endsWith('/') || name.includes('//')) return false;
+  if (name.endsWith('.')) return false;
+  return name.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'));
+}
+
+/**
+ * A git command that exits with `codes` found nothing (no such ref, no merge base) and reads as
+ * `fallback`; any other failure (the runner, an output over the cap, a crash) is thrown, never
+ * shown as an empty answer.
+ */
+const absentWhen =
+  <T>(fallback: T, ...codes: number[]) =>
+  (error: unknown): T => {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (!isRunnerUnavailable(error) && typeof code === 'number' && codes.includes(code)) return fallback;
+    throw error;
+  };
+
 /** The branches a ref may be given as, in the order they are tried. */
 const REF_NAMESPACES = ['refs/heads/', 'refs/tags/', 'refs/emberline/backup/'];
 
 /**
  * The commit a ref names: a local branch, a tag, a backup ref or a full commit id. Anything else
- * (an abbreviation, `HEAD~3`, an option) is not a ref the Git page reads.
+ * (an abbreviation, `HEAD~3`, `main^`, `main@{1}`, an option) is not a ref the Git page reads.
  */
 export async function resolveRef(mainPath: string, ref: string): Promise<string> {
-  // eslint-disable-next-line no-control-regex
-  if (!ref || ref.startsWith('-') || /[\s\u0000-\u001f]/.test(ref)) {
+  if (!ref || ref.startsWith('-') || (!FULL_OID.test(ref) && !isPlainRefName(ref))) {
     throw badRequest('Choose a branch, a tag or a full commit id.');
   }
   const candidates = FULL_OID.test(ref)
@@ -56,7 +81,7 @@ export async function resolveRef(mainPath: string, ref: string): Promise<string>
     const out = await realGit(
       ['rev-parse', '--verify', '--end-of-options', `${candidate}^{commit}`],
       mainPath,
-    ).then((r) => r.stdout.trim(), unlessRunnerUnavailable(''));
+    ).then((r) => r.stdout.trim(), absentWhen('', 1, 128));
     if (out) return out;
   }
   throw notFound(`There is no branch, tag or commit "${ref}" in this repository.`);
@@ -82,7 +107,7 @@ export async function refLabels(
   const out = await realGit(
     ['for-each-ref', '--format=%(objectname) %(*objectname) %(refname)'],
     mainPath,
-  ).then((r) => r.stdout, unlessRunnerUnavailable(''));
+  ).then((r) => r.stdout);
   const labels = new Map<string, GitRefLabel[]>();
   const add = (sha: string, label: GitRefLabel) => {
     const list = labels.get(sha) ?? [];
@@ -132,7 +157,7 @@ export async function listCommits(
       '--',
     ],
     project.path,
-  ).then((r) => r.stdout, unlessRunnerUnavailable(''));
+  ).then((r) => r.stdout);
   const rows = out
     .split('\n')
     .filter(Boolean)
@@ -184,10 +209,7 @@ async function changedFiles(mainPath: string, from: string | null, to: string): 
   const base = from === null ? ['diff-tree', '-r', '--root', '--no-commit-id', to] : ['diff', from, to];
   const common = ['-M', '--no-ext-diff', '--no-textconv', '-z'];
   const run = (flag: string) =>
-    realGit([...base.slice(0, 1), ...common, flag, ...base.slice(1), '--'], mainPath).then(
-      (r) => r.stdout,
-      unlessRunnerUnavailable(''),
-    );
+    realGit([...base.slice(0, 1), ...common, flag, ...base.slice(1), '--'], mainPath).then((r) => r.stdout);
   const [names, counts] = await Promise.all([run('--name-status'), run('--numstat')]);
 
   const stats = new Map<string, { additions: number; deletions: number; binary: boolean }>();
@@ -227,10 +249,12 @@ async function changedFiles(mainPath: string, from: string | null, to: string): 
 }
 
 async function parentsOf(mainPath: string, sha: string): Promise<string[]> {
+  // The commit exists (the caller resolved it), so a failure here is a real one; a root commit
+  // simply has an empty parent list.
   const out = await realGit(
     ['log', '-n', '1', '--no-show-signature', '--format=%P', sha, '--'],
     mainPath,
-  ).then((r) => r.stdout.trim(), unlessRunnerUnavailable(''));
+  ).then((r) => r.stdout.trim());
   return out ? out.split(' ') : [];
 }
 
@@ -239,7 +263,7 @@ export async function commitDetail(mainPath: string, sha: string): Promise<GitCo
   const message = await realGit(
     ['log', '-n', '1', '--no-show-signature', '--format=%B', oid, '--'],
     mainPath,
-  ).then((r) => r.stdout.replace(/\s+$/, ''), unlessRunnerUnavailable(''));
+  ).then((r) => r.stdout.replace(/\s+$/, ''));
   const parents = await parentsOf(mainPath, oid);
   return { sha: oid, message, parents, files: await changedFiles(mainPath, parents[0] ?? null, oid) };
 }
@@ -252,17 +276,13 @@ async function readSide(
 ): Promise<{ text: string; binary: boolean; truncated: boolean }> {
   const empty = { text: '', binary: false, truncated: false };
   if (rev === null) return empty;
-  const size = await realGit(['cat-file', '-s', `${rev}:${path}`], mainPath).then(
-    (r) => Number(r.stdout.trim()),
-    unlessRunnerUnavailable(NaN),
-  );
-  if (!Number.isFinite(size)) return empty;
+  // Decide "not there" explicitly: ls-tree prints nothing for a path the tree lacks and fails for
+  // anything else, so a git failure below is never read as an absent file.
+  const entry = await realGit(['ls-tree', '-z', rev, '--', path], mainPath).then((r) => r.stdout);
+  if (!/^\d+ blob /.test(entry)) return empty;
+  const size = Number((await realGit(['cat-file', '-s', `${rev}:${path}`], mainPath)).stdout.trim());
   if (size > SIDE_CAP) return { text: '', binary: false, truncated: true };
-  const text = await realGit(['cat-file', 'blob', `${rev}:${path}`], mainPath).then(
-    (r) => r.stdout,
-    unlessRunnerUnavailable(null),
-  );
-  if (text === null) return empty;
+  const text = (await realGit(['cat-file', 'blob', `${rev}:${path}`], mainPath)).stdout;
   if (text.slice(0, BINARY_PROBE).includes('\0')) return { text: '', binary: true, truncated: false };
   return { text, binary: false, truncated: false };
 }
@@ -301,16 +321,13 @@ async function compareSides(mainPath: string, base: string, head: string) {
   const [baseOid, headOid] = [await resolveRef(mainPath, base), await resolveRef(mainPath, head)];
   const mergeBase = await realGit(['merge-base', baseOid, headOid], mainPath).then(
     (r) => r.stdout.trim() || null,
-    unlessRunnerUnavailable(null),
+    absentWhen(null, 1),
   );
   return { baseOid, headOid, mergeBase };
 }
 
 const countRange = (mainPath: string, range: string) =>
-  realGit(['rev-list', '--count', range, '--'], mainPath).then(
-    (r) => Number(r.stdout.trim()) || 0,
-    unlessRunnerUnavailable(0),
-  );
+  realGit(['rev-list', '--count', range, '--'], mainPath).then((r) => Number(r.stdout.trim()) || 0);
 
 export async function compareRefs(mainPath: string, base: string, head: string): Promise<GitCompare> {
   const { baseOid, headOid, mergeBase } = await compareSides(mainPath, base, head);

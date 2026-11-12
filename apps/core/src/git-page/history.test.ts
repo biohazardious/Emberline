@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { type ExecRequest, localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from '../test-utils.js';
 
@@ -117,5 +118,44 @@ describe('git history', () => {
       await send('GET', `/api/projects/${projectId}/git/compare/file?base=main&head=develop&path=d.txt`)
     ).json();
     expect(file).toMatchObject({ original: '', modified: 'd.txt\n' });
+  });
+
+  it('takes only branches, tags, backups and full ids as refs, never a revision expression', async () => {
+    commit(projectPath, 'a.txt');
+    commit(projectPath, 'b.txt');
+    for (const ref of ['main~1', 'main^', 'main@{1}', 'main..main', 'HEAD:a.txt']) {
+      const res = await send('GET', `/api/projects/${projectId}/git/commits?ref=${encodeURIComponent(ref)}`);
+      expect(res.statusCode, ref).toBe(400);
+    }
+    const cmp = await send(
+      'GET',
+      `/api/projects/${projectId}/git/compare?base=main&head=${encodeURIComponent('main@{1}')}`,
+    );
+    expect(cmp.statusCode).toBe(400);
+  });
+
+  it('reads a path a tree lacks as empty, but lets a failing git call surface', async () => {
+    commit(projectPath, 'a.txt', 'docs: a', 'one\n');
+    const sha = git(projectPath, 'rev-parse', 'HEAD');
+    const gone = await send('GET', `/api/projects/${projectId}/git/commits/${sha}/file?path=missing.txt`);
+    expect(gone.statusCode).toBe(200);
+    expect(gone.json()).toMatchObject({ original: '', modified: '' });
+    const failOn = (word: string) =>
+      setCommandExecutor(async (request: ExecRequest) => {
+        if (request.args.includes(word)) throw new Error('git failed');
+        return localCommandExecutor(request);
+      });
+    try {
+      for (const word of ['diff', 'ls-tree']) {
+        failOn(word);
+        const url =
+          word === 'diff'
+            ? `/api/projects/${projectId}/git/commits/${sha}`
+            : `/api/projects/${projectId}/git/commits/${sha}/file?path=a.txt`;
+        expect((await send('GET', url)).statusCode, word).toBe(500);
+      }
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
   });
 });
