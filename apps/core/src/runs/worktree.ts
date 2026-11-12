@@ -181,6 +181,8 @@ export type RunMerge = Pick<
 
 /** Layer 2 of the conflict ladder (factory/conflict-heal.ts), when the factory setting is on. */
 export interface MergeHeal {
+  /** The project's column: the branch main is caught up from when the main workspace names none (mergeTarget). */
+  defaultBranch: string;
   /** The worktree gate (build/lint/test) on the healed tree. */
   verify: () => Promise<HealGate>;
   note: (type: 'conflict_auto_resolved' | 'conflict_heal_failed', payload: Record<string, unknown>) => void;
@@ -249,7 +251,7 @@ export async function healThenMerge<M extends RunMerge>(params: {
   const healed = await healConflicts({
     worktreePath: run.worktreePath,
     mainWorkspacePath,
-    mainBranch: (await mainWorkspaceBranch(mainWorkspacePath)) ?? 'main',
+    mainBranch: await mergeTarget({ path: mainWorkspacePath, defaultBranch: heal.defaultBranch }),
     label: ticketKey ?? run.id.slice(0, 8),
     mainTip: first.mainHead,
     stale,

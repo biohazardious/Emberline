@@ -375,7 +375,11 @@ describe('mergeRunBranch with the heal', () => {
       mainWorkspacePath: main,
       ticketKey: 'T-2',
       stale: () => false,
-      heal: { verify: PASSING, note: (type, payload) => notes.push([type, payload]) },
+      heal: {
+        defaultBranch: 'main',
+        verify: PASSING,
+        note: (type, payload) => notes.push([type, payload]),
+      },
     });
     expect(res).toMatchObject({
       ok: true,
@@ -400,7 +404,11 @@ describe('mergeRunBranch with the heal', () => {
       mainWorkspacePath: main,
       ticketKey: 'T-2',
       stale: () => false,
-      heal: { verify: async () => ({ ok: false, output: 'boom' }), note: (type) => notes.push(type) },
+      heal: {
+        defaultBranch: 'main',
+        verify: async () => ({ ok: false, output: 'boom' }),
+        note: (type) => notes.push(type),
+      },
     });
     expect(res).toMatchObject({ ok: false, resolution: null, healFailure: { reason: 'gate_failed' } });
     expect(res?.conflicts).toEqual(['.github/workflows/ci.yml', 'Makefile', 'PROJECT.md']);

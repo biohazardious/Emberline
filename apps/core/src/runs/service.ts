@@ -2284,11 +2284,10 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     this.emit('note', run, type, payload);
   }
 
-  /** The newest run of a ticket whose agent process is still alive, if any. */
   /**
-   * The ticket's run that is still in play: its process is alive, or it is rate limited and waiting
-   * for the quota window (process gone, resumed by the scheduler later). B11: the latter used to be
-   * ignored, so a second run could be started on the same ticket.
+   * The newest run of a ticket that is still in play: its process is alive, or it is rate limited
+   * and waiting for the quota window (process gone, resumed by the scheduler later). B11: the latter
+   * used to be ignored, so a second run could be started on the same ticket.
    */
   activeRunForTicket(ticketId: string): Run | undefined {
     const row = this.db
@@ -2579,7 +2578,6 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     return readWorktreeArtifact(row.worktreePath, relPath);
   }
 
-  /** Another run (e.g. a handoff successor) working in the same worktree. */
   /**
    * Prunes the linked git worktree (`/workspaces/.worktrees/...`) for an ended run, keeping
    * the run record and git branch intact. Active runs must be stopped first.

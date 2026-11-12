@@ -286,6 +286,7 @@ export class ConflictLadder {
             ticketKey,
             stale,
             heal: {
+              defaultBranch: project.defaultBranch,
               verify: () =>
                 verifyBuild({
                   db: this.deps.db,

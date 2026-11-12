@@ -53,7 +53,7 @@ import {
   runProducedChanges,
   type TicketsFileHooks,
 } from '../factory/service.js';
-import { applyBulkTicketAction, isLiveRun } from './bulk.js';
+import { applyBulkTicketAction, liveRun } from './bulk.js';
 import { ConflictLadder } from './conflict-ladder.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
@@ -1673,6 +1673,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // Layer 2 (M5): additive conflicts are healed in the run's worktree and checked again first.
       const heal: MergeHeal | undefined = fSettings.autoResolveAdditiveConflicts
         ? {
+            defaultBranch: projectRow.defaultBranch,
             verify: () => verifyBuild(gatePass),
             note: (type, payload) => this.runs.note(run.id, type, payload),
           }
@@ -2328,11 +2329,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   remove(id: string): void {
     const row = this.row(id);
     const live = this.db
-      .select({ state: runs.state, endedAt: runs.endedAt, cancelledAt: runs.cancelledAt })
+      .select({ id: runs.id })
       .from(runs)
-      .where(eq(runs.ticketId, id))
-      .all()
-      .some(isLiveRun);
+      .where(and(eq(runs.ticketId, id), liveRun()))
+      .get();
     if (live) throw conflict(`an agent is still working on ${row.key}; stop its run first`, 'run_active');
     const waiting = dependentIds(this.db, id);
     const blockedBefore = this.dependenciesOf(waiting);

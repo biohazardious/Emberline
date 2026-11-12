@@ -6,10 +6,11 @@ import {
   TicketStatus,
   type UpdateTicketBody,
 } from '@emberline/protocol';
-import { inArray } from 'drizzle-orm';
+import { and, inArray, notInArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs } from '../db/schema.js';
 import { HttpError } from '../errors.js';
+import { runStillActive } from '../runs/worktree.js';
 
 /** The ticket operations a bulk action is made of (TicketService). */
 export interface BulkTicketBoard {
@@ -29,14 +30,11 @@ const boardOrder = (a: Ticket, b: Ticket) =>
   (COLUMN_ORDER.get(a.status) ?? 0) - (COLUMN_ORDER.get(b.status) ?? 0) || a.position - b.position;
 
 /**
- * An agent is still working on the run's ticket: its turn is under way (not ended, not yet `done`
- * or `failed`), or it is paused on a usage limit and will resume on its own. A run whose turn
- * finished while its session stays open (held for review) is not live.
+ * An agent is still working on the run's ticket: a run still active (runStillActive: not ended, or
+ * paused on a usage limit to resume on its own) whose turn is not over. A run whose turn finished
+ * while its session stays open (held for review) is not live.
  */
-export function isLiveRun(run: { state: string; endedAt: Date | null; cancelledAt: Date | null }): boolean {
-  if (run.state === 'rate_limited') return run.cancelledAt === null;
-  return run.endedAt === null && run.state !== 'done' && run.state !== 'failed';
-}
+export const liveRun = () => and(runStillActive(), notInArray(runs.state, ['done', 'failed']));
 
 function runFacts(db: Db, ticketIds: string[]): Map<string, RunFacts> {
   const facts = new Map<string, RunFacts>();
@@ -45,9 +43,7 @@ function runFacts(db: Db, ticketIds: string[]): Map<string, RunFacts> {
     .select({
       ticketId: runs.ticketId,
       branch: runs.branch,
-      state: runs.state,
-      endedAt: runs.endedAt,
-      cancelledAt: runs.cancelledAt,
+      live: sql<number>`${liveRun()}`,
     })
     .from(runs)
     .where(inArray(runs.ticketId, ticketIds))
@@ -56,7 +52,7 @@ function runFacts(db: Db, ticketIds: string[]): Map<string, RunFacts> {
     if (!row.ticketId) continue;
     const seen = facts.get(row.ticketId) ?? { live: false, branch: false };
     facts.set(row.ticketId, {
-      live: seen.live || isLiveRun(row),
+      live: seen.live || row.live === 1,
       branch: seen.branch || Boolean(row.branch),
     });
   }
