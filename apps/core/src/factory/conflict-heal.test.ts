@@ -237,6 +237,37 @@ describe('healConflicts (real git repos)', () => {
     expect(snapshot(b)).toEqual(before);
   });
 
+  it('never union-merges a lockfile, whichever package manager wrote it and at any depth', async () => {
+    const locks = ['uv.lock', 'apps/web/bun.lock', 'Gemfile.lock', 'flake.lock', 'npm-shrinkwrap.json'];
+    for (const lock of locks) {
+      mkdirSync(path.dirname(path.join(main, lock)), { recursive: true });
+      writeFileSync(path.join(main, lock), 'version = 1\n');
+    }
+    commitAll(main, 'locks');
+    const a = addWorktree('a');
+    const b = addWorktree('b');
+    for (const lock of locks) append(a, lock, 'a = 1\n');
+    commitAll(a, 'a');
+    for (const lock of locks) append(b, lock, 'b = 1\n');
+    commitAll(b, 'b');
+    git(main, 'merge', '--no-ff', '-q', '-m', 'Merge a', 'emberline/a');
+    const before = snapshot(b);
+    const res = await heal(b);
+    expect(res).toMatchObject({ healed: false, reason: 'unresolved', unresolved: [...locks].sort() });
+    expect(snapshot(b)).toEqual(before);
+  });
+
+  it('undoes an additive heal that no check could verify', async () => {
+    const { b } = parallelAppends();
+    const before = snapshot(b);
+    const res = await heal(b, {
+      verify: async () => ({ ok: 'unverified', reason: 'the build gate is off' }),
+    });
+    expect(res).toMatchObject({ healed: false, reason: 'unverified' });
+    expect(res.healed === false && res.message).toContain('the build gate is off');
+    expect(snapshot(b)).toEqual(before);
+  });
+
   it('changes nothing when the agent worked again', async () => {
     const { b } = parallelAppends();
     const before = snapshot(b);

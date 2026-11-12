@@ -4,6 +4,7 @@ import type { Db } from '../db/index.js';
 import { readWizardTickets } from '../db/project-settings.js';
 import { runEvents } from '../db/schema.js';
 import { conflict } from '../errors.js';
+import type { HealGate } from '../factory/conflict-heal.js';
 import {
   auditWorktreeSlop,
   buildWorkspaceDemo,
@@ -237,14 +238,16 @@ async function runBuildChecks(
 
 /**
  * The build gate's checks again, for a tree core changed itself (the conflict heal's merge of main):
- * no agent is asked. Passes when the gate is off or there is nothing to verify, as the gate does.
+ * no agent is asked. Unlike the gate, a gate that is off or a tree with nothing to verify is no pass
+ * here but `unverified`: core's own union merge lands only when a real check ran on it and passed.
  */
 export async function verifyBuild(
   pass: Pick<GatePass, 'db' | 'run' | 'settings' | 'dockerEnv'>,
-): Promise<{ ok: true } | { ok: false; output: string }> {
-  if (!pass.settings.selfHealingBuildGate) return { ok: true };
+): Promise<HealGate> {
+  if (!pass.settings.selfHealingBuildGate) return { ok: 'unverified', reason: 'the build gate is off' };
   const res = await runBuildChecks(pass);
-  if (res === null || (!(res instanceof Error) && res.ok)) return { ok: true };
+  if (res === null) return { ok: 'unverified', reason: 'the project has no build, lint or test checks' };
+  if (!(res instanceof Error) && res.ok) return { ok: true };
   return { ok: false, output: res instanceof Error ? res.message : res.output };
 }
 

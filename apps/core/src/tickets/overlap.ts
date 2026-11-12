@@ -1,5 +1,6 @@
 import type { TicketOverlapWait } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
+import { LOCKFILES } from '../lockfiles.js';
 
 /**
  * Layer 1 of conflict handling (PROJECT.md §6 M5): a ready ticket whose claimed paths overlap the
@@ -13,31 +14,11 @@ const HOT_BASENAMES: ReadonlySet<string> = new Set([
   'CHANGELOG.md',
   'README.md',
   'CLAUDE.md',
-  'pnpm-lock.yaml',
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'yarn.lock',
-  'bun.lock',
-  'bun.lockb',
-  'Cargo.lock',
-  'go.sum',
-  'poetry.lock',
-  'uv.lock',
-  'Pipfile.lock',
-  'Gemfile.lock',
-  'composer.lock',
-  'flake.lock',
-  'pubspec.lock',
+  ...LOCKFILES,
 ]);
 
 /** Directories whose every file is hot. */
 const HOT_DIRS: readonly string[] = ['docs/', '.emberline/'];
-
-/** The hot shared paths as patterns, for prompts and docs. */
-export const HOT_SHARED_PATHS: readonly string[] = [
-  ...[...HOT_BASENAMES].map((name) => (name.endsWith('.md') ? name : `**/${name}`)),
-  ...HOT_DIRS.map((dir) => `${dir}**`),
-];
 
 /** Extensionless file names a claim may name on their own (`Makefile`). */
 const BARE_FILE_NAMES: ReadonlySet<string> = new Set([

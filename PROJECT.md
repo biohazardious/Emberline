@@ -328,7 +328,8 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       run's branch in its worktree with `merge.conflictStyle=diff3` and resolves every hunk whose base side is empty (both sides
       only _added_ lines at the same spot) as ours-then-theirs; lockfile conflicts are left for the agent. If every conflicted
       file is resolved, it commits `Merge <main> into <branch> (auto-resolved: …)`, runs the worktree gate (build/lint/test) again and merges into main; a
-      failing gate or any hunk that is a real edit/edit conflict aborts the heal (worktree back to its tip) and goes to layer 3.
+      failing gate, no gate at all (the build gate off, or nothing to verify: an unchecked union never lands), or any hunk that
+      is a real edit/edit conflict aborts the heal (worktree back to its tip) and goes to layer 3.
       Factory setting `autoResolveAdditiveConflicts` (default on). Event `conflict_auto_resolved` with the files.
 
       3. **Escalate to an agent**: the run's own session gets the resolution prompt (as before, `CONFLICT_ATTEMPT_CAP`); when it

@@ -221,6 +221,30 @@ describe('M5 end to end through the pipeline (AC-5.1, AC-5.2)', () => {
     expect(followups(runB)).toBe('');
   });
 
+  it('an additive conflict in a project with nothing to verify is not healed but goes to the agent', async () => {
+    const { project, b, runB } = await conflictingPair({
+      file: 'notes.txt',
+      base: 'notes\n',
+      a: 'notes\nfrom-a\n',
+      b: 'notes\nfrom-b\n',
+    });
+    const mainBefore = head(project.path);
+    await finishTurn(runB);
+    await expect
+      .poll(() => noteOf(runB, 'conflict_resolution_requested'), { timeout: 15_000 })
+      .toHaveLength(1);
+    expect(await noteOf(runB, 'conflict_heal_failed')).toEqual([
+      expect.objectContaining({ reason: 'unverified', files: ['notes.txt'] }),
+    ]);
+    expect(await eventTypes(runB)).not.toContain('conflict_auto_resolved');
+    expect(head(project.path)).toBe(mainBefore);
+    expect(readFileSync(path.join(project.path, 'notes.txt'), 'utf8')).toBe('notes\nfrom-a\n');
+    expect(
+      wgit(runB.worktreePath, 'rev-list', '--parents', '-n', '1', 'HEAD').trim().split(' '),
+    ).toHaveLength(2);
+    expect(await statusOf(b.id)).not.toBe('done');
+  });
+
   it('AC-5.2 an edit/edit conflict asks the agent and leaves its worktree and branch untouched', async () => {
     const { project, b, runB } = await conflictingPair(EDIT_EDIT);
     const mainBefore = head(project.path);

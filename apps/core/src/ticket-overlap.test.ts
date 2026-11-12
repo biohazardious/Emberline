@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { Run, Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCKFILES } from './lockfiles.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import {
   BranchFootprints,
@@ -91,6 +92,14 @@ describe('hot shared paths', () => {
     }
     for (const code of ['Makefile', 'apps/x/a.ts', '**/*.md', 'package.json', 'docsite/a.ts']) {
       expect(isHotPath(code), code).toBe(false);
+    }
+  });
+
+  it('include every lockfile the conflict heal leaves alone (one list)', () => {
+    expect(LOCKFILES.size).toBeGreaterThanOrEqual(15);
+    for (const lock of LOCKFILES) {
+      expect(isHotPath(lock), lock).toBe(true);
+      expect(isHotPath(`apps/x/${lock}`), lock).toBe(true);
     }
   });
 
