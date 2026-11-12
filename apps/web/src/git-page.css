@@ -1,0 +1,53 @@
+/* The Git page: what is specific to it. Everything else uses the shared tokens and classes. */
+.git-page {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.git-strip {
+  display: grid;
+  gap: 10px;
+}
+
+.git-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.git-strip-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.git-strip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.git-branch-select {
+  max-width: 240px;
+}
+
+.git-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.git-runs {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.git-tab-panel {
+  min-width: 0;
+}

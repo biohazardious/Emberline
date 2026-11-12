@@ -9,6 +9,7 @@ import './error-filter.css';
 import './responsive.css';
 import './board-bulk.css';
 import './review-keyboard.css';
+import './git-page.css';
 
 // Apply the saved theme before the first paint, so sign-in and setup match the app.
 try {

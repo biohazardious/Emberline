@@ -54,6 +54,7 @@ const ReviewPage = lazy(() => import('./pages/ReviewPage').then((m) => ({ defaul
 const BuildOutputsPage = lazy(() =>
   import('./pages/BuildOutputsPage').then((m) => ({ default: m.BuildOutputsPage })),
 );
+const GitPage = lazy(() => import('./pages/GitPage').then((m) => ({ default: m.GitPage })));
 const CodeExplorerPage = lazy(() =>
   import('./pages/CodeExplorerPage').then((m) => ({ default: m.CodeExplorerPage })),
 );
@@ -403,6 +404,13 @@ function Shell() {
                   {(params) => (
                     <Suspense fallback={<div className="board-page" aria-busy="true" />}>
                       <CodeExplorerPage key={params.id} projectId={params.id} />
+                    </Suspense>
+                  )}
+                </Route>
+                <Route path="/projects/:id/git">
+                  {(params) => (
+                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                      <GitPage key={params.id} projectId={params.id} />
                     </Suspense>
                   )}
                 </Route>

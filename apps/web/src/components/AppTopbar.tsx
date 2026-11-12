@@ -1,6 +1,7 @@
 import type { Project, SystemStatus } from '@emberline/protocol';
 import {
   FileCode,
+  GitBranch,
   Globe,
   LayoutDashboard,
   LayoutGrid,
@@ -83,6 +84,15 @@ export function AppTopbar({
               title="Code Explorer"
             >
               <FileCode className="icon" aria-hidden /> <span className="tab-label">Code Explorer</span>
+            </Link>
+          )}
+          {activeProject && (
+            <Link
+              href={`/projects/${activeProject.id}/git`}
+              className={`topbar-tab${location === `/projects/${activeProject.id}/git` ? ' active' : ''}`}
+              title="Git: history, branches and releases"
+            >
+              <GitBranch className="icon" aria-hidden /> <span className="tab-label">Git</span>
             </Link>
           )}
           {activeProject && (

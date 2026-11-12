@@ -14,6 +14,7 @@ import {
   Container,
   Eraser,
   FileCode,
+  GitBranch,
   Globe,
   Inbox,
   LayoutDashboard,
@@ -305,6 +306,18 @@ export function AppSidebar({
               <FileCode className="icon" aria-hidden />
             </span>
             <span className="nav-label">Code Explorer</span>
+          </Link>
+        )}
+        {activeProject && (
+          <Link
+            href={`/projects/${activeProject.id}/git`}
+            className={`nav-item${location === `/projects/${activeProject.id}/git` ? ' active' : ''}`}
+            title="Git: history, branches and releases"
+          >
+            <span className="nav-icon mono">
+              <GitBranch className="icon" aria-hidden />
+            </span>
+            <span className="nav-label">Git</span>
           </Link>
         )}
         {activeProject && (
