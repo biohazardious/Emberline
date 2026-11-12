@@ -1,0 +1,20 @@
+# Overlay for the compose file of an older release (e2e/upgrade-paths.sh): the current images, no ports,
+# no build and no Docker engine, so an old compose file runs isolated beside the current one.
+services:
+  core:
+    image: emberline/core:e2e
+    build: !reset null
+    ports: !override
+      - '127.0.0.1::7420'
+    environment:
+      EMBERLINE_SETUP_TOKEN: e2e-setup-token
+      EMBERLINE_DOCKER_ENGINE: '0'
+  runner:
+    image: emberline/runner:e2e
+    build: !reset null
+    ports: !reset []
+  docker:
+    build: !reset null
+    deploy:
+      replicas: 0
+    ports: !reset []

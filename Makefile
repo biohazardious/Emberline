@@ -7,7 +7,7 @@ E2E  := docker compose -p $(E2E_PROJECT) -f compose.yaml -f e2e/compose.e2e.yaml
 RUN  := $(DEV) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password up down logs upgrade-core claude-login clean
+.PHONY: help dev dev-down install lock shell test lint typecheck build format check attach db-generate ci e2e backup reset-password e2e-upgrade up down logs upgrade-core claude-login clean
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
@@ -64,6 +64,14 @@ e2e: ## End-to-end smoke test, then the Playwright ticket-to-merge suite (traces
 	  node /e2e/ui/run.mjs http://core:7420 || status=$$?; \
 	[ $$status -eq 0 ] || $(E2E) logs --tail 80; \
 	$(E2E) down -v >/dev/null 2>&1; rm -rf $$ws 2>/dev/null || true; exit $$status
+
+e2e-upgrade: ## Upgrade paths: 0.5/0.6/0.7 data volumes to the current images (snapshot, rows, secrets, ops banner, rollback drill); needs the release tags
+	@set -e; \
+	if [ -z "$(E2E_PREBUILT)" ]; then \
+	  docker build -q --target core -t emberline/core:e2e . >/dev/null; \
+	  docker build -q --target runner -t emberline/runner:e2e . >/dev/null; \
+	fi; \
+	e2e/upgrade-paths.sh
 
 # --- production stack ------------------------------------------------------
 
