@@ -1,5 +1,6 @@
 /** Project settings → Container preview (worktree-config/container-preview.ts). */
 import {
+  type ComposePreviewEnvironmentsResponse,
   ContainerPreviewChoice,
   type ContainerPreviewDiffResponse,
   type ContainerPreviewOptionsResponse,
@@ -40,6 +41,18 @@ export function registerContainerPreviewRoutes(
       const project = projectOr404(request.params.id);
       await assertNotCloning(clones, project.id);
       return containerPreviewOptions(deps, project);
+    },
+  );
+
+  /**
+   * Each worktree's compose stack (one per run, plus main's): starting, healthy, failed with the
+   * log tail, or stopped, with the port range and the cpu/memory limits every container runs with.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/projects/:id/container-preview/environments',
+    async (request): Promise<ComposePreviewEnvironmentsResponse> => {
+      const project = projectOr404(request.params.id);
+      return runs.composePreviewEnvironments(project.id, request.host);
     },
   );
 

@@ -384,6 +384,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
     this.upgradeCandidates = this.takeUpgradeCandidates();
+    // A finished ticket's worktree previews are not needed any more: their stacks go, ports freed.
+    this.on('moved', (ticket: Ticket) => {
+      if (ticket.status === 'done') void runs.teardownTicketPreviews(ticket.id);
+    });
     runs.on('run', (run, stateChanged) => {
       // A handed-off run stopped for quota and a successor continues its work; it finished nothing.
       if (run.handedOffTo) return;

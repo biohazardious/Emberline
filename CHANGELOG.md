@@ -4,6 +4,14 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Compose previews run one stack per worktree with per-container caps: `EMBERLINE_PREVIEW_CPUS` (default 1) and `EMBERLINE_PREVIEW_MEMORY_MB` (default 1024, no swap). A ticket moved to Done takes its runs' preview stacks down with their volumes. `GET /api/projects/:id/container-preview/environments` lists every stack as starting, healthy, failed (with the end of its output) or stopped.
+
+### Changed
+
+- A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
+
 ## [0.7.0] - 2026-11-11
 
 A security release with a compose change: Emberline's own commands move out of the agents' reach (a new `ops` service, and the runner's service and the Live Browser's daemon under users of their own), and Emberline reaches ssh repositories with SSH keys it makes and keeps in core, like forge tokens. Read the upgrade notes first: the compose file changes, and projects with an ssh origin need an Emberline key.
