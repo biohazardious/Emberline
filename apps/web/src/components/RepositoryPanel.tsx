@@ -271,9 +271,8 @@ export function RepositoryPanel({ project }: { project: Project }) {
               {busy === 'refresh' ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-          {separate ? (
-            <p className="muted small">{s.defaultBranch} is pushed by Promote and Release on the Git page.</p>
-          ) : (
+          {/* With a working branch, PushTargetFields says where main is pushed from. */}
+          {!separate && (
             <>
               {blocked !== null && <p className="muted small">{blocked}</p>}
               {blocked === null && tip && <p className="muted small">Pushes {tip}.</p>}

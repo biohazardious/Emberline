@@ -266,6 +266,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
             <p className="muted small">{releaseChecksText(status)}</p>
           </section>
 
+          {/* Promote only makes no release: no version, no notes and no draft of them. */}
           {separateMode === 'publish' && (
             <>
               <label className="git-release-field">
@@ -293,41 +294,41 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                 />
               </label>
+              <div className="git-release-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || drafting || summary.head === null}
+                  onClick={() => void act(() => api(`${base}/release/draft`, 'POST'))}
+                >
+                  Draft notes with an agent
+                </button>
+                {drafting && (
+                  <span className="muted small">
+                    <LoaderCircle className="icon icon-spin" aria-hidden /> Drafting…
+                  </span>
+                )}
+              </div>
+              {draft?.status === 'failed' && (
+                <p className="muted small" role="alert">
+                  The draft failed: {draft.error ?? 'no reason was given.'}
+                </p>
+              )}
+              {newDraft && (
+                <p className="small">
+                  A new draft is ready.{' '}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setForm(seedFrom(newDraft, suggestion))}
+                  >
+                    Use the new draft
+                  </button>
+                </p>
+              )}
+              {stale && <p className="muted small">The draft was written for an older tip of {working}.</p>}
             </>
           )}
-          <div className="git-release-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={busy || drafting || summary.head === null}
-              onClick={() => void act(() => api(`${base}/release/draft`, 'POST'))}
-            >
-              Draft notes with an agent
-            </button>
-            {drafting && (
-              <span className="muted small">
-                <LoaderCircle className="icon icon-spin" aria-hidden /> Drafting…
-              </span>
-            )}
-          </div>
-          {draft?.status === 'failed' && (
-            <p className="muted small" role="alert">
-              The draft failed: {draft.error ?? 'no reason was given.'}
-            </p>
-          )}
-          {newDraft && (
-            <p className="small">
-              A new draft is ready.{' '}
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setForm(seedFrom(newDraft, suggestion))}
-              >
-                Use the new draft
-              </button>
-            </p>
-          )}
-          {stale && <p className="muted small">The draft was written for an older tip of {working}.</p>}
 
           {separate && (
             <fieldset className="git-release-mode">

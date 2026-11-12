@@ -4,7 +4,7 @@ import { hasWorkingBranch, keepPushedText } from '../repository';
 
 type Save = (key: string, patch: UpdateRepositoryBody) => void;
 
-/** Project settings → Repository: where Keep pushed: where the factory's merges go. */
+/** Project settings → Repository: where Keep pushed sends the factory's merges. */
 export function PushTargetFields({ s, busy, onSave }: { s: RepositoryStatus; busy: boolean; onSave: Save }) {
   const [branch, setBranch] = useState(s.integrationBranch);
   useEffect(() => setBranch(s.integrationBranch), [s.integrationBranch]);

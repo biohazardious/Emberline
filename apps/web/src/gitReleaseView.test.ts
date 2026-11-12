@@ -272,6 +272,35 @@ describe('the release tab', () => {
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('nine');
   });
 
+  it('offers no draft and no new-draft line for a promote only', async () => {
+    const { container, rerender } = await show(status());
+    // Edited notes: the draft that finishes later waits behind "Use the new draft".
+    await typeInto(container.querySelector('textarea')!, 'Mine');
+    await rerender(
+      createElement(GitReleaseTab, {
+        projectId: 'p1',
+        status: status({
+          releaseDraft: {
+            status: 'ready',
+            head: HEAD,
+            baseTag: null,
+            version: 'v0.9.0',
+            bump: 'minor',
+            notes: 'Fresh',
+            agent: null,
+            error: null,
+            at: '2026-11-13T00:00:00Z',
+          },
+        }),
+      }),
+    );
+    expect(container.textContent).toContain('A new draft is ready');
+    expect(container.textContent).toContain('Draft notes with an agent');
+    await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
+    expect(container.textContent).not.toContain('A new draft is ready');
+    expect(container.textContent).not.toContain('Draft notes with an agent');
+  });
+
   it.each(['done', 'undone'] as const)(
     'starts the next release from the new suggestion once a job ends %s',
     async (state) => {

@@ -62,6 +62,8 @@ describe('static render', () => {
     expect(html).toContain(
       'Pushes develop after each factory merge; main is pushed by Promote and Release on the Git page.',
     );
+    // Said once, not a second time under the actions.
+    expect(html.split('is pushed by Promote and Release').length).toBe(2);
     expect(html).not.toContain('Keep pushed pushes to');
     expect(html).not.toContain('An integration branch');
     expect(html).not.toContain('Push main to origin');
