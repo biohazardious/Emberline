@@ -110,7 +110,7 @@ export async function gatewayRemoteHead(
   cwd: string,
   branch: string,
 ): Promise<string | null> {
-  return (await remoteHeads(r, cwd, branch)).find((head) => head.name === branch)?.oid ?? null;
+  return gatewayRemoteRef(r, cwd, `refs/heads/${branch}`);
 }
 
 /**
@@ -318,6 +318,9 @@ export async function gatewayPushRef(
         const refusal = forgeRefusal(out);
         if (refusal) throw new GitGatewayError('git_failed', `The forge refused the push: ${refusal}`);
         if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected' as const;
+        // An older git refuses itself to delete a branch origin no longer has; a newer one sends the
+        // delete from the zero id, which the plan refuses as a moved remote (below). Both: gone since.
+        if (refspec.startsWith(':') && /remote ref does not exist/.test(out)) return 'rejected' as const;
         throw error;
       }
     });

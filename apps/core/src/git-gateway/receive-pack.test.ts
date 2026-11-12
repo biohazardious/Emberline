@@ -180,24 +180,20 @@ describe('the receive-pack command list', () => {
 
   it('a planned delete passes only as that delete: not an update, not of a tag, not of a branch origin lacks', () => {
     const del = { ref: 'refs/heads/x', newOid: Z, oldOid: A, allowDelete: true as const };
-    // allowDelete never lets an update through, and a delete plan never lets another value through.
+    // A delete plan never lets an update through, and allowDelete belongs only to a delete plan:
+    // with a new commit, the plan is refused whatever the push sends.
     expect(() => checkPush([{ oldOid: A, newOid: B, ref: 'refs/heads/x' }], del)).toThrow(
       /only to the commit Emberline planned/,
     );
-    expect(() =>
-      checkPush([{ oldOid: A, newOid: B, ref: 'refs/heads/x' }], {
-        ...plan,
-        ref: 'refs/heads/x',
-        allowDelete: true,
-      }),
-    ).not.toThrow();
-    expect(() =>
-      checkPush([{ oldOid: A, newOid: Z, ref: 'refs/heads/x' }], {
-        ...plan,
-        ref: 'refs/heads/x',
-        allowDelete: true,
-      }),
-    ).toThrow('Deleting a branch is not allowed through Emberline.');
+    for (const newOid of [B, Z]) {
+      expect(() =>
+        checkPush([{ oldOid: A, newOid, ref: 'refs/heads/x' }], {
+          ...plan,
+          ref: 'refs/heads/x',
+          allowDelete: true,
+        }),
+      ).toThrow('This push was planned as a delete of refs/heads/x, but it names a new commit.');
+    }
     // A zero id of another length (sha256 vs sha1) is no planned delete.
     expect(() =>
       checkPush([{ oldOid: A, newOid: Z, ref: 'refs/heads/x' }], { ...del, newOid: '0'.repeat(64) }),

@@ -12,7 +12,6 @@ import {
   gatewayPushBranch,
   gatewayPushRef,
   gatewayRemoteBranches,
-  gatewayRemoteHead,
   gatewayRemoteRef,
   refKind,
 } from '../git-gateway/remote-git.js';
@@ -293,20 +292,7 @@ export async function remoteBranchHead(
   access: RemoteAccess,
   branch: string,
 ): Promise<string | null> {
-  if (access.remote) return gatewayRemoteHead(access.remote, mainPath, branch);
-  assertSupportedRemote(access.url);
-  const out = (
-    await execGitFile([...NO_SUBMODULES, 'ls-remote', '--heads', '--', access.url, `refs/heads/${branch}`], {
-      cwd: mainPath,
-      timeout: 20_000,
-      remote: true,
-    })
-  ).stdout;
-  for (const line of out.split('\n')) {
-    const [oid, ref] = line.split('\t');
-    if (ref?.trim() === `refs/heads/${branch}` && OID.test(oid?.trim() ?? '')) return oid!.trim();
-  }
-  return null;
+  return remoteRefHead(mainPath, access, `refs/heads/${branch}`);
 }
 
 const refNotPushable = (ref: string) =>
@@ -316,8 +302,7 @@ const refNotPushable = (ref: string) =>
 
 /**
  * What exactly `ref` (`refs/heads/<branch>` or `refs/tags/<tag>`) names on the remote: a commit, or an
- * annotated tag's own object; null when the remote has no such ref. {@link remoteBranchHead} for any
- * branch or tag.
+ * annotated tag's own object; null when the remote has no such ref.
  */
 export async function remoteRefHead(
   mainPath: string,
@@ -425,43 +410,50 @@ export async function pushBranch(
   oid: string,
 ): Promise<'pushed' | 'rejected'> {
   const ref = `refs/heads/${branch}`;
+  if (!access.remote) assertSupportedRemote(access.url);
+  try {
+    if (access.remote) return await gatewayPushBranch(access.remote, mainPath, branch, oid);
+    await execGitFile(
+      [
+        ...NO_SUBMODULES,
+        'push',
+        '--porcelain',
+        '--no-recurse-submodules',
+        '--no-follow-tags',
+        '--',
+        access.url,
+        `${oid}:${ref}`,
+      ],
+      { cwd: mainPath, timeout: 60_000, remote: true },
+    );
+    return 'pushed';
+  } catch (error) {
+    return pushFailure(error, access);
+  }
+}
+
+/**
+ * A push that failed: `'rejected'` when git says origin's ref is not what this push expects (a
+ * non-fast-forward, a lease that no longer holds, a tag origin has), else the API error with git's
+ * reason. Through the gateway, the remote-moved answers are `'rejected'` already ({@link gatewayPushRef}),
+ * so what reaches here is a failed push (an ssh setup error keeps its own code). A runner that could not
+ * run git is thrown as it is: that is no failed push.
+ */
+function pushFailure(error: unknown, access: RemoteAccess): 'rejected' {
+  if (isRunnerUnavailable(error) || error instanceof HttpError) throw error;
   const known = accessSecrets(access);
   if (access.remote) {
-    try {
-      return await gatewayPushBranch(access.remote, mainPath, branch, oid);
-    } catch (error) {
-      if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
-      throw (
-        sshSetupError(error, 'Push failed: ') ??
-        new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`)
-      );
-    }
-  } else {
-    assertSupportedRemote(access.url);
-    try {
-      await execGitFile(
-        [
-          ...NO_SUBMODULES,
-          'push',
-          '--porcelain',
-          '--no-recurse-submodules',
-          '--no-follow-tags',
-          '--',
-          access.url,
-          `${oid}:${ref}`,
-        ],
-        { cwd: mainPath, timeout: 60_000, remote: true },
-      );
-      return 'pushed';
-    } catch (error) {
-      if (isRunnerUnavailable(error)) throw error;
-      const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
-      // Only a non-fast-forward is "the remote has commits main doesn't"; a `[remote rejected]` (a hook,
-      // a protected branch) is a failed push with git's reason.
-      if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
-      throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
-    }
+    throw (
+      sshSetupError(error, 'Push failed: ') ??
+      new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`)
+    );
   }
+  const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
+  // Only a `[rejected]` (also a stale lease, a tag origin has) or a non-fast-forward is "origin is not
+  // what this push expects"; a `[remote rejected]` (a hook, a protected branch) is a failed push with
+  // git's reason.
+  if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
+  throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
 }
 
 /**
@@ -502,7 +494,6 @@ export async function pushRef(
     if (type !== 'tag' && type !== 'commit')
       throw badRequest(`${ref} names no tag or commit in this project's repository.`);
   }
-  const known = accessSecrets(access);
   if (!access.remote) assertSupportedRemote(access.url);
   try {
     // A tag origin has, or a branch that moved or is gone: nothing to push, whatever git would do.
@@ -535,18 +526,7 @@ export async function pushRef(
     );
     return 'pushed';
   } catch (error) {
-    if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
-    if (error instanceof HttpError) throw error;
-    if (access.remote) {
-      throw (
-        sshSetupError(error, 'Push failed: ') ??
-        new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`)
-      );
-    }
-    const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
-    // `[rejected]` also covers a lease that no longer holds (stale info) and a tag that appeared since.
-    if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
-    throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
+    return pushFailure(error, access);
   }
 }
 

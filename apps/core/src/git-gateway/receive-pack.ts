@@ -85,6 +85,8 @@ function checkPlan(plan: PushPlan): void {
     throw refused(`This push may update only a branch or a tag, not ${plan.ref}.`);
   if (tag && (!ZERO.test(plan.oldOid) || ZERO.test(plan.newOid) || plan.allowDelete))
     throw refused('A tag is only ever created through Emberline, never moved or deleted.');
+  if (plan.allowDelete && !ZERO.test(plan.newOid))
+    throw refused(`This push was planned as a delete of ${plan.ref}, but it names a new commit.`);
 }
 
 /** Whether the plan is a delete the person asked for: from a real commit, to the zero id of the same length. */

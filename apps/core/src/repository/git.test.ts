@@ -712,6 +712,16 @@ describe.each(['gateway', 'direct'] as const)('pushRef (%s)', (mode) => {
     expect(git(origin, 'rev-parse', 'refs/heads/feature')).toBe(elsewhere);
   });
 
+  it('a branch deleted between the check and the delete is rejected, the same through the gateway and without it', async () => {
+    const old = git(projectPath, 'rev-parse', 'HEAD');
+    git(projectPath, 'push', '-q', origin, `${old}:refs/heads/feature`);
+    beforePush(() => git(origin, 'update-ref', '-d', 'refs/heads/feature', old));
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/heads/feature', newOid: null, expectOld: old }),
+    ).toBe('rejected');
+    expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
+  });
+
   it('a tag someone else creates between the check and the push is kept: the push only ever creates', async () => {
     git(projectPath, 'tag', '-a', 'v2.0.0', '-m', 'ours');
     const ours = git(projectPath, 'rev-parse', 'refs/tags/v2.0.0');
