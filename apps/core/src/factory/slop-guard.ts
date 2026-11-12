@@ -14,6 +14,7 @@ import {
   selectProviderModelByRank,
 } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
+import { maskNonCode } from './code-mask.js';
 import { buildRivalPrompt, collectReviewDiff, runRivalReview, supportsRivalReview } from './rival-critic.js';
 
 const IGNORED_PATH_SEGMENTS = [
@@ -407,12 +408,52 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
   };
 }
 
+const SCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+/** JSX is read in these; a `.ts` file's `<T>` is a type. */
+const JSX_EXTENSIONS = new Set(['.tsx', '.jsx', '.js']);
+/** Larger files are checked line by line only (a string that spans lines is then read as code). */
+const MAX_MASKED_FILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Each added line of a script file as code: string, template and JSX text blanked (code-mask.ts),
+ * so UI copy or a message naming `console.log` is no finding; comments still count. The whole file
+ * is read once, so a string or JSX text that spans lines is known as such; a line the file no longer
+ * has as the diff shows it is masked alone.
+ */
+function scriptCodeReader(workspacePath: string): (entry: DiffAddedLine) => Promise<string> {
+  const files = new Map<string, Promise<{ raw: string[]; code: string[] } | null>>();
+  const load = async (rel: string, jsx: boolean) => {
+    try {
+      const text = await readFile(path.join(workspacePath, rel), 'utf8');
+      if (text.length > MAX_MASKED_FILE_BYTES) return null;
+      return { raw: text.split('\n'), code: maskNonCode(text, { jsx }).split('\n') };
+    } catch {
+      return null;
+    }
+  };
+  return async (entry) => {
+    const ext = path.extname(entry.file).toLowerCase();
+    if (!SCRIPT_EXTENSIONS.has(ext)) return entry.content;
+    const jsx = JSX_EXTENSIONS.has(ext);
+    let file = files.get(entry.file);
+    if (!file) {
+      file = load(entry.file, jsx);
+      files.set(entry.file, file);
+    }
+    const loaded = await file;
+    const at = entry.line - 1;
+    if (loaded && loaded.raw[at] === entry.content) return loaded.code[at] ?? entry.content;
+    return maskNonCode(entry.content, { jsx });
+  };
+}
+
 export async function auditWorktreeSlop(params: {
   runId: string;
   workspacePath: string;
 }): Promise<SlopAuditReport> {
   const { runId, workspacePath } = params;
   const { files, addedLines } = await collectDiffAddedLines(workspacePath);
+  const codeOf = scriptCodeReader(workspacePath);
   const issues: SlopIssue[] = [];
   let issueSeq = 1;
 
@@ -464,10 +505,13 @@ export async function auditWorktreeSlop(params: {
     const isTsOrJs = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext);
     const isUiFile = ['.tsx', '.jsx', '.css', '.scss', '.html', '.vue', '.svelte'].includes(ext);
     const inTest = isTestFile(entry.file);
+    // The checks below read code and comments only: a token inside a string, a template literal or
+    // JSX text (UI copy, a message) is no finding.
+    const code = (await codeOf(entry)).trim();
 
     // 1. Type evasion (: any, as any, @ts-ignore, @ts-expect-error, eslint-disable)
     if (isTsOrJs && !inTest) {
-      if (/(?::\s*any\b|\bas\s+any\b|<any>)/.test(trimmed) && !trimmed.startsWith('//')) {
+      if (/(?::\s*any\b|\bas\s+any\b|<any>)/.test(code) && !code.startsWith('//')) {
         pushIssue({
           category: 'type_evasion',
           severity: 'error',
@@ -478,7 +522,7 @@ export async function auditWorktreeSlop(params: {
           fixHint:
             'Replace `any` with an explicit interface, generic type, `unknown` + type guard, or Zod schema.',
         });
-      } else if (/@ts-ignore\b|@ts-nocheck\b|eslint-disable/.test(trimmed)) {
+      } else if (/@ts-ignore\b|@ts-nocheck\b|eslint-disable/.test(code)) {
         pushIssue({
           category: 'type_evasion',
           severity: 'error',
@@ -493,8 +537,8 @@ export async function auditWorktreeSlop(params: {
 
     // 2. Unfinished stubs / TODO / FIXME / placeholder comments
     if (
-      /(?:\/\/|\/\*|#)\s*(?:TODO|FIXME|HACK|PLACEHOLDER|XXX)\b/i.test(trimmed) ||
-      /\/\/\s*(?:implement later|rest of (?:code|implementation)|add implementation here)/i.test(trimmed) ||
+      /(?:\/\/|\/\*|#)\s*(?:TODO|FIXME|HACK|PLACEHOLDER|XXX)\b/i.test(code) ||
+      /\/\/\s*(?:implement later|rest of (?:code|implementation)|add implementation here)/i.test(code) ||
       /throw new Error\(['"`]not implemented/i.test(trimmed)
     ) {
       pushIssue({
@@ -509,7 +553,7 @@ export async function auditWorktreeSlop(params: {
     }
 
     // 3. Skipped tests (.skip, xit, xdescribe, test.todo)
-    if (inTest && /\b(?:it|test|describe)\.(?:skip|todo)\s*\(|\b(?:xit|xtest|xdescribe)\s*\(/.test(trimmed)) {
+    if (inTest && /\b(?:it|test|describe)\.(?:skip|todo)\s*\(|\b(?:xit|xtest|xdescribe)\s*\(/.test(code)) {
       pushIssue({
         category: 'skipped_test',
         severity: 'error',
@@ -523,7 +567,7 @@ export async function auditWorktreeSlop(params: {
 
     // 4. Leftover debug statements (console.log / debugger) in non-test code
     if (isTsOrJs && !inTest && !entry.file.includes('cli') && !entry.file.includes(' bin/')) {
-      if (/\bdebugger\b/.test(trimmed) && !trimmed.startsWith('//')) {
+      if (/\bdebugger\b/.test(code) && !code.startsWith('//')) {
         pushIssue({
           category: 'debug_leftover',
           severity: 'error',
@@ -533,7 +577,7 @@ export async function auditWorktreeSlop(params: {
           message: 'Leftover `debugger` statement in production code.',
           fixHint: 'Remove the `debugger` statement.',
         });
-      } else if (/\bconsole\.log\s*\(/.test(trimmed) && !trimmed.startsWith('//')) {
+      } else if (/\bconsole\.log\s*\(/.test(code) && !code.startsWith('//')) {
         pushIssue({
           category: 'debug_leftover',
           severity: 'warning',
