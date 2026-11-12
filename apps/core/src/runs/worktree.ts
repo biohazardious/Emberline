@@ -5,6 +5,7 @@ import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
+import { type HealFailure, type HealGate, healConflicts } from '../factory/conflict-heal.js';
 import { mainWorkspaceBranch, type SyncWorktreeResult } from '../factory/merge.js';
 import { syncWorktreeToMainWorkspace } from '../factory/service.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -171,43 +172,86 @@ export type RunMerge = Pick<
   | 'commitUnverified'
   | 'alreadyMerged'
   | 'mainHead'
->;
+  | 'resolution'
+  | 'autoResolved'
+> & {
+  /** A conflict heal that was tried and did not land (for the agent's prompt: what failed). */
+  healFailure?: HealFailure;
+};
+
+/** Layer 2 of the conflict ladder (factory/conflict-heal.ts), when the factory setting is on. */
+export interface MergeHeal {
+  /** The worktree gate (build/lint/test) on the healed tree. */
+  verify: () => Promise<HealGate>;
+  note: (type: 'conflict_auto_resolved' | 'conflict_heal_failed', payload: Record<string, unknown>) => void;
+}
 
 /**
  * Merges the run's branch into the main workspace (through ops). `stale` is checked once the run's
  * output commit is built and its tip read, right before that tip (not a later one) is merged: an
  * agent that worked again since leaves it, and its branch, worktree and index as they were, and
- * the result is null.
+ * the result is null. With `heal`, a conflicting merge first tries the deterministic heal of
+ * additive conflicts in the run's worktree and merges again once it landed.
  */
 export async function mergeRunBranch(params: {
   run: Pick<Run, 'id' | 'worktreePath' | 'branch'>;
   mainWorkspacePath: string;
   ticketKey: string | null;
   stale: () => boolean;
+  heal?: MergeHeal;
 }): Promise<RunMerge | null> {
-  const { run, stale } = params;
-  return syncWorktreeToMainWorkspace({
+  const { run, stale, heal, mainWorkspacePath, ticketKey } = params;
+  const mergeOnce = () =>
+    syncWorktreeToMainWorkspace({
+      worktreePath: run.worktreePath,
+      mainWorkspacePath,
+      ticketKey,
+      runId: run.id,
+      branch: run.branch,
+      beforeMerge: () => {
+        if (stale()) throw new TurnMoved();
+      },
+    }).catch((error: unknown): RunMerge | null => {
+      if (error instanceof TurnMoved) return null;
+      return {
+        ok: false,
+        summary: (error as Error).message,
+        conflicts: [],
+        commitSha: null,
+        commitOid: null,
+        commitUnverified: false,
+        alreadyMerged: false,
+        mainHead: null,
+        resolution: null,
+        autoResolved: [],
+      };
+    });
+  const first = await mergeOnce();
+  if (!heal || !first || first.ok || first.conflicts.length === 0) return first;
+  const healed = await healConflicts({
     worktreePath: run.worktreePath,
-    mainWorkspacePath: params.mainWorkspacePath,
-    ticketKey: params.ticketKey,
-    runId: run.id,
-    branch: run.branch,
-    beforeMerge: () => {
-      if (stale()) throw new TurnMoved();
-    },
-  }).catch((error: unknown): RunMerge | null => {
-    if (error instanceof TurnMoved) return null;
-    return {
-      ok: false,
-      summary: (error as Error).message,
-      conflicts: [],
-      commitSha: null,
-      commitOid: null,
-      commitUnverified: false,
-      alreadyMerged: false,
-      mainHead: null,
-    };
+    mainWorkspacePath,
+    mainBranch: (await mainWorkspaceBranch(mainWorkspacePath)) ?? 'main',
+    label: ticketKey ?? run.id.slice(0, 8),
+    mainTip: first.mainHead,
+    stale,
+    verify: heal.verify,
   });
+  if (!healed.healed) {
+    if (healed.reason === 'turn_moved') return null;
+    heal.note('conflict_heal_failed', {
+      reason: healed.reason,
+      files: healed.conflicts.length > 0 ? healed.conflicts : first.conflicts,
+      unresolved: healed.unresolved,
+      message: healed.message,
+      ...(healed.gateFailure !== undefined ? { gateFailure: healed.gateFailure } : {}),
+    });
+    return { ...first, healFailure: healed };
+  }
+  heal.note('conflict_auto_resolved', { files: healed.files, commitSha: healed.commitSha });
+  const retry = await mergeOnce();
+  if (!retry?.ok) return retry;
+  return { ...retry, resolution: 'auto_resolved', autoResolved: healed.files };
 }
 
 /**

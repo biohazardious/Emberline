@@ -68,7 +68,7 @@ async function stageRunOutput(worktreePath: string, env?: Record<string, string>
  * may not: its own processes' command lines, with capability URLs). `$1` is the file, `$2` its name
  * in the refusal.
  */
-const NOT_REGULAR =
+export const NOT_REGULAR =
   'printf "%s is not a regular file (a link, a directory, a fifo): remove it\\n" "$2" >&2; exit 3';
 
 /**
@@ -88,7 +88,7 @@ async function gitDirFile(worktreePath: string, name: string): Promise<string> {
  * exist; one that is no regular file is refused (any other failure is thrown too). dd opens it without
  * following a link, so one that turns into a link after the check is not read either.
  */
-async function readGitDirFile(worktreePath: string, name: string): Promise<string | null> {
+export async function readGitDirFile(worktreePath: string, name: string): Promise<string | null> {
   const file = await gitDirFile(worktreePath, name);
   // A leading `.` tells an empty file from a missing one. The system sh and dd (systemCommand).
   const script = [

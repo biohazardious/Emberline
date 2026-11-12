@@ -91,10 +91,11 @@ import {
   type GatePass,
   reviewGate,
   slopGate,
+  verifyBuild,
   worktreeCommandsGate,
   worktreeYmlGate,
 } from '../runs/gates.js';
-import { mergeRunBranch, mergeTarget } from '../runs/worktree.js';
+import { type MergeHeal, mergeRunBranch, mergeTarget } from '../runs/worktree.js';
 import { providerAdapter } from '../runs/providers.js';
 import { parseRouteTag } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
@@ -1644,7 +1645,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       run.worktreePath &&
       run.worktreePath !== projectRow.path
     ) {
-      const merged = await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null, stale);
+      // Layer 2 (M5): additive conflicts are healed in the run's worktree and checked again first.
+      const heal: MergeHeal | undefined = fSettings.autoResolveAdditiveConflicts
+        ? {
+            verify: () => verifyBuild(gatePass),
+            note: (type, payload) => this.runs.note(run.id, type, payload),
+          }
+        : undefined;
+      const merged = await this.mergeRunIntoMain(run, projectRow.path, ticketRow?.key ?? null, stale, heal);
       // The agent worked again before the merge began: nothing was merged, its newer turn's pass decides.
       if (!merged) return;
       // It worked again during the merge: what was merged is the commit these checks passed (the merge
@@ -1763,6 +1771,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     mainWorkspacePath: string,
     ticketKey: string | null,
     stale: () => boolean,
+    heal?: MergeHeal,
   ): Promise<{
     ok: boolean;
     conflicts: string[];
@@ -1770,7 +1779,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     autoFix: boolean;
     mainHead: string | null;
   } | null> {
-    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale });
+    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale, heal });
     // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
     if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
