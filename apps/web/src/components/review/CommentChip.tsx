@@ -6,6 +6,8 @@ interface Props {
   comment: ReviewComment;
   focused?: boolean;
   busy?: boolean;
+  onFocus?: (id: string) => void;
+  onToggleBlocking?: (id: string, nextPriority: 'blocking' | 'important') => void;
   onDelete: (id: string) => void;
   onResolve: (id: string) => void;
   onVerify: (id: string) => void;
@@ -16,18 +18,34 @@ export function commentChipId(id: string): string {
   return `review-comment-${id}`;
 }
 
-export function CommentChip({ comment, focused, busy, onDelete, onResolve, onVerify, onNotDone }: Props) {
+export function CommentChip({
+  comment,
+  focused,
+  busy,
+  onFocus,
+  onToggleBlocking,
+  onDelete,
+  onResolve,
+  onVerify,
+  onNotDone,
+}: Props) {
   const badges = commentBadges(comment);
   const actions = commentActions(comment);
   const shortCarried = comment.carriedTo ? comment.carriedTo.slice(0, 8) : null;
+  const canToggleBlocking = Boolean(onToggleBlocking && comment.status !== 'resolved');
+  const isBlocking = comment.priority === 'blocking';
+
   return (
     <div
       id={commentChipId(comment.id)}
-      tabIndex={-1}
+      tabIndex={0}
+      data-focused={focused ? 'true' : undefined}
+      onFocus={() => onFocus?.(comment.id)}
+      onClick={() => onFocus?.(comment.id)}
       className={`comment-chip comment-chip-${comment.priority}${focused ? ' comment-chip-focused' : ''}${comment.status === 'sent' ? ' diff-annotation-sent' : ''}`}
     >
       <div className="comment-chip-head">
-        <span className="mono comment-chip-loc">{commentLocation(comment)}</span>
+        <span className="mono comment-chip-loc review-tabular">{commentLocation(comment)}</span>
         <span className="badge badge-soft">{badges.intent}</span>
         <span className={`badge comment-badge-${comment.priority}`}>{badges.priority}</span>
         {comment.status === 'sent' && (
@@ -52,8 +70,20 @@ export function CommentChip({ comment, focused, busy, onDelete, onResolve, onVer
           </Link>
         </p>
       )}
-      {actions.length > 0 && (
+      {(actions.length > 0 || canToggleBlocking) && (
         <div className="comment-chip-actions">
+          {canToggleBlocking && (
+            <button
+              type="button"
+              className={`btn btn-sm${isBlocking ? ' comment-btn-blocking-active' : ' btn-ghost'}`}
+              aria-pressed={isBlocking}
+              disabled={busy}
+              title="Toggle blocking priority (b)"
+              onClick={() => onToggleBlocking?.(comment.id, isBlocking ? 'important' : 'blocking')}
+            >
+              {isBlocking ? 'Unblock (b)' : 'Make blocking (b)'}
+            </button>
+          )}
           {actions.includes('verify') && (
             <button
               type="button"

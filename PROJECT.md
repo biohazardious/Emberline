@@ -158,7 +158,11 @@ Tests and `test-*.ts` helpers are exempt, for example core's agent harness start
   are served by `quota_windows_open_idx` (migration 0029). The scheduler keeps no queue, slot or pause state in memory: after every
   pass it re-arms one timer for the next stored resume or retry time (`scheduler/next-wake.ts`), and on each ptyd connect
   `Scheduler.recover()` first ends runs whose sessions ptyd no longer reports (freeing their slots), then resumes due pauses.
-- **Review:** per-run diffs, line comments and review rounds (`api/review.ts`).
+- **Review:** per-run diffs, line comments and review rounds (`api/review.ts`). `ReviewPage.tsx` and `ReviewView.tsx`
+  render an inline merge-gate blocking banner with comment anchor links (`reviewGate.ts`, `components/review/MergeGateBanner.tsx`),
+  a virtualised hierarchical file tree with rolled-up comment/blocking tabular counts (`reviewTree.ts`, `components/review/ReviewFileTree.tsx`),
+  keyboard navigation (`j`/`k` file, `n`/`p` comment, `c` add comment, `b` toggle blocking, `?` shortcut sheet via `reviewShortcuts.ts`),
+  and lazy LRU-bounded Monaco diff models (`components/review/monacoModelPool.ts`, `review-keyboard.css`).
 - **Worktree config:** `.emberline/worktree.yml` with `setup`, `services` and `checks` (`api/worktree-config.ts`).
   Before `setup` runs (a run's worktree and the build gate), core provisions the package manager package.json's
   `packageManager` pins when a setup command names it and the runner's PATH lacks it: today pnpm, installed at exactly that

@@ -1,5 +1,6 @@
-import type { Run, RunDetail } from '@emberline/protocol';
-import { GitBranch } from 'lucide-react';
+import type { Run, RunDetail, RunDiffSummary, RunReviewState } from '@emberline/protocol';
+import { useQueryClient } from '@tanstack/react-query';
+import { GitBranch, Keyboard } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -10,16 +11,26 @@ import { RunStatePill } from '../components/RunStatePill';
 export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (runId: string) => void }) {
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
+  const queryClient = useQueryClient();
 
   const loadRun = useCallback(async () => {
     setError(null);
+    void queryClient.prefetchQuery({
+      queryKey: ['review', id],
+      queryFn: () => api<RunReviewState>(`/api/runs/${id}/review`),
+    });
+    void queryClient.prefetchQuery({
+      queryKey: ['diff-summary', id, 'branch'],
+      queryFn: () => api<RunDiffSummary>(`/api/runs/${id}/diff?scope=branch`),
+    });
     try {
       const r = await api<RunDetail>(`/api/runs/${id}`);
       setRun(r);
     } catch (e) {
       setError(errorMessage(e));
     }
-  }, [id]);
+  }, [id, queryClient]);
 
   useEffect(() => {
     void loadRun();
@@ -74,6 +85,15 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
         </div>
 
         <div className="review-toolbar-group">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost review-shortcut-btn"
+            onClick={() => setShortcutSheetOpen((open) => !open)}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+          >
+            <Keyboard className="icon" aria-hidden /> <kbd className="kbd">?</kbd> Shortcuts
+          </button>
           {run.terminalId && (
             <Link href={`/terminals/${run.terminalId}`} className="btn btn-sm btn-ghost">
               Full Terminal ↗
@@ -90,7 +110,12 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
       <div className="review-page-body">
         <div className="review-page-main">
           <ErrorBoundary resetKey={run.id}>
-            <ReviewView run={run} onRunUpdated={setRun} />
+            <ReviewView
+              run={run}
+              onRunUpdated={setRun}
+              shortcutSheetOpen={shortcutSheetOpen}
+              onShortcutSheetOpenChange={setShortcutSheetOpen}
+            />
           </ErrorBoundary>
         </div>
       </div>
