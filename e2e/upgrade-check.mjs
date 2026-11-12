@@ -342,7 +342,7 @@ async function api(base, expect) {
   if (wantMissing) {
     const refused = await call('POST', '/api/terminals', { kind: 'shell' });
     assert.equal(refused.status, 503);
-    assert.equal(refused.json.code, 'ops_missing');
+    assert.equal(refused.json.error, 'ops_missing', 'the API answers with the error code ops_missing');
   }
   const projects = await call('GET', '/api/projects');
   assert.ok(
