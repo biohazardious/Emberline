@@ -78,24 +78,33 @@ await scenario('wizard: import a project from a git URL', async (page) => {
   await page.getByRole('button', { name: /New/ }).first().click();
   const wizard = page.getByRole('dialog');
   const footer = wizard.locator('footer');
+  const next = footer.getByRole('button', { name: 'Next', exact: true });
+  /** Waits until the wizard shows `name`'s step (its heading); `ms` for a step that waits on core. */
+  const onStep = (name, ms) =>
+    wizard.getByRole('heading', { level: 3, name, exact: true }).waitFor(ms ? { timeout: ms } : undefined);
+
+  await onStep('Start');
   await wizard.getByLabel('Import a Git URL').check();
-  await footer.getByRole('button', { name: 'Next' }).click();
+  await next.click();
+  await onStep('Repository');
   await wizard.getByLabel('Git URL').fill(`http://forge:3000/e2e/${REPO}.git`);
-  await footer.getByRole('button', { name: 'Clone' }).click();
-  const finish = footer.getByRole('button', { name: /^(Finish import|Create project|Create and start)$/ });
-  for (let step = 0; step < 8 && !(await finish.isVisible()); step++) {
-    const createOnly = wizard.getByLabel(/Create only/);
-    if (await createOnly.isVisible()) await createOnly.check();
-    await footer.getByRole('button', { name: 'Next' }).click();
-    await page.waitForTimeout(500);
-  }
-  await finish.click();
+  await footer.getByRole('button', { name: 'Clone', exact: true }).click();
+  // The Clone step waits for core's clone and inspection and moves on to Stack by itself (it may be
+  // past Clone before a check could see it, so only its end is awaited).
+  await onStep('Stack', 90_000);
+  await next.click();
+  await onStep('Factory');
+  // An import starts nothing unless asked to.
+  assert.equal(await wizard.getByLabel('Import only').isChecked(), true, 'an import defaults to Import only');
+  await next.click();
+  await onStep('Summary');
+  await footer.getByRole('button', { name: 'Finish import', exact: true }).click();
   await until(async () => {
     const list = (await api('GET', '/api/projects')).json;
     project = (Array.isArray(list) ? list : list.projects).find((p) => p.name.toLowerCase().includes(REPO));
     return project;
   }, 'the imported project never appeared');
-  assert.equal(project.importSource ?? 'url', 'url');
+  assert.equal(project.importSource, 'url', 'the project records that it was imported from a git URL');
   assert.match(
     (await mainFile(project.id, 'README.md')) ?? '',
     /ui app/,
