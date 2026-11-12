@@ -27,7 +27,7 @@ import {
   setWorkingBranch,
 } from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
-import { fetchOrigin, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
+import { fetchOrigin, HealJobs, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
 
 /** What the Git page needs from the rest of core; later actions add to this. */
 export interface GitPageDeps {
@@ -46,6 +46,9 @@ export interface GitPageDeps {
  * RepositoryService's remote-ops order.
  */
 export class GitPageService {
+  /** Pull heals that run in the background, one per project. */
+  private readonly heals = new HealJobs();
+
   constructor(
     private readonly db: Db,
     readonly repository: RepositoryService,
@@ -111,7 +114,12 @@ export class GitPageService {
     return {
       db: this.db,
       repository: this.repository,
-      dockerEnvForMain: (projectId) => this.deps.runs.dockerEnvForMain(projectId),
+      docker: {
+        envFor: (composeProject) => this.deps.runs.dockerEnvForJob(composeProject),
+        teardown: (projectId, worktreePath, composeProject) =>
+          this.deps.runs.teardownJobWorktree(projectId, worktreePath, composeProject),
+      },
+      heals: this.heals,
       workspacesDir: this.deps.workspacesDir,
       ...(this.deps.buildWorkspaceDemo ? { buildWorkspaceDemo: this.deps.buildWorkspaceDemo } : {}),
     };
@@ -121,6 +129,11 @@ export class GitPageService {
   pull(projectId: string, opts: { auto: boolean }): Promise<GitSync> {
     this.project(projectId);
     return pull(this.syncDeps(), projectId, opts);
+  }
+
+  /** Resolves once no pull's heal runs in the background. */
+  idle(): Promise<void> {
+    return this.heals.idle();
   }
 
   /** Reads origin only. */

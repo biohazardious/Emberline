@@ -2703,16 +2703,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   private async teardownWorktree(row: RunRow, project: { id: string; path: string }): Promise<void> {
     if (!row.worktreePath || row.worktreePath === project.path || !existsSync(row.worktreePath)) return;
-    const teardown = loadApprovedWorktreeConfig(this.db, project.id)?.config.teardown ?? [];
-    for (const command of teardown) {
-      const outcome = await runWorktreeCommand(
-        command,
-        row.worktreePath,
-        TEARDOWN_TIMEOUT_MS,
-        undefined,
-        await this.dockerEnvFor(row),
-      );
-      if (!outcome.ok) {
+    await this.runTeardownCommands(
+      project.id,
+      row.worktreePath,
+      await this.dockerEnvFor(row),
+      (command, outcome) => {
         this.note(row.id, 'worktree_teardown_failed', {
           command,
           exitCode: outcome.exitCode,
@@ -2728,8 +2723,52 @@ export class RunService extends EventEmitter<RunServiceEvents> {
           },
           'worktree.yml teardown command failed; the worktree is pruned anyway',
         );
-      }
+      },
+    );
+  }
+
+  /** The approved worktree.yml's `teardown` commands in `worktreePath`, 2 min each; a failure goes to `failed`. */
+  private async runTeardownCommands(
+    projectId: string,
+    worktreePath: string,
+    env: Record<string, string>,
+    failed: (command: string, outcome: { exitCode: number | null; tail: string }) => void,
+  ): Promise<void> {
+    const teardown = loadApprovedWorktreeConfig(this.db, projectId)?.config.teardown ?? [];
+    for (const command of teardown) {
+      const outcome = await runWorktreeCommand(command, worktreePath, TEARDOWN_TIMEOUT_MS, undefined, env);
+      if (!outcome.ok) failed(command, outcome);
     }
+  }
+
+  /**
+   * The Docker variables for a worktree core made for a job of its own (a pull's heal), with that
+   * job's compose project: apart from every run's and the main workspace's, so the job's setup never
+   * takes over what they run.
+   */
+  async dockerEnvForJob(composeProject: string): Promise<Record<string, string>> {
+    await this.docker.ready();
+    return this.docker.runEnv(composeProject);
+  }
+
+  /**
+   * Before core removes such a worktree: the approved worktree.yml's teardown commands in it, then
+   * `down` of the job's compose project, as a run's prune does. Best effort: a failure is logged.
+   */
+  async teardownJobWorktree(projectId: string, worktreePath: string, composeProject: string): Promise<void> {
+    if (existsSync(worktreePath)) {
+      await this.runTeardownCommands(
+        projectId,
+        worktreePath,
+        await this.dockerEnvForJob(composeProject),
+        (command, outcome) =>
+          this.log?.warn(
+            { projectId, command, exitCode: outcome.exitCode, tail: outcome.tail.slice(-500) },
+            "worktree.yml teardown command failed in core's own worktree; it is removed anyway",
+          ),
+      );
+    }
+    await this.downComposeProjects([composeProject], null);
   }
 
   /**

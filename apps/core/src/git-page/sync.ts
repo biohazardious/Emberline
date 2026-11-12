@@ -10,7 +10,7 @@
  * remote-ops order; every change to the main workspace or its refs runs under the lock.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type BranchRemoteState,
@@ -58,7 +58,11 @@ export const AUTO_PULL_INTERVAL_MS = 120_000;
 /** The commits kept as "from origin" for the history, newest first. */
 const PULLED_KEPT = 500;
 /** A pull heals at most twice (origin's working branch, then main into it), then ends. */
-const MAX_ROUNDS = 3;
+const MAX_HEALS = 2;
+/** Core's own worktree for a pull's heal: `<workspacesDir>/.worktrees/<slug>/pull-<id8>`. */
+const HEAL_DIR = /^pull-[0-9a-f]{8}$/;
+/** The heal's compose project, apart from every run's and the main workspace's. */
+const healComposeProject = (dir: string) => `emberline-${path.basename(dir)}`;
 const BACKUP_PREFIX = 'refs/emberline/backup/';
 const ORIGIN_CHANGED =
   "This project's origin changed while Emberline read it, so nothing was pulled. Pull again.";
@@ -67,8 +71,13 @@ const ORIGIN_CHANGED =
 export interface SyncDeps {
   db: Db;
   repository: Pick<RepositoryService, 'remoteAction' | 'readOrigin' | 'originStill'>;
-  /** The main workspace's Docker variables, for the checks on a healed merge. */
-  dockerEnvForMain(projectId: string): Promise<Record<string, string>>;
+  /** Docker for the heal's own worktree, under a compose project of its own (RunService's job helpers). */
+  docker: {
+    envFor(composeProject: string): Promise<Record<string, string>>;
+    teardown(projectId: string, worktreePath: string, composeProject: string): Promise<void>;
+  };
+  /** The heals running in the background (one per project). */
+  heals: HealJobs;
   /** Where core keeps worktrees (`<workspacesDir>/.worktrees/<slug>/…`); the heal's own goes there. */
   workspacesDir: string;
   /** Runs the checks on a healed merge (tests inject it); default: buildWorkspaceDemo. */
@@ -117,6 +126,10 @@ function record(
   const sync = toSync(outcome);
   try {
     const settings = readRepositorySettings(db, projectId);
+    // A failure (a read of origin, the runner) never hides a stop that waits for the person: its
+    // files and Resolve with a ticket stay. The failure is answered, and the read keeps its own record.
+    const standing = settings.sync?.state === 'conflict' || settings.sync?.state === 'rewritten';
+    const keepStop = outcome.state === 'error' && settings.syncStop !== null && standing;
     const pulledOids = extra.pulled?.length
       ? [...new Set([...extra.pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT)
       : settings.pulledOids;
@@ -126,7 +139,7 @@ function record(
         : outcome.state === 'pulled' || outcome.state === 'up_to_date'
           ? null
           : settings.syncStop;
-    writeRepositorySettings(db, projectId, { sync, pulledOids, syncStop });
+    writeRepositorySettings(db, projectId, keepStop ? { pulledOids } : { sync, pulledOids, syncStop });
   } catch {
     // the project was deleted meanwhile
   }
@@ -175,6 +188,9 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
   const project = projectRow(deps.db, projectId);
   const finish = (outcome: Outcome) =>
     mode === 'read' ? toSync(outcome) : record(deps.db, projectId, outcome);
+  // A heal of this project's pull is still checking its merge: that pull is not started twice.
+  const healing = mode === 'read' ? null : deps.heals.running(projectId);
+  if (healing) return { ...(readRepositorySettings(deps.db, projectId).sync ?? IDLE), message: healing };
   try {
     // No origin: nothing to read, and no network call.
     if (!(await originUrls(project.path)).fetch)
@@ -183,7 +199,14 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
         branch: null,
         message: 'This project has no origin. Connect a repository in Project settings → Repository first.',
       });
-    return await deps.repository.remoteAction(projectId, (ws) => pullIn(deps, projectId, ws, mode));
+    const step = await deps.repository.remoteAction(projectId, (ws) => pullIn(deps, projectId, ws, mode));
+    if ('sync' in step) return step.sync;
+    // The heal and its checks (minutes) run in the background, with origin's queue free: Refresh,
+    // pushes and the other projects' pulls go on meanwhile. Its outcome is recorded when it ends.
+    const message = `Emberline is trying to resolve the conflicts of merging ${step.heal.label} into ${step.ctx.working} (only purely additive ones) and checking the result; the pull finishes when that does.`;
+    if (!deps.heals.start(projectId, message, () => healInBackground(step.ctx, step.heal)))
+      return { ...(readRepositorySettings(deps.db, projectId).sync ?? IDLE), message };
+    return record(deps.db, projectId, { state: 'idle', branch: step.ctx.working, message });
   } catch (error) {
     // A runner that did not answer decided nothing: the next tick or Pull tries again.
     if (isRunnerUnavailable(error))
@@ -193,11 +216,19 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
   }
 }
 
-async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mode): Promise<SyncRecord> {
+/** In origin's queue: the read of origin, and the pull as far as it goes without a heal. */
+async function pullIn(
+  deps: SyncDeps,
+  projectId: string,
+  ws: Snapshot,
+  mode: Mode,
+): Promise<{ sync: SyncRecord } | { ctx: PullContext; heal: HealRequest }> {
   const { db } = deps;
   const read = await deps.repository.readOrigin(projectId, ws);
-  const current = () => readRepositorySettings(db, projectId).sync ?? IDLE;
-  const stopped = (outcome: Outcome) => (mode === 'read' ? toSync(outcome) : record(db, projectId, outcome));
+  const current = () => ({ sync: readRepositorySettings(db, projectId).sync ?? IDLE });
+  const stopped = (outcome: Outcome) => ({
+    sync: mode === 'read' ? toSync(outcome) : record(db, projectId, outcome),
+  });
   if (read.stale) return stopped({ state: 'error', branch: null, message: ORIGIN_CHANGED });
   if (read.error)
     return stopped({ state: 'error', branch: null, message: `Couldn't read origin: ${read.error}` });
@@ -221,27 +252,77 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
     moves: [],
     made: new Set(),
   };
-  let healed: { before: string; commit: string } | null = null;
+  const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, null));
+  if ('heal' in step) return { ctx, heal: step.heal };
+  return { sync: await finishPull(ctx, step.outcome) };
+}
+
+/** Records how the pull ended, with the commits it brought in. */
+async function finishPull(ctx: PullContext, outcome: Outcome): Promise<SyncRecord> {
+  return record(ctx.deps.db, ctx.projectId, outcome, { pulled: await pulledCommits(ctx), tips: ctx.remote });
+}
+
+/**
+ * The rest of a pull whose merge conflicted, with no lock and outside origin's queue: the heal, then
+ * (under the main-workspace lock) its result applied only while the working branch is where the heal
+ * began, and the pull goes on from there. Every failure ends as a recorded outcome.
+ */
+async function healInBackground(ctx: PullContext, first: HealRequest): Promise<void> {
   let outcome: Outcome = {
     state: 'error',
     branch: ctx.working,
     message: 'The pull did not finish; pull again.',
   };
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const applied = healed;
-    const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, applied));
-    if ('outcome' in step) {
-      outcome = step.outcome;
-      break;
+  try {
+    let req: HealRequest | null = first;
+    for (let heals = 0; req && heals < MAX_HEALS; heals++) {
+      const result = await healPull(ctx, req);
+      req = null;
+      if ('outcome' in result) {
+        outcome = result.outcome;
+        break;
+      }
+      const step = await withMainWorkspaceLock(ctx.ws.path, () => advance(ctx, result));
+      if ('outcome' in step) outcome = step.outcome;
+      else req = step.heal;
     }
-    const result = await healPull(ctx, step.heal);
-    if ('outcome' in result) {
-      outcome = result.outcome;
-      break;
-    }
-    healed = result;
+  } catch (error) {
+    outcome = {
+      state: 'error',
+      branch: ctx.working,
+      message: isRunnerUnavailable(error)
+        ? RUNNER_WAITING_MESSAGE
+        : error instanceof HttpError
+          ? error.message
+          : gitMessage(error),
+    };
   }
-  return record(db, projectId, outcome, { pulled: await pulledCommits(ctx), tips: ctx.remote });
+  await finishPull(ctx, outcome).catch(() => record(ctx.deps.db, ctx.projectId, outcome));
+}
+
+/** A pull's heals running in the background, at most one per project, so stop() can wait for them. */
+export class HealJobs {
+  private readonly jobs = new Map<string, { message: string; done: Promise<void> }>();
+
+  /** What the project's heal is doing, or null when none runs. */
+  running(projectId: string): string | null {
+    return this.jobs.get(projectId)?.message ?? null;
+  }
+
+  /** Starts `fn` unless a heal of this project runs already (false then). */
+  start(projectId: string, message: string, fn: () => Promise<void>): boolean {
+    if (this.jobs.has(projectId)) return false;
+    const done = fn()
+      .catch(() => undefined)
+      .finally(() => this.jobs.delete(projectId));
+    this.jobs.set(projectId, { message, done });
+    return true;
+  }
+
+  /** Resolves once no heal runs. */
+  async idle(): Promise<void> {
+    while (this.jobs.size > 0) await Promise.all([...this.jobs.values()].map((j) => j.done));
+  }
 }
 
 /**
@@ -511,8 +592,11 @@ async function healPull(
 ): Promise<{ outcome: Outcome } | { before: string; commit: string }> {
   const { deps, ws, working, projectId } = ctx;
   const project = projectRow(deps.db, projectId);
-  const dir = path.join(deps.workspacesDir, '.worktrees', project.slug, `pull-${randomUUID().slice(0, 8)}`);
-  await mkdir(path.dirname(dir), { recursive: true });
+  const parent = path.join(deps.workspacesDir, '.worktrees', project.slug);
+  await sweepHealWorktrees(deps, projectId, ws.path, parent);
+  const dir = path.join(parent, `pull-${randomUUID().slice(0, 8)}`);
+  const composeProject = healComposeProject(dir);
+  await mkdir(parent, { recursive: true });
   await withMainWorkspaceLock(ws.path, () =>
     execGitFile(['worktree', 'add', '--detach', dir, req.before], { cwd: ws.path }),
   );
@@ -533,7 +617,7 @@ async function healPull(
           workspacePath: dir,
           setupDone: false,
           settings: effectiveFactorySettings(deps.db, projectId),
-          dockerEnv: () => deps.dockerEnvForMain(projectId),
+          dockerEnv: () => deps.docker.envFor(composeProject),
           ...(deps.buildWorkspaceDemo ? { build: deps.buildWorkspaceDemo } : {}),
         }),
       identity: ctx.identity,
@@ -544,8 +628,24 @@ async function healPull(
     }
     return { before: req.before, commit: healed.commitOid };
   } finally {
-    await withMainWorkspaceLock(ws.path, () => pruneWorktree(ws.path, dir)).catch(() => undefined);
+    await removeHealWorktree(deps, projectId, ws.path, dir);
   }
+}
+
+/** The heal's worktree goes as a run's does: worktree.yml teardown and compose down, then the removal. */
+async function removeHealWorktree(deps: SyncDeps, projectId: string, mainPath: string, dir: string) {
+  await deps.docker.teardown(projectId, dir, healComposeProject(dir)).catch(() => undefined);
+  await withMainWorkspaceLock(mainPath, () => pruneWorktree(mainPath, dir)).catch(() => undefined);
+}
+
+/**
+ * Heal worktrees a crash left behind (only one heal of a project runs at a time, so any found is
+ * left over): removed with what they started, before the next heal.
+ */
+async function sweepHealWorktrees(deps: SyncDeps, projectId: string, mainPath: string, parent: string) {
+  const names = await readdir(parent).catch(() => [] as string[]);
+  for (const name of names.filter((n) => HEAL_DIR.test(n)))
+    await removeHealWorktree(deps, projectId, mainPath, path.join(parent, name));
 }
 
 /** The commits this pull brought in (not the merges Emberline made), newest first. */
@@ -614,6 +714,11 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
   if (!branch || branch.startsWith('-') || !isPlainRefName(branch))
     throw badRequest('Name the branch to match with origin.');
   const { db } = deps;
+  if (deps.heals.running(projectId))
+    throw conflict(
+      'A pull is checking a merge right now; match origin once it has finished.',
+      'pull_running',
+    );
   const done = await deps.repository.remoteAction(projectId, async (ws) => {
     const read = await deps.repository.readOrigin(projectId, ws);
     if (read.stale) throw conflict(ORIGIN_CHANGED, 'origin_changed');
@@ -732,6 +837,8 @@ export function pullTicketText(
 /** What GitSync needs: one pull per project. */
 export interface GitSyncTarget {
   pull(projectId: string, opts: { auto: boolean }): Promise<SyncRecord>;
+  /** Resolves once no pull's heal runs in the background. */
+  idle(): Promise<void>;
 }
 
 /**
@@ -766,6 +873,7 @@ export class GitSync {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.running;
+    await this.git.idle();
   }
 
   /** One pass over the projects; while a pass runs, this is that pass. */

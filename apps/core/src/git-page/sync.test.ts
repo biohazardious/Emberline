@@ -23,6 +23,7 @@ let t: TestApp;
 let cookie: string;
 let projectId: string;
 let projectPath: string;
+let projectSlug: string;
 let forge: FakeForge;
 let bare: string;
 let clones = 0;
@@ -74,6 +75,35 @@ const pullNow = async () => {
   expect(res.statusCode).toBe(200);
   return res.json();
 };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const waitFor = async (ok: () => boolean) => {
+  for (let i = 0; i < 200 && !ok(); i++) await sleep(25);
+  expect(ok()).toBe(true);
+};
+const storedSync = () => readRepositorySettings(t.db, projectId).sync;
+/** A merge whose conflicts go to the heal ends in the background: its stored outcome, once there. */
+const settled = async () => {
+  await waitFor(() => storedSync()?.state !== 'idle');
+  return storedSync()!;
+};
+const okBuild = (): BuildDemoResponse => ({
+  ok: true,
+  targetId: 'pull',
+  demoEntryRelPath: null,
+  demoUrl: null,
+  output: '',
+});
+/** Both sides append to CHANGELOG.md (an additive conflict) in a project with a build to check. */
+const additiveConflict = () => {
+  commit(projectPath, 'package.json', '{"scripts":{"build":"true"}}\n', 'chore: build script');
+  commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: changelog');
+  git(projectPath, 'push', '-q', bare, 'main');
+  const elsewhere = cloneOf(bare);
+  commit(elsewhere, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n- theirs\n', 'docs: theirs');
+  git(elsewhere, 'push', '-q', 'origin', 'main');
+  const mine = commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n- mine\n', 'docs: mine');
+  return { elsewhere, mine };
+};
 /** A GitPageService on the server's own repository service (same remote-ops order and lock). */
 const service = (extra: Partial<GitPageDeps> = {}) =>
   new GitPageService(t.db, t.repository, {
@@ -117,6 +147,7 @@ beforeEach(async () => {
   const made = (await send('POST', '/api/projects', { name: 'Sync App', initGit: true })).json();
   projectId = made.project.id;
   projectPath = made.project.path;
+  projectSlug = made.project.slug;
   commit(projectPath, 'a.txt');
   forge = await startFakeForge({ token: 'sy-token', username: 'alice' });
   seedForgeAccount(t.db, { provider: 'gitea', serverUrl: forge.url, token: 'sy-token', username: 'alice' });
@@ -195,7 +226,8 @@ describe('pull from origin', () => {
     commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
     git(elsewhere, 'push', '-q', 'origin', 'main');
     const before = commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
-    const sync = await pullNow();
+    expect((await pullNow()).state).toBe('idle'); // the heal tries it in the background
+    const sync = await settled();
     expect(sync).toMatchObject({ state: 'conflict', branch: 'main', files: ['a.txt'] });
     expect(sync.message).toContain('a.txt');
     expect(head()).toBe(before);
@@ -213,7 +245,9 @@ describe('pull from origin', () => {
     // A new tip on origin is tried again (and still conflicts).
     commit(elsewhere, 'later.txt');
     git(elsewhere, 'push', '-q', 'origin', 'main');
-    await timer.tick();
+    const healing = service();
+    await new GitSync(t.db, healing, { log: () => undefined }).tick();
+    await healing.idle();
     const retried = readRepositorySettings(t.db, projectId).sync;
     expect(retried).toMatchObject({ state: 'conflict', files: ['a.txt'] });
     expect(retried?.at).not.toBe(sync.at);
@@ -231,25 +265,20 @@ describe('pull from origin', () => {
   });
 
   it('heals a purely additive conflict like the merge ladder does', async () => {
-    commit(projectPath, 'package.json', '{"scripts":{"build":"true"}}\n', 'chore: build script');
-    commit(projectPath, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n', 'docs: changelog');
-    git(projectPath, 'push', '-q', bare, 'main');
-    const elsewhere = cloneOf(bare);
-    commit(elsewhere, 'CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n- theirs\n', 'docs: theirs');
-    git(elsewhere, 'push', '-q', 'origin', 'main');
-    const mine = commit(
-      projectPath,
-      'CHANGELOG.md',
-      '# Changelog\n\n## [Unreleased]\n- mine\n',
-      'docs: mine',
-    );
+    const { elsewhere, mine } = additiveConflict();
+    // A heal worktree a crash left behind goes before the next heal.
+    const leftover = path.join(t.dir, '.worktrees', projectSlug, 'pull-deadbeef');
+    git(projectPath, 'worktree', 'add', '-q', '--detach', leftover, 'HEAD');
+    expect(worktrees()).toHaveLength(2);
     const checked: string[] = [];
-    const build = async (p: { workspacePath: string }): Promise<BuildDemoResponse> => {
+    const build = async (p: { workspacePath: string }) => {
       checked.push(p.workspacePath);
-      return { ok: true, targetId: 'pull', demoEntryRelPath: null, demoUrl: null, output: '' };
+      return okBuild();
     };
-    const sync = await service({ buildWorkspaceDemo: build }).pull(projectId, { auto: false });
-    expect(sync).toMatchObject({ state: 'pulled', branch: 'main' });
+    const svc = service({ buildWorkspaceDemo: build });
+    expect((await svc.pull(projectId, { auto: false })).state).toBe('idle');
+    await svc.idle();
+    expect(storedSync()).toMatchObject({ state: 'pulled', branch: 'main' });
     expect(readFileSync(path.join(projectPath, 'CHANGELOG.md'), 'utf8')).toBe(
       '# Changelog\n\n## [Unreleased]\n- mine\n- theirs\n',
     );
@@ -264,7 +293,90 @@ describe('pull from origin', () => {
     expect(checked).toHaveLength(1);
     expect(checked[0]).toContain(`${path.sep}.worktrees${path.sep}`);
     expect(worktrees()).toHaveLength(1);
+    expect(existsSync(leftover)).toBe(false);
     expect(git(projectPath, 'status', '--porcelain')).toBe('');
+  });
+
+  it("a heal runs without holding origin's queue, and only one per project", async () => {
+    additiveConflict();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const build = async () => {
+      calls += 1;
+      await gate;
+      return okBuild();
+    };
+    const svc = service({ buildWorkspaceDemo: build });
+    // The tick goes on to the next project while the heal's checks run.
+    await new GitSync(t.db, svc, { log: () => undefined }).tick();
+    await waitFor(() => calls === 1);
+    expect(storedSync()?.state).toBe('idle');
+    // Refresh (origin's queue) is not held up by the heal.
+    const refreshed = await Promise.race([
+      t.repository.refresh(projectId).then(() => 'done'),
+      sleep(5_000).then(() => 'stuck'),
+    ]);
+    expect(refreshed).toBe('done');
+    // Another Pull does not start a second heal, and Match origin waits for it.
+    expect((await svc.pull(projectId, { auto: false })).message).toContain('trying to resolve');
+    const match = await svc
+      .matchOrigin(projectId, { branch: 'main' })
+      .catch((e: { code?: string }) => e.code);
+    expect(match).toBe('pull_running');
+    release();
+    await svc.idle();
+    expect(calls).toBe(1);
+    expect(storedSync()).toMatchObject({ state: 'pulled', branch: 'main' });
+  });
+
+  it('a heal whose working branch moved meanwhile is dropped', async () => {
+    const { mine } = additiveConflict();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const svc = service({
+      buildWorkspaceDemo: async () => {
+        calls += 1;
+        await gate;
+        return okBuild();
+      },
+    });
+    await svc.pull(projectId, { auto: false });
+    await waitFor(() => calls === 1);
+    // The factory (or the person) commits on main while the heal is being checked.
+    const meanwhile = commit(projectPath, 'meanwhile.txt');
+    release();
+    await svc.idle();
+    expect(storedSync()).toMatchObject({ state: 'error', branch: 'main' });
+    expect(storedSync()?.message).toContain('moved');
+    expect(head()).toBe(meanwhile);
+    expect(git(projectPath, 'rev-parse', 'HEAD~1')).toBe(mine);
+    expect(readFileSync(path.join(projectPath, 'CHANGELOG.md'), 'utf8')).toBe(
+      '# Changelog\n\n## [Unreleased]\n- mine\n',
+    );
+    expect(worktrees()).toHaveLength(1);
+  });
+
+  it('a failed read of origin never hides a conflict that waits for the person', async () => {
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    await pullNow();
+    const stop = await settled();
+    expect(stop.state).toBe('conflict');
+    // The forge is unreachable now (and origin moved on, so only the read stands in the way).
+    commit(elsewhere, 'later.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    forge.redirectTo = 'http://127.0.0.1:1';
+    await new GitSync(t.db, service(), { log: () => undefined }).tick();
+    expect(storedSync()).toEqual(stop);
+    expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.error).toBeTruthy();
+    // A person's Pull answers with the failure and keeps the stop too.
+    expect((await pullNow()).state).toBe('error');
+    expect(storedSync()).toEqual(stop);
+    expect((await send('POST', gitUrl('/pull/ticket'))).statusCode).toBe(200);
   });
 
   it('never merges into a dirty tree, and a fast-forward that would overwrite an edit is refused by git', async () => {
