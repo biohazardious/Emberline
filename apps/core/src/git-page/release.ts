@@ -329,10 +329,20 @@ export class ReleaseJobs {
           s.status === 'failed' ? { ...s, status: 'pending', detail: null } : s,
         ),
       };
-      // Checks that ran on another commit than main names now say nothing about it: they run again.
+      // Checks that ran on another commit than main names now say nothing about it: they run again,
+      // but only while nothing after them took effect. A step after them that is done, or that core
+      // stopped during (a push may have landed), fixes what the release is: Retry finishes it on the
+      // commits recorded, whatever main took in since.
+      const after = stopped.steps.slice(stopped.steps.findIndex((s) => s.name === 'checks') + 1);
+      const untouched = after.every(
+        (s) =>
+          s.status === 'pending' ||
+          s.status === 'skipped' ||
+          (s.status === 'failed' && s.detail !== INTERRUPTED),
+      );
       const checks = stepOf(job, 'checks');
       if (
-        !finished(job, 'changelog') &&
+        untouched &&
         (checks.status === 'done' || checks.status === 'skipped') &&
         (await localTip(project.path, project.defaultBranch)) !== job.checked
       )
