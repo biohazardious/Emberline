@@ -11,7 +11,20 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- CI now runs the upgrade paths (`make e2e-upgrade`, `e2e/upgrade-paths.sh`): it seeds data volumes as 0.5.2, 0.6.2 and 0.7.0 left them, starts the current images on each release's own compose file and fails if a migration ran without a snapshot or broke a seeded row. See "Upgrade paths checked in CI" under Upgrade notes.
 - A compose file that sets `container_name`, a volume or network `name:`, or an `external` volume or network is now refused for a preview, with an error naming each one. Before, `container_name` was dropped silently and named volumes and networks were shared by every run's preview.
+
+### Upgrade notes
+
+**Upgrade paths checked in CI.** `make e2e-upgrade` upgrades a data volume from each of these releases to the current images, on that release's own compose file, and runs these checks. The job fails on the first that does not hold:
+
+- From 0.5.2, 0.6.2 and 0.7.0: the volume holds that release's migrations, a project, a ticket, a run, a review comment and a stored secret (plaintext for 0.5, sealed for 0.6 and 0.7, with its key in `/data/secrets.key`).
+- **Snapshot:** the first start writes `emberline.db.pre-migration-<time>.bak` holding the database exactly as the old release left it (same last migration, same rows), and every pending migration runs after it. A migration that runs without a snapshot fails the job.
+- **Rows:** the project, ticket, run and review comment are unchanged after the upgrade and listed by the API; every migration of this release is applied.
+- **Secrets:** the stored secret is sealed after the upgrade (0.5) and opens to the same value under the same key; `secrets.key` is byte-for-byte unchanged.
+- **Ops banner:** with 0.5.2's or 0.6.2's compose file, `/api/system` reports `opsMissing`, starts are refused with `ops_missing`, and the page shows "Update the compose file". With the current compose file the banner is gone, without restarting core. With 0.7.0's compose file it never shows.
+- **Rollback drill:** the oldest snapshot put back as `emberline.db` (stop core, delete `emberline.db-wal` and `-shm`, copy the `.bak` over) is at the old release's schema: its own migrations find nothing to run and every row is there. Starting the current core on it upgrades again, with a new snapshot. Old release images are not started by the job; for a real rollback also put the old images and compose file back.
+- **Every migration step:** the job upgrades a database from each migration of this release (not only from the three releases) and requires exactly one snapshot, taken at that state, and no seeded row lost.
 
 ## [0.7.0] - 2026-11-11
 

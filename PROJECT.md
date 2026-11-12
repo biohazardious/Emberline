@@ -25,7 +25,7 @@ The design rationale (principles, topology, scheduler, review, data model, auth,
 - **Backend:** Fastify (REST + `@fastify/websocket`) in `apps/core`, plus `apps/ptyd`, a node-pty host behind a Unix-socket RPC, so agents outlive core restarts.
 - **Database:** SQLite through better-sqlite3 and Drizzle ORM (WAL mode, SQL migrations in `apps/core/drizzle`). It is one embedded file for a single-user install and needs no server.
 - **Styling:** Plain CSS with design tokens as custom properties in `apps/web/src/index.css`, error/filter UI primitives in `apps/web/src/error-filter.css`, and responsive workbench breakpoints in `apps/web/src/responsive.css`. No CSS framework.
-- **Testing:** Vitest for unit and integration tests across all packages. `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack.
+- **Testing:** Vitest for unit and integration tests across all packages. `e2e/smoke.mjs` is an end-to-end smoke test against an isolated core + runner + ops stack. `make e2e-upgrade` (`e2e/upgrade-paths.sh`, CI job step) seeds 0.5/0.6/0.7 data volumes, upgrades them to the current images and checks the pre-migration snapshot, seeded rows, secrets, the ops-missing banner and a snapshot rollback; it fails if any migration lacks a snapshot or breaks a seeded row.
 - **Authentication:** A single admin account with an argon2id password set through a one-time setup token. HTTP-only session cookies, plus a per-login key sent as the CSRF header and the WebSocket subprotocol (DESIGN §3.8).
 - **Wire contracts:** zod schemas in `packages/protocol` validate every boundary: REST bodies, WebSocket events, hook payloads, ptyd RPC and `.emberline/worktree.yml`.
 - **Deploy target:** Docker Compose (`compose.yaml`). One multi-stage `Dockerfile` builds the `core` and `runner` images and a `check` stage that serves as the CI gate.
@@ -125,6 +125,7 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 | `make check`                     | All of the above inside the dev toolbox container                |
 | `make ci`                        | The Dockerfile `check` stage: the CI gate                        |
 | `make e2e`                       | End-to-end smoke test on an isolated stack                       |
+| `make e2e-upgrade`               | Upgrade paths from 0.5/0.6/0.7 volumes and the rollback drill    |
 | `make up` / `make down`          | Production stack (core, runner, ops, docker)                     |
 
 The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm run lint` and `pnpm run test`.
