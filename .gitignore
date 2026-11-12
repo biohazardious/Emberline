@@ -10,7 +10,9 @@ coverage/
 
 # Local runtime data
 /data/
-/.emberline/
+# Emberline's own scratch files; the worktree setup file is project content and stays tracked
+/.emberline/*
+!/.emberline/worktree.yml
 /workspaces/
 
 # Local agent tooling and its context (OpenWolf, Claude Code, Codex, OpenCode, Gemini)
