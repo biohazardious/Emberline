@@ -190,6 +190,14 @@ const RepositorySettingsSchema = z.object({
   releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
   releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });
+/**
+ * The working branch the factory must merge into when the project stores one other than its default
+ * branch; null otherwise (the factory merges into whatever is checked out, as before).
+ */
+export function factoryWorkingBranch(db: Db, projectId: string, defaultBranch: string): string | null {
+  const stored = readRepositorySettings(db, projectId).workingBranch;
+  return stored && stored !== defaultBranch ? stored : null;
+}
 /** The branch the Git page works on: the stored choice, else the project's default branch. */
 export function workingBranchOf(settings: RepositorySettings, defaultBranch: string): string {
   return settings.workingBranch ?? defaultBranch;

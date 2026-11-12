@@ -3,7 +3,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
-import { runs } from '../db/schema.js';
+import { runEvents, runs } from '../db/schema.js';
+import { withMainWorkspaceLock } from '../factory/merge.js';
+import { prepareWorkspace } from '../runs/git.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   authHeaders,
@@ -18,6 +20,7 @@ let t: TestApp;
 let cookie: string;
 let projectId: string;
 let projectPath: string;
+let projectSlug: string;
 const git = (dir: string, ...args: string[]) =>
   execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], {
     encoding: 'utf8',
@@ -89,6 +92,7 @@ beforeEach(async () => {
   const made = (await send('POST', '/api/projects', { name: 'Branch App', initGit: true })).json();
   projectId = made.project.id;
   projectPath = made.project.path;
+  projectSlug = made.project.slug;
   commit(projectPath, 'a.txt');
 });
 afterEach(async () => {
@@ -248,6 +252,101 @@ describe('git branches', () => {
     git(projectPath, 'branch', 'busy');
     git(projectPath, 'worktree', 'add', '-q', path.join(t.dir, 'busy'), 'busy');
     expect((await del('busy')).statusCode).toBe(409);
+  });
+});
+
+describe('a working branch the factory merges into', () => {
+  /** A finished run with one commit of its own, in a worktree branched from what is checked out. */
+  const finishedRun = (id: string) => {
+    const dir = path.join(t.dir, `wt-${id}`);
+    git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
+    commit(dir, `${id}.txt`);
+    seedRun(id, { state: 'done', branch: `emberline/${id}`, worktreePath: dir });
+    return dir;
+  };
+  const pipelineMerge = (id: string) =>
+    (
+      t.tickets as unknown as {
+        mergeRunIntoMain(
+          run: unknown,
+          main: string,
+          key: null,
+          stale: () => boolean,
+        ): Promise<{ ok: boolean }>;
+      }
+    ).mergeRunIntoMain(t.runs.get(id), projectPath, null, () => false);
+  const failures = (id: string) =>
+    t.db
+      .select()
+      .from(runEvents)
+      .all()
+      .filter((e) => e.runId === id && e.type === 'merge_failed')
+      .map((e) => (e.payload as { summary: string }).summary);
+
+  it('a merge waits while the main workspace is off the working branch, and main is unchanged', async () => {
+    git(projectPath, 'branch', 'develop');
+    writeRepositorySettings(t.db, projectId, { workingBranch: 'develop' }); // main stays checked out
+    finishedRun('m1');
+    const mainBefore = git(projectPath, 'rev-parse', 'main');
+    const message =
+      "the main workspace is on main, but the factory's working branch is develop. Switch back on the Git page (or check out develop) and merge again.";
+
+    // The pipeline's merge: refused as a held merge (merge_failed), never thrown.
+    expect(await pipelineMerge('m1')).toMatchObject({ ok: false });
+    expect(failures('m1')).toEqual([expect.stringContaining(message)]);
+    // A person's merge: the same refusal.
+    const person = await send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: 'm1' });
+    expect(person.statusCode).toBe(200);
+    expect(person.json()).toMatchObject({ ok: false });
+    expect(person.json().summary).toContain(message);
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+    expect(git(projectPath, 'rev-parse', 'develop')).toBe(mainBefore);
+
+    // Back on the working branch, it merges there, and main still does not move.
+    git(projectPath, 'switch', '-q', 'develop');
+    expect(await pipelineMerge('m1')).toMatchObject({ ok: true });
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+    expect(git(projectPath, 'rev-parse', 'develop')).not.toBe(mainBefore);
+  });
+
+  it('with no working branch stored, a merge goes into what is checked out, as before', async () => {
+    git(projectPath, 'switch', '-q', '-c', 'side');
+    finishedRun('m2');
+    const sideBefore = git(projectPath, 'rev-parse', 'side');
+    expect(await pipelineMerge('m2')).toMatchObject({ ok: true });
+    expect(git(projectPath, 'rev-parse', 'side')).not.toBe(sideBefore);
+  });
+});
+
+describe('a run that is starting', () => {
+  it('a run worktree no run row names yet counts as live', async () => {
+    git(projectPath, 'branch', 'develop');
+    const dir = path.join(t.config.workspacesDir, '.worktrees', projectSlug, 'abcd1234');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/run-abcd1234', dir);
+    const refused = await send('POST', workingUrl(), { branch: 'develop' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({
+      error: 'runs_live',
+      runs: [{ id: 'abcd1234', title: 'A run is starting' }],
+    });
+    const listed = (await send('GET', branchesUrl())).json() as { name: string; liveRuns: string[] }[];
+    expect(listed.find((b) => b.name === 'emberline/run-abcd1234')?.liveRuns).toEqual(['abcd1234']);
+    // Once its row exists (a done run with nothing of its own), it is an ordinary run.
+    seedRun('abcd1234-0000', { state: 'done', branch: 'emberline/run-abcd1234', worktreePath: dir });
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
+
+  it("a run's worktree is added under the main-workspace lock", async () => {
+    let release!: () => void;
+    const held = withMainWorkspaceLock(projectPath, () => new Promise<void>((r) => (release = r)));
+    const dir = path.join(t.config.workspacesDir, '.worktrees', projectSlug, 'locked01');
+    const preparing = prepareWorkspace(projectPath, dir, 'emberline/run-locked01');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(has(projectPath, 'refs/heads/emberline/run-locked01')).toBe('');
+    release();
+    await held;
+    expect(await preparing).toMatchObject({ path: dir, branch: 'emberline/run-locked01' });
+    expect(has(projectPath, 'refs/heads/emberline/run-locked01')).not.toBe('');
   });
 });
 

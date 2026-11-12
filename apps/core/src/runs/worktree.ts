@@ -203,8 +203,10 @@ export async function mergeRunBranch(params: {
   heal?: MergeHeal;
   /** Who Emberline's commits are made as, and the output commit's subject (merge.ts defaults otherwise). */
   commit?: { identity: CommitIdentity; subject: string };
+  /** See syncWorktreeToMainWorkspace: a merge waits while the main workspace is off this branch. */
+  workingBranch?: () => string | null;
 }): Promise<RunMerge | null> {
-  const { run, stale, heal, mainWorkspacePath, ticketKey, commit } = params;
+  const { run, stale, heal, mainWorkspacePath, ticketKey, commit, workingBranch } = params;
   const mergeOnce = () =>
     syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
@@ -213,6 +215,7 @@ export async function mergeRunBranch(params: {
       runId: run.id,
       branch: run.branch,
       ...commit,
+      ...(workingBranch ? { workingBranch } : {}),
       beforeMerge: () => {
         if (stale()) throw new TurnMoved();
       },

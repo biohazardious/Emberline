@@ -88,6 +88,7 @@ import {
 import { projects, projectSettings, projectWorktreeConfig, settings } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import {
+  factoryWorkingBranch,
   type ImportClone,
   readImportClone,
   readImportSource,
@@ -963,6 +964,7 @@ export function registerProjectRoutes(
           runId: run.id,
           branch: run.branch,
           ...commit,
+          workingBranch: () => factoryWorkingBranch(db, project.id, row.defaultBranch),
           // Only work that is not in main yet is held back: a no-op merge needs no override.
           beforeMerge: () => {
             if (blocking > 0 && !body.force) {

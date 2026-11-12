@@ -101,6 +101,15 @@ function keepPushedBranch(settings: RepositorySettings, defaultBranch: string): 
     : defaultBranch;
 }
 
+/**
+ * Where Keep pushed publishes the factory's merges: the working branch when one other than the
+ * default branch is stored (its own name on origin), else the 0.8.0 target above.
+ */
+export function keepPushedTarget(settings: RepositorySettings, defaultBranch: string): string {
+  const working = workingBranchOf(settings, defaultBranch);
+  return working !== defaultBranch ? working : keepPushedBranch(settings, defaultBranch);
+}
+
 /** What a refresh or push read under the main-workspace lock, for its network call outside it. */
 export interface Snapshot {
   path: string;
@@ -173,7 +182,7 @@ export class RepositoryService {
       keepMainPushed: settings.keepMainPushed,
       pushTarget: effectivePushTarget(settings),
       integrationBranch: settings.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH,
-      keepPushedBranch: keepPushedBranch(settings, row.defaultBranch),
+      keepPushedBranch: keepPushedTarget(settings, row.defaultBranch),
       lastMainPushError: settings.lastMainPushError,
       commitIdentity: settings.commitIdentity,
       factoryCommitIdentity: getCommitIdentity(this.db),
@@ -371,7 +380,7 @@ export class RepositoryService {
     }
     const next = { ...current, pushTarget, integrationBranch };
     const branchChanged =
-      keepPushedBranch(next, row.defaultBranch) !== keepPushedBranch(current, row.defaultBranch);
+      keepPushedTarget(next, row.defaultBranch) !== keepPushedTarget(current, row.defaultBranch);
     // Switched off, a push kept for the runner never runs: it no longer waits. A failure of a push
     // to another branch says nothing about the new one.
     const stale = branchChanged || (!keepMainPushed && current.lastMainPushError === RUNNER_WAITING_MESSAGE);

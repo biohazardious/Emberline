@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { BranchRemoteState, GitBranch, GitBranchKind, Run } from '@emberline/protocol';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
@@ -22,7 +23,7 @@ import {
   remoteRefHead,
   unlessRunnerUnavailable,
 } from '../repository/git.js';
-import type { RepositoryService } from '../repository/service.js';
+import { keepPushedTarget, type RepositoryService } from '../repository/service.js';
 import { worktreeHasUnmergedCommits } from '../runs/git.js';
 import { ACTIVE_RUN_STATES } from '../tickets/columns.js';
 import { absentWhen, isPlainRefName } from './history.js';
@@ -30,8 +31,46 @@ import { absentWhen, isPlainRefName } from './history.js';
 export interface BranchProject {
   id: string;
   path: string;
+  slug: string;
   defaultBranch: string;
 }
+
+/** Every worktree of the repository (the main workspace first), with the branch it has checked out. */
+async function worktreeList(
+  mainPath: string,
+): Promise<{ path: string; branch: string | null; prunable: boolean }[]> {
+  const out = (await execGitFile(['worktree', 'list', '--porcelain'], { cwd: mainPath })).stdout;
+  return out
+    .split('\n\n')
+    .map((entry) => entry.split('\n'))
+    .flatMap((lines) => {
+      const dir = lines.find((l) => l.startsWith('worktree '))?.slice('worktree '.length);
+      if (!dir) return [];
+      const ref = lines.find((l) => l.startsWith('branch refs/heads/'));
+      return [
+        {
+          path: dir,
+          branch: ref ? ref.slice('branch refs/heads/'.length) : null,
+          // Its directory is gone: git keeps only the record until `worktree prune`.
+          prunable: lines.some((l) => l.startsWith('prunable')),
+        },
+      ];
+    });
+}
+
+/** A path as the file system has it (symlinks resolved), to compare with what git prints. */
+const canonical = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+
+/** A run worktree of this project: `<workspaces>/.worktrees/<slug>/<run id8>` (prepareRunWorkspace). */
+const isRunWorktreeDir = (dir: string, slug: string) =>
+  path.basename(path.dirname(dir)) === slug &&
+  path.basename(path.dirname(path.dirname(dir))) === '.worktrees';
 
 /** The factory's own branches: one per run, never made or chosen by a person. */
 const RUN_PREFIX = 'emberline/';
@@ -76,6 +115,20 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
     if (!run.branch || path.resolve(run.worktreePath) === path.resolve(project.path)) continue;
     if (await worktreeHasUnmergedCommits(run.worktreePath, working))
       live.push({ id: run.id, title: run.title, branch: run.branch });
+  }
+  // A run that is starting has its worktree before its row (prepareRunWorkspace runs first): a run
+  // worktree no row names counts as live, under the run's directory name.
+  const known = new Set(
+    db
+      .select({ worktreePath: runs.worktreePath })
+      .from(runs)
+      .where(eq(runs.projectId, project.id))
+      .all()
+      .map((r) => canonical(r.worktreePath)),
+  );
+  for (const w of await worktreeList(project.path)) {
+    if (w.prunable || !isRunWorktreeDir(w.path, project.slug) || known.has(canonical(w.path))) continue;
+    live.push({ id: path.basename(w.path), title: 'A run is starting', branch: w.branch });
   }
   return live;
 }
@@ -271,13 +324,7 @@ function gitMessage(error: unknown): string {
 
 /** The branches checked out in the main workspace or in any worktree (runs' included). */
 async function checkedOutBranches(mainPath: string): Promise<Set<string>> {
-  const out = (await execGitFile(['worktree', 'list', '--porcelain'], { cwd: mainPath })).stdout;
-  return new Set(
-    out
-      .split('\n')
-      .filter((l) => l.startsWith('branch refs/heads/'))
-      .map((l) => l.slice('branch refs/heads/'.length)),
-  );
+  return new Set((await worktreeList(mainPath)).flatMap((w) => (w.branch === null ? [] : [w.branch])));
 }
 
 /** Whether `oid` is already in main's or the working branch's history: deleting it loses nothing. */
@@ -436,8 +483,14 @@ export async function setWorkingBranch(db: Db, project: BranchProject, rawBranch
         throw conflict(`Could not switch the main workspace to ${branch}: ${why}`, 'switch_failed');
       }
     }
+    const before = readRepositorySettings(db, project.id);
+    const next = { ...before, workingBranch: branch === project.defaultBranch ? undefined : branch };
+    // A Keep pushed failure of the old branch says nothing about the new one.
+    const targetChanged =
+      keepPushedTarget(next, project.defaultBranch) !== keepPushedTarget(before, project.defaultBranch);
     writeRepositorySettings(db, project.id, {
-      workingBranch: branch === project.defaultBranch ? undefined : branch,
+      workingBranch: next.workingBranch,
+      ...(targetChanged ? { lastMainPushError: null } : {}),
     });
   });
 }

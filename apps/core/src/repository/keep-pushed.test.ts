@@ -735,6 +735,19 @@ describe('keep pushed with a working branch', () => {
     expect(diverged).not.toContain("project's main");
   });
 
+  it('names the working branch as where Keep pushed goes, and a push target change keeps its failure', async () => {
+    await onDevelop();
+    expect((await t.repository.status(projectId)).keepPushedBranch).toBe('develop');
+    writeRepositorySettings(t.db, projectId, { lastMainPushError: 'develop failed' });
+    // The 0.8.0 target does not apply while a working branch is stored: nothing changed for it.
+    const status = await t.repository.update(projectId, { pushTarget: 'default_branch' });
+    expect(status.keepPushedBranch).toBe('develop');
+    expect(status.lastMainPushError).toBe('develop failed');
+    // Without the working branch, the target is the 0.8.0 one again.
+    writeRepositorySettings(t.db, projectId, { workingBranch: undefined });
+    expect((await t.repository.status(projectId)).keepPushedBranch).toBe('main');
+  });
+
   it('a merge into a branch that is not the working branch says so, and nothing is pushed', async () => {
     await onDevelop();
     git(projectPath, 'checkout', '-q', '-b', 'side');

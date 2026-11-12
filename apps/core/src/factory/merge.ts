@@ -412,6 +412,12 @@ export async function syncWorktreeToMainWorkspace(params: {
   identity?: CommitIdentity;
   /** The output commit's subject (default: `feat(<label>): factory run output`); see runOutputSubject. */
   subject?: string;
+  /**
+   * The factory's working branch when the project stores one other than its default branch, else
+   * null; asked under the lock. While the main workspace has another branch checked out the merge
+   * is refused, so the factory's work never lands on main (or any branch) by a checkout.
+   */
+  workingBranch?: () => string | null;
 }): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
@@ -464,6 +470,24 @@ export async function syncWorktreeToMainWorkspace(params: {
   return mainWorkspaceLock.run(path.resolve(mainWorkspacePath), async () => {
     const inWorktree = { cwd: worktreePath };
     const inMain = { cwd: mainWorkspacePath };
+
+    const working = params.workingBranch?.() ?? null;
+    if (working) {
+      const checkedOut = (
+        await execGitFile(['symbolic-ref', '--quiet', '--short', 'HEAD'], inMain).catch((error: unknown) => {
+          if (isRunnerUnavailable(error)) throw error;
+          return { stdout: '' }; // detached
+        })
+      ).stdout.trim();
+      if (checkedOut !== working) {
+        beforeMerge?.();
+        const on = checkedOut ? `is on ${checkedOut}` : 'is not on a branch';
+        return result(
+          false,
+          `Could not merge ${label}: the main workspace ${on}, but the factory's working branch is ${working}. Switch back on the Git page (or check out ${working}) and merge again.`,
+        );
+      }
+    }
 
     // 1. The run's output as a commit on its own branch; .gitignore keeps secrets and build output
     //    out. It goes on the branch only once the merge is allowed.

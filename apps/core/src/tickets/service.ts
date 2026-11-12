@@ -39,7 +39,12 @@ import type { AgentFileRejection } from '../factory/agent-files.js';
 import type { HealFailure } from '../factory/conflict-heal.js';
 import { runCommit } from '../factory/commit-identity.js';
 import { EXISTING_TICKETS_MAX, existingTicketsSection } from './existing-tickets.js';
-import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
+import {
+  factoryWorkingBranch,
+  readProjectSettings,
+  readWizardTickets,
+  writeProjectSettings,
+} from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, settings, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
@@ -1822,7 +1827,19 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           .get() ?? null)
       : null;
     const commit = runCommit(this.db, run, ticket);
-    const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale, heal, commit });
+    const workingBranch = () => {
+      const project = this.db.select().from(projects).where(eq(projects.id, run.projectId)).get();
+      return project ? factoryWorkingBranch(this.db, project.id, project.defaultBranch) : null;
+    };
+    const res = await mergeRunBranch({
+      run,
+      mainWorkspacePath,
+      ticketKey,
+      stale,
+      heal,
+      commit,
+      workingBranch,
+    });
     // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
     if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
