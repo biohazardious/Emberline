@@ -231,20 +231,28 @@ jobs:
           upload-release-assets: false
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
         if: env.PUSH == 'true'
-      - name: Sign images and attest SBOMs (cosign keyless)
+      # The attestation names each SBOM's SHA-256, not the SBOM itself: the runner's SBOM is too large for
+      # Sigstore's public Rekor log, which receives the whole attestation. The SBOMs go to the release.
+      - name: Sign images and attest SBOM digests (cosign keyless)
         if: env.PUSH == 'true'
         env:
           CORE: ghcr.io/${{ env.OWNER }}/emberline-core@${{ steps.push-core.outputs.digest }}
           RUNNER: ghcr.io/${{ env.OWNER }}/emberline-runner@${{ steps.push-runner.outputs.digest }}
+          SBOM_TYPE: https://github.com/biohazardious/Emberline/sbom-digest/v1
         run: |
           cosign sign --yes "$CORE"
           cosign sign --yes "$RUNNER"
-          cosign attest --yes --type spdxjson --predicate emberline-core.spdx.json "$CORE"
-          cosign attest --yes --type spdxjson --predicate emberline-runner.spdx.json "$RUNNER"
+          for name in core runner; do
+            sum="$(sha256sum "emberline-$name.spdx.json" | cut -d' ' -f1)"
+            printf '{"sbom":{"name":"emberline-%s.spdx.json","format":"spdx-json","sha256":"%s"}}\n' "$name" "$sum" \
+              > "sbom-$name.predicate.json"
+          done
+          cosign attest --yes --type "$SBOM_TYPE" --predicate sbom-core.predicate.json "$CORE"
+          cosign attest --yes --type "$SBOM_TYPE" --predicate sbom-runner.predicate.json "$RUNNER"
           {
             echo "### Signed images"
-            echo "- \`$CORE\`"
-            echo "- \`$RUNNER\`"
+            echo "- \`$CORE\` (SBOM sha256 $(jq -r .sbom.sha256 sbom-core.predicate.json))"
+            echo "- \`$RUNNER\` (SBOM sha256 $(jq -r .sbom.sha256 sbom-runner.predicate.json))"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload SBOMs
         if: env.PUSH == 'true'

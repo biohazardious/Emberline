@@ -25,7 +25,7 @@ Run the gate locally after an install with `pnpm supply-chain` (Node 24), or wit
 
 ### Verifying an image
 
-Each pushed image digest is signed with [cosign](https://docs.sigstore.dev/) keyless signing: the certificate comes from the CI run's GitHub OIDC identity and is logged in Sigstore's public Rekor transparency log. No signing key exists to leak. The image also has a signed SPDX SBOM attestation. Each GitHub release attaches the same SBOMs (`emberline-core.spdx.json`, `emberline-runner.spdx.json`).
+Each pushed image digest is signed with [cosign](https://docs.sigstore.dev/) keyless signing: the certificate comes from the CI run's GitHub OIDC identity and is logged in Sigstore's public Rekor transparency log. No signing key exists to leak. Each GitHub release attaches the images' SPDX SBOMs (`emberline-core.spdx.json`, `emberline-runner.spdx.json`), and each image has a signed attestation of its SBOM's SHA-256. The attestation carries the digest, not the SBOM: the runner's SBOM is too large for Sigstore's public log.
 
 You need cosign 2.x or later. A tag can move, so verify it once and then use the digest the output names. To check that an image was built by this repository's CI workflow from a version tag:
 
@@ -38,13 +38,14 @@ cosign verify "$IMAGE" \
 
 For `edge` images built from `main`, use `@refs/heads/main$` in place of `@refs/tags/v`. To check one exact release, use `--certificate-identity https://github.com/biohazardious/Emberline/.github/workflows/ci.yml@refs/tags/v0.8.0` instead of the regular expression. The output names the digest that was verified. Pull that digest (`docker pull ghcr.io/biohazardious/emberline-core@sha256:…`) or pin it in your compose file.
 
-To verify the SBOM attestation and extract the SBOM:
+To check an SBOM from the release against the image's attestation, download `emberline-core.spdx.json` from the release, then compare the two digests. They must be the same:
 
 ```sh
-cosign verify-attestation "$IMAGE" --type spdxjson \
+cosign verify-attestation "$IMAGE" --type https://github.com/biohazardious/Emberline/sbom-digest/v1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github\.com/biohazardious/[Ee]mberline/\.github/workflows/ci\.yml@refs/tags/v' \
-  | jq -r '.payload' | base64 -d | jq '.predicate' > emberline-core.spdx.json
+  | jq -r '.payload' | base64 -d | jq -r '.predicate.sbom.sha256'
+sha256sum emberline-core.spdx.json
 ```
 
 A failed verification (no matching signature, another identity or issuer) means the image did not come from this repository's CI. Do not run it, and report it as described above.
