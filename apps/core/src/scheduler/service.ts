@@ -31,7 +31,7 @@ import type { RunOrigin, RunService } from '../runs/service.js';
 type WindowRow = typeof quotaWindows.$inferSelect;
 
 export interface SchedulerOptions {
-  /** Next attempt when the reset time is unknown (PROJECT.md §5.5: 15 min). */
+  /** Next attempt when the reset time is unknown (docs/DESIGN.md §3.5: 15 min). */
   probeMs: number;
   /** Random delay added after the reset time, so we don't hit the limit edge. */
   jitterMinMs: number;
@@ -76,7 +76,7 @@ interface SchedulerEvents {
 }
 
 /**
- * Quota-aware dispatcher with one quota lane per (agent, credential, pool) (PROJECT.md §5.5).
+ * Quota-aware dispatcher with one quota lane per (agent, credential, pool) (docs/DESIGN.md §3.5).
  *
  * - Runs start `queued`; a slot is free while fewer than `maxConcurrentRuns` runs are busy
  *   (starting / working, or spawned with a prompt that hasn't been submitted yet).

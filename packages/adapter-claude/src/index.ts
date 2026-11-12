@@ -4,7 +4,7 @@
  * Pure building blocks used by core's run service:
  * - {@link buildHookSettings}: the `--settings` object wiring every hook to `emberline-hook`.
  * - {@link buildLaunchSpec}: the full command line + env for a run.
- * - {@link nextStateFromHook}: the hook -> {@link AgentState} state machine (PROJECT.md §3.3).
+ * - {@link nextStateFromHook}: the hook -> {@link AgentState} state machine (docs/DESIGN.md §3.3).
  *
  * Rate-limit detection and reset-time parsing live in ./ratelimit.ts, behind fixture tests.
  */
@@ -161,7 +161,7 @@ const EMBERLINE_TOOLS = [COMPLETION_TOOL, PREVIEW_TOOL];
 export const COMPLETION_INSTRUCTION =
   'When this ticket is finished and its work is saved in the worktree, call the `ticket_complete` tool with a short summary and a handoff note for whoever builds on it. If it cannot be finished, call it with `blockers` listing why. Do not call it while you are waiting for an answer to a question.';
 
-/** Hooks Emberline listens to for state detection (PROJECT.md §3.3). */
+/** Hooks Emberline listens to for state detection (docs/DESIGN.md §3.3). */
 export const WATCHED_HOOKS: readonly HookEventName[] = [
   'SessionStart',
   'UserPromptSubmit',
