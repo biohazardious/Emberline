@@ -249,6 +249,9 @@ export async function buildServer(
   app.addHook('onClose', async () => {
     deps.ptyd.off('status', onPtydStatus);
     ops.off('status', onPtydStatus);
+    // The Git page first: once its pulls, heals, drafts and release jobs are stopping, none of them
+    // starts a step while the services below shut down.
+    await gitSync.stop();
     cron.stop();
     notifications.stop();
     review.stop();
@@ -256,7 +259,6 @@ export async function buildServer(
     await issueSync.stop();
     await postMerge.stop();
     await mainPush.stop();
-    await gitSync.stop();
   });
 
   installErrorHandler(app);
