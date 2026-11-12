@@ -453,6 +453,20 @@ describe('dependency-aware PO prompt', () => {
     expect(prompt).toContain('e.g. `MPG-12`');
   });
 
+  it('asks for Target Files and dependsOn between tickets editing the same file (M5 layer 1)', async () => {
+    const { buildFactoryOrchestratorPrompt } = await import('./factory/orchestration.js');
+    const { claimedPaths } = await import('./tickets/overlap.js');
+    const prompt = buildFactoryOrchestratorPrompt('Build an APK', true, '', 2);
+    expect(prompt).toContain('**Every ticket body has a `## Target Files` section**');
+    expect(prompt).toContain(
+      'Two tickets of this batch that edit the same code file must not run in parallel: add a `dependsOn` between them',
+    );
+    expect(prompt).toContain('Leave `PROJECT.md` edits to the ticket that owns that milestone');
+    // The example body's section is one the dispatcher reads.
+    const example = /"ref": "android-shell".*?"body": "((?:[^"\\]|\\.)*)"/.exec(prompt)?.[1] ?? '';
+    expect(claimedPaths(JSON.parse(`"${example}"`) as string)).toEqual(['android/**', 'capacitor.config.ts']);
+  });
+
   it('defaults the prompt to the default parallel ticket limit', async () => {
     const { buildFactoryOrchestratorPrompt } = await import('./factory/orchestration.js');
     expect(buildFactoryOrchestratorPrompt('Build an APK')).toContain(
