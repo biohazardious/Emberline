@@ -74,10 +74,56 @@ function insertRow(sqlite, table, known) {
 }
 
 const SEEDS = [
-  ['projects', { id: 'p-up', name: 'Upgrade Project', slug: 'upgrade-project', path: '/workspaces/upgrade-project', created_at: NOW }],
-  ['tickets', { id: 't-up', project_id: 'p-up', number: 1, key: 'UP-1', title: 'Survives the upgrade', status: 'review', created_at: NOW, updated_at: NOW }],
-  ['runs', { id: 'r-up', project_id: 'p-up', ticket_id: 't-up', agent: 'claude', state: 'done', worktree_path: '/workspaces/upgrade-project/wt', hook_token_hash: 'h', state_changed_at: NOW, created_at: NOW }],
-  ['review_comments', { id: 'c-up', run_id: 'r-up', file_path: 'src/a.ts', line: 3, side: 'new', body: 'Keep this comment', created_at: NOW, updated_at: NOW }],
+  [
+    'projects',
+    {
+      id: 'p-up',
+      name: 'Upgrade Project',
+      slug: 'upgrade-project',
+      path: '/workspaces/upgrade-project',
+      created_at: NOW,
+    },
+  ],
+  [
+    'tickets',
+    {
+      id: 't-up',
+      project_id: 'p-up',
+      number: 1,
+      key: 'UP-1',
+      title: 'Survives the upgrade',
+      status: 'review',
+      created_at: NOW,
+      updated_at: NOW,
+    },
+  ],
+  [
+    'runs',
+    {
+      id: 'r-up',
+      project_id: 'p-up',
+      ticket_id: 't-up',
+      agent: 'claude',
+      state: 'done',
+      worktree_path: '/workspaces/upgrade-project/wt',
+      hook_token_hash: 'h',
+      state_changed_at: NOW,
+      created_at: NOW,
+    },
+  ],
+  [
+    'review_comments',
+    {
+      id: 'c-up',
+      run_id: 'r-up',
+      file_path: 'src/a.ts',
+      line: 3,
+      side: 'new',
+      body: 'Keep this comment',
+      created_at: NOW,
+      updated_at: NOW,
+    },
+  ],
 ];
 
 /** Seeds every row whose table exists and is not yet seeded; returns the rows seeded now. */
@@ -96,12 +142,17 @@ function seedRows(sqlite, done) {
 
 function assertRows(sqlite, rows, where) {
   for (const { table, id, values } of rows) {
-    const found = sqlite.prepare(`select ${Object.keys(values).join(', ')} from ${table} where id = ?`).get(id);
+    const found = sqlite
+      .prepare(`select ${Object.keys(values).join(', ')} from ${table} where id = ?`)
+      .get(id);
     assert.deepEqual(found, values, `${where}: ${table} row ${id} changed or is missing`);
   }
 }
 
-const snapshots = (dir) => readdirSync(dir).filter((n) => /^emberline\.db\.pre-migration-\d+\.bak$/.test(n)).sort();
+const snapshots = (dir) =>
+  readdirSync(dir)
+    .filter((n) => /^emberline\.db\.pre-migration-\d+\.bak$/.test(n))
+    .sort();
 
 function lastMigration(file) {
   const sqlite = new Database(file, { readonly: true });
@@ -140,7 +191,9 @@ async function seed(oldDir, label) {
       seededCount: journalOf(oldDir).length,
     }),
   );
-  console.log(`seeded ${label}: ${rows.length} rows, ${journalOf(oldDir).length} migrations, secrets ${sealed ? 'sealed' : 'plaintext'}`);
+  console.log(
+    `seeded ${label}: ${rows.length} rows, ${journalOf(oldDir).length} migrations, secrets ${sealed ? 'sealed' : 'plaintext'}`,
+  );
 }
 
 const manifest = () => JSON.parse(readFileSync(MANIFEST, 'utf8'));
@@ -163,7 +216,10 @@ async function verify(label) {
   const applied = lastMigration(DB_FILE);
   assert.equal(applied.n, current.length, 'every migration of this release is applied');
   const backups = snapshots(DATA);
-  assert.ok(backups.length > 0, `no pre-migration snapshot in ${DATA}: the upgrade ran migrations unprotected`);
+  assert.ok(
+    backups.length > 0,
+    `no pre-migration snapshot in ${DATA}: the upgrade ran migrations unprotected`,
+  );
   const newest = backups[backups.length - 1];
   const snap = lastMigration(path.join(DATA, newest));
   assert.equal(snap.last, m.seededLast, 'the snapshot holds the database as the old release left it');
@@ -224,15 +280,29 @@ async function matrix() {
     src.close();
     openDb(copy).close();
     const made = snapshots(copyDir);
-    assert.equal(made.length, 1, `from migration ${entries[at - 1].tag}: expected one snapshot, found ${made.length}`);
-    assert.equal(lastMigration(path.join(copyDir, made[0])).last, entries[at - 1].when, `from ${entries[at - 1].tag}: the snapshot is not the pre-migration state`);
-    assert.equal(lastMigration(copy).n, entries.length, `from ${entries[at - 1].tag}: migrations were left pending`);
+    assert.equal(
+      made.length,
+      1,
+      `from migration ${entries[at - 1].tag}: expected one snapshot, found ${made.length}`,
+    );
+    assert.equal(
+      lastMigration(path.join(copyDir, made[0])).last,
+      entries[at - 1].when,
+      `from ${entries[at - 1].tag}: the snapshot is not the pre-migration state`,
+    );
+    assert.equal(
+      lastMigration(copy).n,
+      entries.length,
+      `from ${entries[at - 1].tag}: migrations were left pending`,
+    );
     const upgraded = new Database(copy, { readonly: true });
     assertRows(upgraded, rows, `upgrade from ${entries[at - 1].tag}`);
     upgraded.close();
   }
   rmSync(work, { recursive: true, force: true });
-  console.log(`matrix: ${entries.length - 1} upgrade starting points each snapshot first and keep ${rows.length} seeded rows`);
+  console.log(
+    `matrix: ${entries.length - 1} upgrade starting points each snapshot first and keep ${rows.length} seeded rows`,
+  );
 }
 
 async function api(base, expect) {
@@ -255,7 +325,10 @@ async function api(base, expect) {
   assert.ok(setup.status < 500, `setup answered ${setup.status}`);
   const login = await call('POST', '/api/auth/login', { password: PASSWORD });
   assert.equal(login.status, 200, 'login');
-  cookie = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  cookie = login.headers
+    .getSetCookie()
+    .map((c) => c.split(';')[0])
+    .join('; ');
   key = login.json.sessionKey;
   const wantMissing = expect === 'ops-missing';
   const deadline = Date.now() + 90_000;
@@ -272,7 +345,10 @@ async function api(base, expect) {
     assert.equal(refused.json.code, 'ops_missing');
   }
   const projects = await call('GET', '/api/projects');
-  assert.ok(projects.json.some((p) => p.slug === 'upgrade-project'), 'the seeded project is listed by the API');
+  assert.ok(
+    projects.json.some((p) => p.slug === 'upgrade-project'),
+    'the seeded project is listed by the API',
+  );
   console.log(`api: ops banner ${wantMissing ? 'shown' : 'clear'}; seeded project listed`);
 }
 
