@@ -70,6 +70,8 @@ await ensureForgeAccount();
 await seedForgeRepo(REPO, {
   'README.md': '# ui app\n',
   'package.json': '{"name":"ui-app","private":true}\n',
+  Makefile: 'all:\n',
+  'PROJECT.md': '# ui app\n',
 });
 
 await scenario('wizard: import a project from a git URL', async (page) => {
@@ -234,3 +236,28 @@ await scenario('quota: a usage limit pauses the run and it resumes by itself', a
   await page.locator('#col-done').getByText(title).waitFor();
   assert.equal(await mainFile(project.id, 'e2e-limit.txt'), 'limit\n');
 });
+
+await scenario(
+  'conflicts: two tickets appending to the same Makefile and PROJECT.md both land',
+  async (page) => {
+    const titles = ['Append lint [e2e:append:lint]', 'Append docs [e2e:append:docs]'];
+    const cards = [];
+    for (const title of titles) cards.push(await addTicket(page, title));
+    await startTicket(page, cards[0]);
+    await startTicket(page, cards[1]);
+    for (const title of titles) await seeInColumn(page, title, 'review');
+    for (const title of titles) {
+      await markDone(page, title);
+      await until(
+        async () => (await ticketByTitle(title))?.status === 'done',
+        `${title} never reached Done (the second merge conflicts and must self-heal)`,
+      );
+    }
+    const makefile = (await mainFile(project.id, 'Makefile')) ?? '';
+    const doc = (await mainFile(project.id, 'PROJECT.md')) ?? '';
+    for (const name of ['lint', 'docs']) {
+      assert.match(makefile, new RegExp(`^${name}:$`, 'm'), `Makefile keeps the ${name} target`);
+      assert.match(doc, new RegExp(`^## ${name}$`, 'm'), `PROJECT.md keeps the ${name} section`);
+    }
+  },
+);

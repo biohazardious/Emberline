@@ -7,12 +7,13 @@
  *   [e2e:work]    commits a file, finishes after a short while
  *   [e2e:ask]     commits a file and opens a question picker; finishes when a person answers on its terminal
  *   [e2e:review]  commits a file and waits for the file `.e2e-go` in the worktree, so a test can review first
+ *   [e2e:append:NAME] appends a `NAME` target to Makefile and a `NAME` section to PROJECT.md (both files exist in main)
  *   [e2e:limit]   hits a usage limit once; after the reset it gets "Continue where you left off." and finishes
  *
  * A prompt without a marker behaves like [e2e:work]. Test-only: the runner image has no real Claude here.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const runId = process.env.EMBERLINE_RUN_ID ?? '';
@@ -20,7 +21,9 @@ const token = process.env.EMBERLINE_HOOK_TOKEN ?? '';
 const core = process.env.EMBERLINE_CORE_URL ?? '';
 const argv = process.argv.slice(2);
 const prompt = argv.includes('--') ? argv.slice(argv.indexOf('--') + 1).join(' ') : '';
-const mode = /\[e2e:(work|ask|review|limit)\]/.exec(prompt)?.[1] ?? 'work';
+const marker = /\[e2e:(work|ask|review|limit|append)(?::([a-z0-9-]+))?\]/.exec(prompt);
+const mode = marker?.[1] ?? 'work';
+const appendName = marker?.[2] ?? 'extra';
 const resumed = argv.includes('--resume');
 /** Survives a relaunch of this process: whether the usage limit was already hit for this run. */
 const limitMarker = `/tmp/e2e-limit-${runId}`;
@@ -40,7 +43,7 @@ const complete = (summary, blockers = []) =>
   post(`/api/internal/runs/${runId}/complete`, { summary, handoff: 'see the commit', blockers });
 
 function commitFile(name, content) {
-  writeFileSync(name, content);
+  if (content !== null) writeFileSync(name, content);
   const git = (...args) =>
     execFileSync('git', ['-c', 'user.email=agent@e2e', '-c', 'user.name=e2e agent', ...args], {
       stdio: 'ignore',
@@ -122,7 +125,14 @@ async function main() {
     return;
   }
 
-  commitFile(fileName, `${mode}\n`);
+  if (mode === 'append') {
+    appendFileSync('Makefile', `\n${appendName}:\n\techo ${appendName}\n`);
+    appendFileSync('PROJECT.md', `\n## ${appendName}\n\nAdded by ${appendName}.\n`);
+    commitFile('Makefile', null);
+    commitFile('PROJECT.md', null);
+  } else {
+    commitFile(fileName, `${mode}\n`);
+  }
   if (mode === 'review') {
     while (!existsSync('.e2e-go')) await sleep(300);
     rmSync('.e2e-go');

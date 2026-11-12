@@ -193,6 +193,45 @@ async function endWithoutResume(run: Run): Promise<void> {
 
 const pipeline = () => t.tickets as unknown as { handleRunCompleted(r: Run): Promise<void> };
 
+describe('M5 end to end through the pipeline (AC-5.1, AC-5.2)', () => {
+  it('AC-5.1 two tickets appending to the same Makefile both reach Done with no person involved', async () => {
+    const { project, a, b, runB } = await conflictingPair({
+      file: 'Makefile',
+      base: 'all:\n',
+      a: 'all:\n\nlint:\n\techo lint\n',
+      b: 'all:\n\ntest:\n\techo test\n',
+      buildable: true,
+    });
+    await finishTurn(runB);
+    await expect.poll(() => statusOf(b.id), { timeout: 15_000 }).toBe('done');
+    expect(await statusOf(a.id)).toBe('done');
+    const makefile = readFileSync(path.join(project.path, 'Makefile'), 'utf8');
+    expect(makefile).toContain('lint:');
+    expect(makefile).toContain('test:');
+    expect(await eventTypes(runB)).toContain('conflict_auto_resolved');
+    expect(followups(runB)).toBe('');
+  });
+
+  it('AC-5.2 an edit/edit conflict asks the agent and leaves its worktree and branch untouched', async () => {
+    const { project, b, runB } = await conflictingPair(EDIT_EDIT);
+    const mainBefore = head(project.path);
+    await finishTurn(runB);
+    await expect
+      .poll(() => noteOf(runB, 'conflict_resolution_requested'), { timeout: 15_000 })
+      .toHaveLength(1);
+    expect(await eventTypes(runB)).not.toContain('conflict_auto_resolved');
+    expect(
+      wgit(runB.worktreePath, 'rev-list', '--parents', '-n', '1', 'HEAD').trim().split(' '),
+    ).toHaveLength(2);
+    expect(() => wgit(runB.worktreePath, 'merge-base', '--is-ancestor', mainBefore, 'HEAD')).toThrow();
+    expect(wgit(runB.worktreePath, 'status', '--porcelain')).toBe('');
+    expect(head(project.path)).toBe(mainBefore);
+    expect(readFileSync(path.join(project.path, 'app.js'), 'utf8')).toContain('from-a');
+    await expect.poll(() => followups(runB), { timeout: 10_000 }).toContain('app.js');
+    expect(await statusOf(b.id)).not.toBe('done');
+  });
+});
+
 describe('M5 layer 3: escalation to an agent (AC-5.3, AC-5.4)', () => {
   it('AC-5.3 a heal whose re-run gate fails is undone and the agent gets the gate failure; nothing reaches main', async () => {
     const { project, b, runB } = await conflictingPair({

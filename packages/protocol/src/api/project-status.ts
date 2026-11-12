@@ -78,7 +78,12 @@ export const SyncWorktreeBody = z.object({
 });
 export type SyncWorktreeBody = z.input<typeof SyncWorktreeBody>;
 
-export const SyncWorktreeResolution = z.enum(['auto_resolved', 'agent_resolving', 'resolver_started', 'manual']);
+export const SyncWorktreeResolution = z.enum([
+  'auto_resolved',
+  'agent_resolving',
+  'resolver_started',
+  'manual',
+]);
 export type SyncWorktreeResolution = z.infer<typeof SyncWorktreeResolution>;
 
 export const SyncWorktreeResponse = z.object({
