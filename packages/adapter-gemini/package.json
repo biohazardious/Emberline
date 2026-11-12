@@ -1,7 +1,7 @@
 {
   "name": "@emberline/adapter-gemini",
   "license": "AGPL-3.0-or-later",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "Gemini CLI adapter: wrapped launch spec, usage-limit parsing from hooks and screen.",
