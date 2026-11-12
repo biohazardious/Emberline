@@ -952,30 +952,43 @@ export function registerProjectRoutes(
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
       // Open blocking review comments keep the gate closed for a person too, unless they say otherwise.
       const blocking = openBlockingCount(db, run.id);
-      const result = await syncWorktreeToMainWorkspace({
-        worktreePath: run.worktreePath,
-        mainWorkspacePath: project.path,
-        ticketKey: ticket?.key ?? null,
-        runId: run.id,
-        branch: run.branch,
-        // Only work that is not in main yet is held back: a no-op merge needs no override.
-        beforeMerge: () => {
-          if (blocking > 0 && !body.force) {
-            throw new HttpError(
-              409,
-              'review_blocked',
-              `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`,
-              { blocking },
-            );
+      const merge = () =>
+        syncWorktreeToMainWorkspace({
+          worktreePath: run.worktreePath,
+          mainWorkspacePath: project.path,
+          ticketKey: ticket?.key ?? null,
+          runId: run.id,
+          branch: run.branch,
+          // Only work that is not in main yet is held back: a no-op merge needs no override.
+          beforeMerge: () => {
+            if (blocking > 0 && !body.force) {
+              throw new HttpError(
+                409,
+                'review_blocked',
+                `${blocking} blocking review comment${blocking === 1 ? ' is' : 's are'} still open`,
+                { blocking },
+              );
+            }
+          },
+        }).catch((error: unknown) => {
+          // The person may still move the ticket on without a merge: say which ticket.
+          if (error instanceof HttpError && error.code === 'worktree_missing') {
+            throw new HttpError(409, error.code, error.message, { ticketId: ticket?.id ?? null });
           }
-        },
-      }).catch((error: unknown) => {
-        // The person may still move the ticket on without a merge: say which ticket.
-        if (error instanceof HttpError && error.code === 'worktree_missing') {
-          throw new HttpError(409, error.code, error.message, { ticketId: ticket?.id ?? null });
-        }
-        throw error;
-      });
+          throw error;
+        });
+      let result = await merge();
+      // A conflict takes the pipeline's ladder (M5): heal, the run's agent, a resolver run, a person.
+      if (!result.ok && result.conflicts.length > 0) {
+        const laddered = await tickets.conflictLadder.afterPersonMerge({
+          run,
+          first: result,
+          project,
+          ticketKey: ticket?.key ?? null,
+          merge,
+        });
+        result = { ...laddered.result, resolution: laddered.resolution };
+      }
       // A person merged the ticket's work (the Board's drag to Done): the issue write-back and
       // closeOnDone hear of it like of the pipeline's merge, and it ends an earlier hold. Work that
       // was already in main is no new merge (its sha would be main's HEAD, not this merge).

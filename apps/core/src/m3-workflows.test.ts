@@ -2,7 +2,16 @@
  * M3 guards (PROJECT.md §6, AC-3.x): the operator's board workflow through the REST API the web
  * views call, every response parsed with its protocol schema.
  */
-import { BulkTicketResult, CSRF_HEADER, Ticket, TicketExport } from '@emberline/protocol';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import {
+  BulkTicketResult,
+  CSRF_HEADER,
+  SyncWorktreeResponse,
+  Ticket,
+  TicketExport,
+} from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runs } from './db/schema.js';
@@ -193,5 +202,84 @@ describe('M3 board workflow (AC-3.x)', () => {
       expect(noCsrf.statusCode, `${method} ${url} without CSRF`).toBe(403);
     }
     expect((await board()).map((x) => [x.id, x.status])).toEqual([[ticket.id, 'backlog']]);
+  });
+});
+
+describe("AC-5.5 a person's close of a conflicting run takes the conflict ladder", () => {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', cwd, ...args], {
+      encoding: 'utf8',
+    });
+
+  /** A real repository whose run branch and main both changed `file` since they parted. */
+  async function conflictingRun(file: string, base: string, ours: string, theirs: string, session = false) {
+    const { project } = (await api('POST', '/api/projects', { name: 'M5 Close', initGit: false })).json() as {
+      project: { id: string; path: string };
+    };
+    projectId = project.id;
+    git(project.path, 'init', '-q', '-b', 'main');
+    writeFileSync(path.join(project.path, file), base);
+    git(project.path, 'add', '-A');
+    git(project.path, 'commit', '-q', '-m', 'init');
+    const ticket = await create({ title: 'Closed by hand', status: 'review' });
+    const branch = `emberline/${ticket.key.toLowerCase()}`;
+    const runId = seedRun(ticket.id, { live: false, branch });
+    const worktree = `${t.dir}/.worktrees/${ticket.id}`;
+    git(project.path, 'worktree', 'add', '-q', '-b', branch, worktree, 'HEAD');
+    writeFileSync(path.join(worktree, file), ours);
+    git(worktree, 'commit', '-q', '-am', 'run work');
+    writeFileSync(path.join(project.path, file), theirs);
+    git(project.path, 'commit', '-q', '-am', 'main moved');
+    // A resumable session: the run can still take the resolution prompt.
+    if (session) t.db.update(runs).set({ agentSessionId: 'agent-session' }).where(eq(runs.id, runId)).run();
+    return { project, ticket, runId };
+  }
+
+  const close = async (runId: string) => {
+    const res = await api('POST', `/api/projects/${projectId}/sync-worktree`, { runId });
+    expect(res.statusCode).toBe(200);
+    return SyncWorktreeResponse.parse(res.json());
+  };
+
+  it('additive conflicts are healed and merged: ok with `auto_resolved`', async () => {
+    const { project, runId } = await conflictingRun(
+      'Makefile',
+      'all:\n',
+      'all:\n\ntest:\n\techo test\n',
+      'all:\n\nlint:\n\techo lint\n',
+    );
+    const body = await close(runId);
+    expect(body).toMatchObject({ ok: true, resolution: 'auto_resolved', autoResolved: ['Makefile'] });
+    const merged = readFileSync(path.join(project.path, 'Makefile'), 'utf8');
+    expect(merged).toContain('lint:');
+    expect(merged).toContain('test:');
+  });
+
+  it("an edit/edit conflict goes to the run's agent: not ok, `agent_resolving`, the prompt sent", async () => {
+    const { runId } = await conflictingRun('app.js', 'one\n', 'from-run\n', 'from-main\n', true);
+    const sent: string[] = [];
+    (t.runs as unknown as { prompt(id: string, text: string): Promise<unknown> }).prompt = async (
+      _id,
+      text,
+    ) => {
+      sent.push(text);
+      return t.runs.getRun(runId);
+    };
+    const body = await close(runId);
+    expect(body).toMatchObject({ ok: false, resolution: 'agent_resolving', conflicts: ['app.js'] });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('conflicts in: app.js');
+  });
+
+  it("with every automatic layer spent the close says it is a person's: `manual`", async () => {
+    const { runId } = await conflictingRun('app.js', 'one\n', 'from-run\n', 'from-main\n');
+    for (const mainHead of ['h1', 'h2'])
+      t.runs.note(runId, 'conflict_resolver_started', {
+        runId: `r-${mainHead}`,
+        conflicts: ['app.js'],
+        mainHead,
+      });
+    const body = await close(runId);
+    expect(body).toMatchObject({ ok: false, resolution: 'manual', conflicts: ['app.js'] });
   });
 });

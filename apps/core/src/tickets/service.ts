@@ -36,12 +36,12 @@ import {
 import { and, asc, desc, eq, gt, inArray, max } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import type { AgentFileRejection } from '../factory/agent-files.js';
+import type { HealFailure } from '../factory/conflict-heal.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import { issueTombstones, projects, runEvents, runs, settings, tickets } from '../db/schema.js';
 import { conflict, HttpError, notFound } from '../errors.js';
 import {
   buildFactoryOrchestratorPrompt,
-  conflictResolutionPrompt,
   factoryTicketTitle,
   effectiveFactorySettings,
   getFactorySettings,
@@ -54,6 +54,7 @@ import {
   type TicketsFileHooks,
 } from '../factory/service.js';
 import { applyBulkTicketAction, isLiveRun } from './bulk.js';
+import { ConflictLadder } from './conflict-ladder.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
 import { columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
@@ -268,8 +269,7 @@ const COMPLETE_AGAIN = 'When finished, call `ticket_complete` again.';
 export const COMPLETION_NUDGE =
   'You stopped without calling `ticket_complete`. If the ticket is finished, call it now with a summary and handoff. If something blocks you, call it with `blockers`. If you need an answer from a person, ask the question plainly and stop.';
 
-/** Automatic conflict-resolution requests one run gets; each needs main to have moved since the last. */
-export const CONFLICT_ATTEMPT_CAP = 3;
+export { CONFLICT_ATTEMPT_CAP } from './conflict-ladder.js';
 
 /** Holds a gate notes with an automatic request for the agent's fix (`autoFix: true`, the request in `request`). */
 const FIX_REQUEST_HOLDS: readonly string[] = [
@@ -332,6 +332,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   private readonly upgradeCandidates: UpgradeCandidate[];
 
+  /** Layer 3 of M5: who resolves a conflicting merge (the run's session, a resolver run, a person). */
+  readonly conflictLadder: ConflictLadder;
+
   constructor(
     private readonly db: Db,
     private readonly runs: RunService,
@@ -342,6 +345,12 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     this.setMaxListeners(0);
     this.pipelineSettleMs = options.pipelineSettleMs ?? PIPELINE_SETTLE_MS;
     this.autoChainProjects = this.loadActiveChains();
+    this.conflictLadder = new ConflictLadder({
+      db,
+      runs,
+      scheduler,
+      completionReminder: (run, separator) => this.completionReminder(run, separator),
+    });
     this.upgradeCandidates = this.takeUpgradeCandidates();
     // A finished ticket's worktree previews are not needed any more: their stacks go, ports freed.
     this.on('moved', (ticket: Ticket) => {
@@ -702,7 +711,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     if (run.state !== 'done' || run.handedOffTo) return false;
     if (this.pipelineOutcome(run.id) !== null) return false;
     // A run still resolving its conflict is finished by its own pipeline when it stops again.
-    return !(!run.endedAt && this.conflictResolutionRequested(run.id));
+    return !(!run.endedAt && this.conflictLadder.requested(run.id));
   }
 
   /**
@@ -752,7 +761,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         this.resumedPipelines.has(run.id)
       )
         continue;
-      if (!run.endedAt && this.conflictResolutionRequested(run.id)) continue;
+      if (!run.endedAt && this.conflictLadder.requested(run.id)) continue;
       const outcome = this.pipelineOutcome(run.id);
       if (outcome === 'merged') continue;
       if (outcome === 'held' && this.pendingFixRequest(run) === null) continue;
@@ -798,7 +807,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         continue;
       }
       // A run still resolving its conflict is finished by its own pipeline when it stops again.
-      if (!latestRun.endedAt && this.conflictResolutionRequested(latestRun.id)) continue;
+      if (!latestRun.endedAt && this.conflictLadder.requested(latestRun.id)) continue;
       const outcome = this.pipelineOutcome(latestRun.id);
       // A gate left it here for a person (secret guard, build gate, a merge that failed): not
       // leftover work, and not a merge to retry on every dispatch. Unless the restart cut the pass off
@@ -1659,11 +1668,17 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       // took that one, not later ones); the rest (Done, a conflict, the session) is for that turn's pass.
       if (stale()) return;
       mergeBlocked = !merged.ok;
-      // The agent gets one attempt to resolve the conflict itself; it is still alive and keeps the
-      // ticket in Review. A later conflict (or a run that cannot take a prompt) falls through.
+      // Layer 3 (M5): the agent's own session, or a resolver run on the same branch, takes the
+      // conflict and the ticket stays in Review meanwhile. Otherwise the hold is for a person.
       if (!merged.ok && merged.autoFix) {
-        if (await this.requestConflictResolution(run, merged.conflicts, merged.mainHead, projectRow)) return;
-        // Undelivered: nobody is resolving it, so the hold is for a person after all.
+        const resolution = await this.conflictLadder.escalate({
+          run,
+          conflicts: merged.conflicts,
+          mainHead: merged.mainHead,
+          ...(merged.healFailure ? { healFailure: merged.healFailure } : {}),
+          project: projectRow,
+        });
+        if (resolution !== 'manual') return;
         this.runs.note(run.id, 'merge_failed', {
           summary: merged.summary,
           conflicts: merged.conflicts,
@@ -1764,7 +1779,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
   /**
    * Merges a finished run's worktree into the main workspace. Failures are recorded on the run
    * (`merge_failed`) instead of thrown; returns whether the work landed in main, and `autoFix` when
-   * the agent gets its one request to resolve the conflicts (the note says so: not yet a person's).
+   * the conflict ladder takes the conflicts (the note says so: not yet a person's).
    */
   private async mergeRunIntoMain(
     run: Run,
@@ -1778,17 +1793,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     summary: string;
     autoFix: boolean;
     mainHead: string | null;
+    healFailure?: HealFailure;
   } | null> {
     const res = await mergeRunBranch({ run, mainWorkspacePath, ticketKey, stale, heal });
     // Refused before merging, or nothing new to merge for a pass whose turn is over: nothing to note.
     if (res === null || (res.alreadyMerged && stale())) return null;
     // Main's head as the merge saw it, read under its lock: a change queued behind it does not count.
     const head = res.ok ? null : res.mainHead;
-    const autoFix =
-      !res.ok &&
-      res.conflicts.length > 0 &&
-      (!run.endedAt || run.resumable) &&
-      this.conflictAttemptAllowed(run.id, head);
+    const autoFix = !res.ok && res.conflicts.length > 0 && this.conflictLadder.plan(run, head) !== 'manual';
     this.runs.note(run.id, res.ok ? 'merged_to_main' : 'merge_failed', {
       summary: res.summary,
       // The merge commit in main (the issue write-back quotes it).
@@ -1800,7 +1812,14 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       ...(res.conflicts.length > 0 ? { conflicts: res.conflicts } : {}),
       ...(autoFix ? { autoFix } : {}),
     });
-    return { ok: res.ok, conflicts: res.conflicts, summary: res.summary, autoFix, mainHead: head };
+    return {
+      ok: res.ok,
+      conflicts: res.conflicts,
+      summary: res.summary,
+      autoFix,
+      mainHead: head,
+      ...(res.healFailure ? { healFailure: res.healFailure } : {}),
+    };
   }
 
   /**
@@ -1819,58 +1838,6 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
    */
   private stillHeld(runId: string): boolean {
     return stillHeld(this.db, runId);
-  }
-
-  /** The main heads of the run's delivered conflict requests, oldest first (null: an old event without one). */
-  private conflictAttempts(runId: string): Array<string | null> {
-    return this.db
-      .select({ payload: runEvents.payload })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.type, 'conflict_resolution_requested')))
-      .orderBy(asc(runEvents.id))
-      .all()
-      .map((row) => (row.payload as { mainHead?: string | null } | null)?.mainHead ?? null);
-  }
-
-  /** Whether the run already got an automatic conflict-resolution attempt (survives a restart). */
-  private conflictResolutionRequested(runId: string): boolean {
-    return this.conflictAttempts(runId).length > 0;
-  }
-
-  /**
-   * Whether the agent may be asked to resolve a conflict again: the first time, and later only when
-   * main moved since the last request (the conflict is a new one), up to CONFLICT_ATTEMPT_CAP.
-   */
-  private conflictAttemptAllowed(runId: string, mainHead: string | null): boolean {
-    const attempts = this.conflictAttempts(runId);
-    if (attempts.length >= CONFLICT_ATTEMPT_CAP) return false;
-    if (attempts.length === 0) return true;
-    const last = attempts[attempts.length - 1] ?? null;
-    return mainHead !== null && last !== mainHead;
-  }
-
-  /** Types the conflict follow-up into the live session; false when the run cannot take a prompt. */
-  private async requestConflictResolution(
-    run: Run,
-    conflicts: string[],
-    mainHead: string | null,
-    project: { path: string; defaultBranch: string },
-  ): Promise<boolean> {
-    // The merge goes into whatever the main workspace has checked out; the column is the fallback.
-    const branch = (await mainWorkspaceBranch(project.path)) ?? project.defaultBranch;
-    const text = `${conflictResolutionPrompt(branch, conflicts)}${this.completionReminder(run, ' ')}`;
-    try {
-      // prompt() resumes a session the idle sweep closed meanwhile (the checks can outlast its TTL).
-      await this.runs.prompt(run.id, text, { automatic: true });
-    } catch (error) {
-      this.runs.note(run.id, 'conflict_resolution_failed', {
-        conflicts,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
-    this.runs.note(run.id, 'conflict_resolution_requested', { conflicts, mainHead });
-    return true;
   }
 
   list(projectId: string): Ticket[] {
