@@ -36,6 +36,7 @@ Emberline is a custom project managed by the Emberline AI Coding Factory.
 
 - Document each component and how they communicate in PROJECT.md.
 - Keep build and test commands working from the repo root.
+- Agent-written factory files (`.emberline/new-tickets.json`, `tickets.json`, `roadmap-generated.json`, `brainstorm-suggestions.json`) are contracts in `packages/protocol/src/api/agent-files.ts` (`NewTicketsFile`, `GeneratedRoadmapFile`, `BrainstormSuggestionsFile`). Core parses them with `parseAgentFile` (`apps/core/src/factory/agent-files.ts`, `safeParse`, no casts); a file that fails is renamed to `*.rejected.json` and `TicketService` emits a `notice` (`ProjectNotice`, pushed as the `project_notice` event on `/api/events`) naming the first zod issue, which the web shows as a toast.
 
 ---
 
