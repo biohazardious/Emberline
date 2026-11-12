@@ -50,9 +50,9 @@ describe('the receive-pack command list', () => {
     [
       'a shallow line',
       [`shallow ${A}`, `${A} ${B} refs/heads/emberline/run-1\0 report-status\n`],
-      /Only branch updates/,
+      /Only branch and tag updates/,
     ],
-    ['a signed push', [`push-cert\0 report-status\n`], /Only branch updates/],
+    ['a signed push', [`push-cert\0 report-status\n`], /Only branch and tag updates/],
     ['nothing', [], /may update only/],
   ])('%s is refused', async (_name, lines, message) => {
     await expect(readPushCommands(Readable.from([list(...lines)]), plan)).rejects.toMatchObject({
@@ -148,6 +148,84 @@ describe('the receive-pack command list', () => {
     expect(() => checkPush([{ oldOid: A, newOid: B, ref: plan.ref }], create)).toThrow(
       'This push may only create refs/heads/emberline/run-1; the forge already has it.',
     );
+  });
+
+  it('refuses a delete the plan did not ask for, and passes exactly the planned one', () => {
+    const zero = '0'.repeat(40);
+    const old = 'a'.repeat(40);
+    expect(() =>
+      checkPush([{ oldOid: old, newOid: zero, ref: 'refs/heads/x' }], {
+        ref: 'refs/heads/x',
+        newOid: zero,
+        oldOid: old,
+      }),
+    ).toThrow('Deleting a branch is not allowed through Emberline.');
+    expect(() =>
+      checkPush([{ oldOid: old, newOid: zero, ref: 'refs/heads/x' }], {
+        ref: 'refs/heads/x',
+        newOid: zero,
+        oldOid: old,
+        allowDelete: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      checkPush([{ oldOid: 'b'.repeat(40), newOid: zero, ref: 'refs/heads/x' }], {
+        ref: 'refs/heads/x',
+        newOid: zero,
+        oldOid: old,
+        allowDelete: true,
+      }),
+    ).toThrow();
+  });
+
+  it('a planned delete passes only as that delete: not an update, not of a tag, not of a branch origin lacks', () => {
+    const del = { ref: 'refs/heads/x', newOid: Z, oldOid: A, allowDelete: true as const };
+    // allowDelete never lets an update through, and a delete plan never lets another value through.
+    expect(() => checkPush([{ oldOid: A, newOid: B, ref: 'refs/heads/x' }], del)).toThrow(
+      /only to the commit Emberline planned/,
+    );
+    expect(() =>
+      checkPush([{ oldOid: A, newOid: B, ref: 'refs/heads/x' }], {
+        ...plan,
+        ref: 'refs/heads/x',
+        allowDelete: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      checkPush([{ oldOid: A, newOid: Z, ref: 'refs/heads/x' }], {
+        ...plan,
+        ref: 'refs/heads/x',
+        allowDelete: true,
+      }),
+    ).toThrow('Deleting a branch is not allowed through Emberline.');
+    // A zero id of another length (sha256 vs sha1) is no planned delete.
+    expect(() =>
+      checkPush([{ oldOid: A, newOid: Z, ref: 'refs/heads/x' }], { ...del, newOid: '0'.repeat(64) }),
+    ).toThrow();
+    // Tags are never deleted, and a delete always names the commit it removes.
+    expect(() =>
+      checkPush([{ oldOid: A, newOid: Z, ref: 'refs/tags/v1' }], { ...del, ref: 'refs/tags/v1' }),
+    ).toThrow();
+    expect(() => checkPush([{ oldOid: Z, newOid: Z, ref: 'refs/heads/x' }], { ...del, oldOid: Z })).toThrow();
+  });
+
+  it('a tag is only ever created: a plan to move one is refused, whatever the command says', () => {
+    const tag = { ref: 'refs/tags/v1.0.0', newOid: B, oldOid: Z };
+    expect(() => checkPush([{ oldOid: Z, newOid: B, ref: 'refs/tags/v1.0.0' }], tag)).not.toThrow();
+    expect(() => checkPush([{ oldOid: A, newOid: B, ref: 'refs/tags/v1.0.0' }], tag)).toThrow(
+      'This push may only create refs/tags/v1.0.0; the forge already has it.',
+    );
+    expect(() =>
+      checkPush([{ oldOid: A, newOid: B, ref: 'refs/tags/v1.0.0' }], { ...tag, oldOid: A }),
+    ).toThrow('A tag is only ever created through Emberline, never moved or deleted.');
+    // Only branches and tags: no other namespace, even when planned.
+    expect(() =>
+      checkPush([{ oldOid: Z, newOid: B, ref: 'refs/notes/x' }], {
+        ref: 'refs/notes/x',
+        newOid: B,
+        oldOid: Z,
+      }),
+    ).toThrow(/only a branch or a tag/);
   });
 
   it('a stop signal ends the wait for a command list', async () => {

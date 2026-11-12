@@ -18,7 +18,7 @@ import {
   type GatewayOutcome,
   type GitGateway,
 } from './gateway.js';
-import { oldValueRefusal } from './receive-pack.js';
+import { oldValueRefusal, type PushPlan } from './receive-pack.js';
 import { GitGatewayError } from './upstream.js';
 
 const MINUTE = 60_000;
@@ -111,6 +111,64 @@ export async function gatewayRemoteHead(
   branch: string,
 ): Promise<string | null> {
   return (await remoteHeads(r, cwd, branch)).find((head) => head.name === branch)?.oid ?? null;
+}
+
+/**
+ * Whether `ref` is a branch (`refs/heads/<name>`) or a tag (`refs/tags/<name>`) with a name git would
+ * accept (`git check-ref-format`'s rules) and that no git argument could misread: no `:` (a refspec's
+ * separator), no leading `-`, no `..`. Null for anything else; Emberline pushes and reads no other ref.
+ */
+export function refKind(ref: string): 'branch' | 'tag' | null {
+  const m = /^refs\/(heads|tags)\/(.+)$/.exec(ref);
+  const name = m?.[2];
+  if (!m || !name || ref.length > 1024) return null;
+  if (
+    name === '@' ||
+    /^[-/]/.test(name) ||
+    /[./]$/.test(name) ||
+    /\.\.|\/\/|@\{/.test(name) ||
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u0020\u007f~^:?*[\\]/.test(name) ||
+    name.split('/').some((part) => part.startsWith('.') || part.endsWith('.lock'))
+  )
+    return null;
+  return m[1] === 'heads' ? 'branch' : 'tag';
+}
+
+const refRefused = (ref: string) =>
+  new GitGatewayError(
+    'ref_refused',
+    `Emberline pushes and reads only a branch or a tag on the forge, not ${JSON.stringify(ref.slice(0, 100))}.`,
+  );
+
+/**
+ * What exactly `ref` (a branch or a tag) names on the remote now: a commit, or an annotated tag's own
+ * object (never the commit it peels to); null when the remote has no such ref.
+ */
+export async function gatewayRemoteRef(
+  r: GatewayRemote,
+  repoPath: string,
+  ref: string,
+): Promise<string | null> {
+  if (!refKind(ref)) throw refRefused(ref);
+  const out = await r.gateway.run(
+    grant(r),
+    async (url) =>
+      (
+        await execGitFile([...gatewayGitArgs(r.gateway), 'ls-remote', '--', url, ref], {
+          cwd: repoPath,
+          timeout: MINUTE,
+          remote: 'gateway',
+        })
+      ).stdout,
+  );
+  // ls-remote matches a pattern by its tail (`refs/tags/v1` also matches `refs/tags/x/refs/tags/v1`)
+  // and adds an annotated tag's peeled `^{}` line: only the exact ref counts.
+  for (const line of out.split('\n')) {
+    const [oid, name] = line.split('\t');
+    if (name?.trim() === ref && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid?.trim() ?? '')) return oid!.trim();
+  }
+  return null;
 }
 
 /**
@@ -221,7 +279,23 @@ export async function gatewayPushBranch(
     if (!(await hasCommit(repoPath, remoteOid)) || !(await isAncestor(repoPath, remoteOid, newOid)))
       return 'rejected';
   }
-  const plan = { ref, newOid, oldOid: remoteOid ?? '0'.repeat(newOid.length) };
+  return gatewayPushRef(r, repoPath, { ref, newOid, oldOid: remoteOid ?? '0'.repeat(newOid.length) });
+}
+
+/**
+ * Pushes one planned ref change, never with tags it was not asked for: a branch update the caller
+ * checked is a fast-forward ({@link gatewayPushBranch}), a new tag (old value the zero id), or a
+ * branch delete the person asked for (`allowDelete`, new value the zero id). The push capability is
+ * bound to the plan, so the forge applies it only if the ref still holds `plan.oldOid`; a remote that
+ * moved since is `'rejected'`, as is a non-fast-forward or a tag the forge already has.
+ */
+export async function gatewayPushRef(
+  r: GatewayRemote,
+  repoPath: string,
+  plan: PushPlan,
+): Promise<'pushed' | 'rejected'> {
+  if (!refKind(plan.ref)) throw refRefused(plan.ref);
+  const refspec = /^0+$/.test(plan.newOid) ? `:${plan.ref}` : `${plan.newOid}:${plan.ref}`;
   try {
     return await r.gateway.run(grant(r, { service: 'git-receive-pack', push: plan }), async (url) => {
       try {
@@ -234,7 +308,7 @@ export async function gatewayPushBranch(
             '--no-follow-tags',
             '--',
             url,
-            `${newOid}:${ref}`,
+            refspec,
           ],
           { cwd: repoPath, timeout: 10 * MINUTE, remote: 'gateway' },
         );

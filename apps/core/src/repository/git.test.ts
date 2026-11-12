@@ -5,14 +5,21 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { localCommandExecutor, setCommandExecutor } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { addressSecrets, hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
+import { GitGateway } from '../git-gateway/gateway.js';
+import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   fetchBranchObjects,
   passwordGitWouldShow,
   pushBranch,
+  pushRef,
   remoteBranchHead,
+  remoteRefHead,
+  type RemoteAccess,
   remoteUrlForDisplay,
   shortGitError,
   validateRepositoryUrl,
@@ -580,5 +587,164 @@ describe('a `\\` in an http password, as git sends it', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+/**
+ * The push paths of the Git page (a new tag, a planned delete) against a real forge: through core's
+ * git gateway with the forge account, and with the runner's git straight to a public http URL.
+ */
+describe.each(['gateway', 'direct'] as const)('pushRef (%s)', (mode) => {
+  const TOKEN = 'push-ref-secret-token';
+  let forge: FakeForge | null = null;
+  let app: FastifyInstance | null = null;
+  let gateway: GitGateway | null = null;
+  let plain: { url: (repo: string) => string; close: () => Promise<void> } | null = null;
+  let projectPath: string;
+  let access: RemoteAccess;
+  let origin: string;
+
+  beforeEach(async () => {
+    if (mode === 'gateway') {
+      forge = await startFakeForge({ token: TOKEN });
+      origin = forge.bare('alice', 'app');
+      app = Fastify();
+      gateway = new GitGateway({ baseUrl: 'http://127.0.0.1:0', runnerHosts: ['localhost'] });
+      gateway.register(app);
+      gateway.baseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+      const url = `${forge.url}/alice/app.git`;
+      access = {
+        url,
+        remote: {
+          gateway,
+          projectId: 'p1',
+          url,
+          credential: { kind: 'http', http: { serverUrl: forge.url, username: 'alice', token: TOKEN } },
+        },
+      };
+    } else {
+      origin = path.join(dir, 'remote.git');
+      execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+      plain = await startGitHttp(dir);
+      access = { url: plain.url('remote.git'), remote: null };
+    }
+    projectPath = path.join(dir, 'project');
+    execFileSync('git', ['init', '-q', '-b', 'main', projectPath]);
+    git(projectPath, 'commit', '-q', '--allow-empty', '-m', 'one');
+    git(projectPath, 'push', '-q', origin, 'main');
+  });
+  afterEach(async () => {
+    setCommandExecutor(localCommandExecutor);
+    gateway?.dispose();
+    await app?.close();
+    await plain?.close();
+    await forge?.close();
+    forge = null;
+    gateway = null;
+    app = null;
+    plain = null;
+  });
+
+  it('pushes a new annotated tag once and reports an existing one as rejected', async () => {
+    git(projectPath, 'tag', '-a', 'v1.0.0', '-m', 'v1.0.0');
+    const tagOid = git(projectPath, 'rev-parse', 'refs/tags/v1.0.0');
+    expect(git(projectPath, 'cat-file', '-t', tagOid)).toBe('tag');
+    expect(await remoteRefHead(projectPath, access, 'refs/tags/v1.0.0')).toBeNull();
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/tags/v1.0.0', newOid: tagOid, expectOld: null }),
+    ).toBe('pushed');
+    expect(git(origin, 'rev-parse', 'refs/tags/v1.0.0')).toBe(tagOid);
+    expect(await remoteRefHead(projectPath, access, 'refs/tags/v1.0.0')).toBe(tagOid);
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/tags/v1.0.0', newOid: tagOid, expectOld: null }),
+    ).toBe('rejected');
+    // Moving the tag on origin is never attempted: it still names the first tag object.
+    git(projectPath, 'commit', '-q', '--allow-empty', '-m', 'two');
+    git(projectPath, 'tag', '-f', '-a', 'v1.0.0', '-m', 'moved');
+    const moved = git(projectPath, 'rev-parse', 'refs/tags/v1.0.0');
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/tags/v1.0.0', newOid: moved, expectOld: null }),
+    ).toBe('rejected');
+    expect(git(origin, 'rev-parse', 'refs/tags/v1.0.0')).toBe(tagOid);
+    // Only the tag went: no branch moved with it.
+    expect(git(origin, 'rev-parse', 'refs/heads/main')).toBe(git(projectPath, 'rev-parse', 'main~1'));
+  });
+
+  it('deletes a remote branch only while it still holds the expected commit', async () => {
+    const old = git(projectPath, 'rev-parse', 'HEAD');
+    git(projectPath, 'push', '-q', origin, `${old}:refs/heads/feature`);
+    git(projectPath, 'commit', '-q', '--allow-empty', '-m', 'other');
+    const other = git(projectPath, 'rev-parse', 'HEAD');
+    expect(await remoteRefHead(projectPath, access, 'refs/heads/feature')).toBe(old);
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/heads/feature', newOid: null, expectOld: other }),
+    ).toBe('rejected');
+    expect(git(origin, 'rev-parse', 'refs/heads/feature')).toBe(old);
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/heads/feature', newOid: null, expectOld: old }),
+    ).toBe('pushed');
+    expect(git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')).toBe('');
+    expect(await remoteRefHead(projectPath, access, 'refs/heads/feature')).toBeNull();
+    // Gone already: nothing to compare against, so nothing is deleted.
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/heads/feature', newOid: null, expectOld: old }),
+    ).toBe('rejected');
+    expect(git(origin, 'rev-parse', 'refs/heads/main')).toBe(git(projectPath, 'rev-parse', 'main~1'));
+  });
+
+  /** Runs `move` once, right before the runner's `git push`: origin changes after Emberline read it. */
+  const beforePush = (move: () => void) =>
+    setCommandExecutor(async (request) => {
+      if (request.args.includes('push')) move();
+      return localCommandExecutor(request);
+    });
+
+  it('a branch that moves between the check and the delete is kept: the delete is compared, never forced', async () => {
+    const old = git(projectPath, 'rev-parse', 'HEAD');
+    git(projectPath, 'push', '-q', origin, `${old}:refs/heads/feature`);
+    git(projectPath, 'commit', '-q', '--allow-empty', '-m', 'pushed from elsewhere');
+    const elsewhere = git(projectPath, 'rev-parse', 'HEAD');
+    git(projectPath, 'push', '-q', origin, `${elsewhere}:refs/heads/elsewhere`); // origin has the commit
+    beforePush(() => git(origin, 'update-ref', 'refs/heads/feature', elsewhere, old));
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/heads/feature', newOid: null, expectOld: old }),
+    ).toBe('rejected');
+    expect(git(origin, 'rev-parse', 'refs/heads/feature')).toBe(elsewhere);
+  });
+
+  it('a tag someone else creates between the check and the push is kept: the push only ever creates', async () => {
+    git(projectPath, 'tag', '-a', 'v2.0.0', '-m', 'ours');
+    const ours = git(projectPath, 'rev-parse', 'refs/tags/v2.0.0');
+    const theirs = git(origin, 'rev-parse', 'refs/heads/main');
+    beforePush(() => git(origin, 'update-ref', 'refs/tags/v2.0.0', theirs, ''));
+    expect(
+      await pushRef(projectPath, access, { ref: 'refs/tags/v2.0.0', newOid: ours, expectOld: null }),
+    ).toBe('rejected');
+    expect(git(origin, 'rev-parse', 'refs/tags/v2.0.0')).toBe(theirs);
+  });
+
+  it('refuses anything but a new tag or a planned branch delete, before reaching origin', async () => {
+    const oid = git(projectPath, 'rev-parse', 'HEAD');
+    for (const push of [
+      { ref: 'refs/heads/main', newOid: oid, expectOld: null }, // a branch update: pushBranch's job
+      { ref: 'refs/heads/main', newOid: null, expectOld: null }, // a delete that names no commit
+      { ref: 'refs/tags/v1', newOid: oid, expectOld: oid }, // moving a tag
+      { ref: 'refs/tags/v1', newOid: null, expectOld: oid }, // deleting a tag
+      { ref: 'refs/notes/commits', newOid: oid, expectOld: null },
+      { ref: 'refs/heads/a:refs/heads/b', newOid: null, expectOld: oid },
+      { ref: 'refs/tags/../heads/main', newOid: oid, expectOld: null },
+      { ref: 'refs/tags/v1', newOid: 'HEAD', expectOld: null },
+      { ref: 'refs/tags/v1', newOid: 'c'.repeat(40), expectOld: null }, // no such object here
+      { ref: 'refs/tags/v1', newOid: git(projectPath, 'rev-parse', 'HEAD^{tree}'), expectOld: null },
+    ]) {
+      const error = await pushRef(projectPath, access, push).catch((e: unknown) => e);
+      expect(error, JSON.stringify(push)).toBeInstanceOf(HttpError);
+      expect((error as HttpError).statusCode, JSON.stringify(push)).toBe(400);
+    }
+    for (const ref of ['refs/notes/commits', 'main', 'refs/heads/', 'refs/heads/-x', 'HEAD']) {
+      const error = await remoteRefHead(projectPath, access, ref).catch((e: unknown) => e);
+      expect((error as HttpError).statusCode, ref).toBe(400);
+    }
+    expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
   });
 });

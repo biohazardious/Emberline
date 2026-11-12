@@ -10,8 +10,11 @@ import {
   gatewayHttpCredential,
   gatewayFetchBranchObjects,
   gatewayPushBranch,
+  gatewayPushRef,
   gatewayRemoteBranches,
   gatewayRemoteHead,
+  gatewayRemoteRef,
+  refKind,
 } from '../git-gateway/remote-git.js';
 
 export const MAIN_MOVED_MESSAGE =
@@ -306,6 +309,39 @@ export async function remoteBranchHead(
   return null;
 }
 
+const refNotPushable = (ref: string) =>
+  badRequest(
+    `Emberline pushes and reads only a branch or a tag on origin, not ${JSON.stringify(ref.slice(0, 100))}.`,
+  );
+
+/**
+ * What exactly `ref` (`refs/heads/<branch>` or `refs/tags/<tag>`) names on the remote: a commit, or an
+ * annotated tag's own object; null when the remote has no such ref. {@link remoteBranchHead} for any
+ * branch or tag.
+ */
+export async function remoteRefHead(
+  mainPath: string,
+  access: RemoteAccess,
+  ref: string,
+): Promise<string | null> {
+  if (!refKind(ref)) throw refNotPushable(ref);
+  if (access.remote) return gatewayRemoteRef(access.remote, mainPath, ref);
+  assertSupportedRemote(access.url);
+  const out = (
+    await execGitFile([...NO_SUBMODULES, 'ls-remote', '--', access.url, ref], {
+      cwd: mainPath,
+      timeout: 20_000,
+      remote: true,
+    })
+  ).stdout;
+  // Only the exact ref: ls-remote matches a pattern by its tail and adds a tag's peeled `^{}` line.
+  for (const line of out.split('\n')) {
+    const [oid, name] = line.split('\t');
+    if (name?.trim() === ref && OID.test(oid?.trim() ?? '')) return oid!.trim();
+  }
+  return null;
+}
+
 const hasRealCommit = (cwd: string, oid: string) =>
   realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(() => true, unlessRunnerUnavailable(false));
 
@@ -425,6 +461,92 @@ export async function pushBranch(
       if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
       throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
     }
+  }
+}
+
+/**
+ * Pushes one ref change other than a branch update ({@link pushBranch} does those), never forced:
+ * - a new tag (`refs/tags/<t>`, `expectOld: null`): `'rejected'` when origin has that tag already,
+ *   whatever it names; Emberline never moves a tag. The push is a create, so a racing creator wins and
+ *   this one is refused.
+ * - a branch delete the person asked for (`refs/heads/<b>`, `newOid: null`): only while origin's
+ *   branch still names `expectOld` (a compare-and-delete), else `'rejected'`.
+ * Writes nothing locally; anything else is a 400 before origin is reached.
+ */
+export async function pushRef(
+  mainPath: string,
+  access: RemoteAccess,
+  push: { ref: string; newOid: string | null; expectOld: string | null },
+): Promise<'pushed' | 'rejected'> {
+  const { ref, newOid, expectOld } = push;
+  const kind = refKind(ref);
+  if (!kind) throw refNotPushable(ref);
+  if (newOid !== null && !OID.test(newOid)) throw badRequest('A push names the new object by its full id.');
+  if (expectOld !== null && !OID.test(expectOld))
+    throw badRequest('A push names the expected object by its full id.');
+  const tag = kind === 'tag' && newOid !== null && expectOld === null;
+  const remove = kind === 'branch' && newOid === null && expectOld !== null;
+  if (!tag && !remove) {
+    throw badRequest(
+      kind === 'tag'
+        ? 'Emberline only creates a tag on origin; it never moves or deletes one.'
+        : 'Emberline deletes a branch on origin only from the commit it expects there; it updates a branch only as a fast-forward push.',
+    );
+  }
+  if (tag) {
+    // A release tag is annotated (a tag object), a lightweight one names a commit; nothing else is pushed.
+    const type = await realGit(['cat-file', '-t', newOid!], mainPath).then(
+      (r) => r.stdout.trim(),
+      unlessRunnerUnavailable(''),
+    );
+    if (type !== 'tag' && type !== 'commit')
+      throw badRequest(`${ref} names no tag or commit in this project's repository.`);
+  }
+  const known = accessSecrets(access);
+  if (!access.remote) assertSupportedRemote(access.url);
+  try {
+    // A tag origin has, or a branch that moved or is gone: nothing to push, whatever git would do.
+    const current = await remoteRefHead(mainPath, access, ref);
+    if (tag ? current !== null : current !== expectOld) return 'rejected';
+    if (access.remote) {
+      return await gatewayPushRef(
+        access.remote,
+        mainPath,
+        tag
+          ? { ref, newOid: newOid!, oldOid: '0'.repeat(newOid!.length) }
+          : { ref, newOid: '0'.repeat(expectOld!.length), oldOid: expectOld!, allowDelete: true },
+      );
+    }
+    await execGitFile(
+      [
+        ...NO_SUBMODULES,
+        'push',
+        '--porcelain',
+        '--no-recurse-submodules',
+        '--no-follow-tags',
+        // The only lease Emberline uses: the delete applies only while origin's branch is `expectOld`.
+        // It is a compare-and-delete, not a force; a delete is no fast-forward either way.
+        ...(remove ? [`--force-with-lease=${ref}:${expectOld}`] : []),
+        '--',
+        access.url,
+        remove ? `:${ref}` : `${newOid}:${ref}`,
+      ],
+      { cwd: mainPath, timeout: 60_000, remote: true },
+    );
+    return 'pushed';
+  } catch (error) {
+    if (isRunnerUnavailable(error)) throw error; // not a failed push: the runner could not run it
+    if (error instanceof HttpError) throw error;
+    if (access.remote) {
+      throw (
+        sshSetupError(error, 'Push failed: ') ??
+        new HttpError(409, 'push_failed', `Push failed: ${describeGitError(error, known)}`)
+      );
+    }
+    const out = `${String((error as { stdout?: unknown }).stdout ?? '')}\n${String((error as { stderr?: unknown }).stderr ?? '')}`;
+    // `[rejected]` also covers a lease that no longer holds (stale info) and a tag that appeared since.
+    if (/\[rejected\]|non-fast-forward|fetch first/.test(out)) return 'rejected';
+    throw new HttpError(409, 'push_failed', `Push failed: ${shortGitError(error, known)}`);
   }
 }
 

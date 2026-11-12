@@ -1,8 +1,10 @@
 /**
  * The only git data core reads: the pkt-line command list at the start of a receive-pack request
  * (`<old> <new> <ref>\0<caps>`, …, flush). A push through the gateway may update exactly the planned
- * ref from exactly the commit Emberline checked to exactly the planned commit; no deletes, no other or extra refs, no shallow or signed
+ * ref from exactly the commit Emberline checked to exactly the planned commit; no other or extra refs, no shallow or signed
  * pushes, and only the capabilities git itself needs (no push options, which forge hooks act on).
+ * The ref is a branch or a tag. A tag is only ever created, never moved or deleted. A branch is
+ * deleted only when the plan says so (`allowDelete`), and then only from the commit Emberline read.
  * The pack after the flush is forwarded unread.
  */
 import { Readable } from 'node:stream';
@@ -22,6 +24,11 @@ export interface PushPlan {
    * applies the update only if the ref still holds it, so the push can never discard commits.
    */
   oldOid: string;
+  /**
+   * The person asked for this branch to be deleted on the forge: `newOid` is the zero id, and the
+   * forge deletes the ref only if it still holds `oldOid` (a compare-and-delete). Never for a tag.
+   */
+  allowDelete?: true;
 }
 
 export const MAX_COMMAND_LIST_BYTES = 64 * 1024;
@@ -60,18 +67,41 @@ export function parseCommandList(buf: Buffer): { commands: PushCommand[]; length
     if (nul >= 0) line = line.slice(0, nul);
     const m = COMMAND.exec(line.replace(/\n$/, ''));
     if (!m)
-      throw refused('Only branch updates may be pushed through Emberline (no shallow or signed pushes).');
+      throw refused(
+        'Only branch and tag updates may be pushed through Emberline (no shallow or signed pushes).',
+      );
     if (capabilities !== null) checkCapabilities(capabilities);
     commands.push({ oldOid: m[1]!, newOid: m[2]!, ref: m[3]! });
     pos += length;
   }
 }
 
+const ZERO = /^0+$/;
+
+/** A plan core could never mean is refused whatever the push says: defence in depth for its callers. */
+function checkPlan(plan: PushPlan): void {
+  const tag = plan.ref.startsWith('refs/tags/');
+  if (!tag && !plan.ref.startsWith('refs/heads/'))
+    throw refused(`This push may update only a branch or a tag, not ${plan.ref}.`);
+  if (tag && (!ZERO.test(plan.oldOid) || ZERO.test(plan.newOid) || plan.allowDelete))
+    throw refused('A tag is only ever created through Emberline, never moved or deleted.');
+}
+
+/** Whether the plan is a delete the person asked for: from a real commit, to the zero id of the same length. */
+const plannedDelete = (plan: PushPlan, newOid: string) =>
+  plan.allowDelete === true &&
+  ZERO.test(plan.newOid) &&
+  plan.newOid.length === newOid.length &&
+  !ZERO.test(plan.oldOid) &&
+  plan.oldOid.length === newOid.length;
+
 export function checkPush(commands: PushCommand[], plan: PushPlan): void {
+  checkPlan(plan);
   const [only] = commands;
   if (commands.length !== 1 || !only || only.ref !== plan.ref)
     throw refused(`This push may update only ${plan.ref}.`);
-  if (/^0+$/.test(only.newOid)) throw refused('Deleting a branch is not allowed through Emberline.');
+  if (ZERO.test(only.newOid) && !plannedDelete(plan, only.newOid))
+    throw refused('Deleting a branch is not allowed through Emberline.');
   if (only.newOid !== plan.newOid) {
     throw refused(
       `This push may set ${plan.ref} only to the commit Emberline planned (${plan.newOid.slice(0, 12)}).`,
@@ -82,7 +112,7 @@ export function checkPush(commands: PushCommand[], plan: PushPlan): void {
 
 /** Why a push whose old value is not the planned one is refused (the remote moved, or a forged list). */
 export function oldValueRefusal(plan: PushPlan): string {
-  return /^0+$/.test(plan.oldOid)
+  return ZERO.test(plan.oldOid)
     ? `This push may only create ${plan.ref}; the forge already has it.`
     : `This push may update ${plan.ref} only from the commit Emberline checked (${plan.oldOid.slice(0, 12)}).`;
 }
