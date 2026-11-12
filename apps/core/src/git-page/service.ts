@@ -28,7 +28,7 @@ import {
   setWorkingBranch,
 } from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
-import { DraftJobs, draftReleaseNotes } from './release-notes.js';
+import { currentReleaseDraft, DraftJobs, draftReleaseNotes } from './release-notes.js';
 import { fetchOrigin, HealJobs, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
 
 /** What the Git page needs from the rest of core; later actions add to this. */
@@ -143,6 +143,12 @@ export class GitPageService {
   /** Makes the background heals and drafts give up, and waits for them at most `timeoutMs`. */
   async stop(timeoutMs?: number): Promise<void> {
     await Promise.all([this.heals.stop(timeoutMs), this.drafts.stop(timeoutMs)]);
+  }
+
+  /** The stored release draft; one whose job is gone reads as failed. */
+  releaseDraft(projectId: string): ReleaseDraft | null {
+    this.project(projectId);
+    return currentReleaseDraft({ db: this.db, jobs: this.drafts }, projectId);
   }
 
   /** Has an agent draft the release notes and the version bump; the draft is stored for the release. */

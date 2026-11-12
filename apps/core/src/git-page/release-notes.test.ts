@@ -7,7 +7,7 @@ import { readRepositorySettings } from '../db/project-settings.js';
 import { tickets } from '../db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from '../test-utils.js';
 import { GitPageService } from './service.js';
-import { buildReleaseNotesPrompt, suggestVersion } from './release-notes.js';
+import { buildReleaseNotesPrompt, MAX_PROMPT_CHARS, suggestVersion } from './release-notes.js';
 
 let t: TestApp;
 let cookie: string;
@@ -163,6 +163,28 @@ describe('release notes draft', () => {
     await svc.idle();
     expect(stored()?.status).toBe('drafting');
   });
+
+  it('a drafting draft that no job owns reads as failed', async () => {
+    let release!: () => void;
+    stubAgent(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(answer({ bump: 'patch', notes: 'n' }));
+        }),
+    );
+    const svc = service();
+    await svc.draftRelease(projectId);
+    expect(svc.releaseDraft(projectId)?.status).toBe('drafting');
+    // As after a restart: the stored draft is still drafting, but this service has no job for it.
+    expect(service().releaseDraft(projectId)).toMatchObject({
+      status: 'failed',
+      error: 'The draft was interrupted; draft again.',
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    release();
+    await svc.idle();
+    expect(svc.releaseDraft(projectId)?.status).toBe('ready');
+  });
 });
 
 describe('buildReleaseNotesPrompt', () => {
@@ -172,5 +194,22 @@ describe('buildReleaseNotesPrompt', () => {
     expect(prompt).toContain(
       'Choose bump: major for breaking changes, minor for new features, patch otherwise.',
     );
+  });
+
+  it('keeps the prompt within one argument, saying what was left out', () => {
+    const commits = Array.from({ length: 300 }, (_, i) => ({
+      sha: String(i),
+      subject: `feat: change ${i}\nsecond line`,
+      body: 'x'.repeat(2_000),
+    }));
+    const prompt = buildReleaseNotesPrompt(
+      { baseTag: 'v1.0.0', head: 'h', commits, omittedCommits: 12, diffstat: 'd'.repeat(20_000) },
+      [{ key: 'EMB-1', title: 'two\nlines' }],
+    );
+    expect(prompt.length).toBeLessThan(MAX_PROMPT_CHARS);
+    expect(prompt).toContain('older commits omitted');
+    expect(prompt).toContain('bodies were left out');
+    expect(prompt).toContain('EMB-1: two lines');
+    expect(prompt).toContain('feat: change 0 second line');
   });
 });
