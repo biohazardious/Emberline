@@ -1,10 +1,10 @@
 import type { RepositoryStatus, UpdateRepositoryBody } from '@emberline/protocol';
 import { type FormEvent, useEffect, useState } from 'react';
-import { keepPushedText } from '../repository';
+import { hasWorkingBranch, keepPushedText } from '../repository';
 
 type Save = (key: string, patch: UpdateRepositoryBody) => void;
 
-/** Project settings → Repository: where Keep main pushed pushes main. */
+/** Project settings → Repository: where Keep pushed: where the factory's merges go. */
 export function PushTargetFields({ s, busy, onSave }: { s: RepositoryStatus; busy: boolean; onSave: Save }) {
   const [branch, setBranch] = useState(s.integrationBranch);
   useEffect(() => setBranch(s.integrationBranch), [s.integrationBranch]);
@@ -12,9 +12,11 @@ export function PushTargetFields({ s, busy, onSave }: { s: RepositoryStatus; bus
     e.preventDefault();
     onSave('push-target', { pushTarget: 'integration_branch', integrationBranch: branch.trim() });
   };
+  // The working branch is what gets pushed, so there is no target to choose.
+  if (hasWorkingBranch(s)) return <p className="muted small">{keepPushedText(s)}</p>;
   return (
     <fieldset className="repo-form" style={{ border: 'none', padding: 0, margin: 0 }}>
-      <legend className="muted small">Keep main pushed pushes to</legend>
+      <legend className="muted small">Keep pushed pushes to</legend>
       <label className="review-checkbox-label">
         <input
           type="radio"

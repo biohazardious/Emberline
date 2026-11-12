@@ -197,6 +197,7 @@ export class RepositoryService {
       keepMainPushed: settings.keepMainPushed,
       pushTarget: effectivePushTarget(settings),
       integrationBranch: settings.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH,
+      workingBranch: workingBranchOf(settings, row.defaultBranch),
       keepPushedBranch: keepPushedTarget(settings, row.defaultBranch),
       lastMainPushError: settings.lastMainPushError,
       commitIdentity: settings.commitIdentity,

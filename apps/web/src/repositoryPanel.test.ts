@@ -18,6 +18,7 @@ const status = {
   keepMainPushed: false,
   pushTarget: 'integration_branch',
   integrationBranch: 'emberline/integration',
+  workingBranch: 'main',
   keepPushedBranch: 'emberline/integration',
   commitIdentity: null,
   factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
@@ -46,8 +47,25 @@ describe('static render', () => {
     expect(html).toContain('Push main to origin');
     // Commit identity, Connect and Create are there (only with the cached status) and start closed.
     expect(html.match(/<details class="repo-form">/g)).toHaveLength(3);
-    expect(html).toContain('Keep main pushed pushes to');
-    expect(html).toContain('Keep main pushed pushes main to emberline/integration after each merge');
+    expect(html).toContain('Keep pushed pushes to');
+    expect(html).toContain('Keep pushed pushes main to emberline/integration after each merge');
+    expect(html).toContain('Push main to origin');
+    expect(html).toContain('href="/projects/p1/git"');
+    expect(html).toContain('Open the Git page');
+  });
+
+  it('follows the working branch: no push target, no Push main, a line pointing to the Git page', () => {
+    const html = renderStatic(createElement(RepositoryPanel, { project }), {
+      '/api/projects/p1/repository': { ...status, workingBranch: 'develop', keepPushedBranch: 'develop' },
+      '/api/forge/accounts': accounts,
+    });
+    expect(html).toContain(
+      'Pushes develop after each factory merge; main is pushed by Promote and Release on the Git page.',
+    );
+    expect(html).not.toContain('Keep pushed pushes to');
+    expect(html).not.toContain('An integration branch');
+    expect(html).not.toContain('Push main to origin');
+    expect(html).toContain('Keep pushed');
   });
 
   it('renders empty feedback regions before any result (A-10)', () => {

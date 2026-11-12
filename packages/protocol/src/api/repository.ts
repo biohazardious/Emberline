@@ -72,7 +72,9 @@ export const RepositoryStatus = z.object({
   pushTarget: MainPushTarget,
   /** The integration branch's name (used when pushTarget is `integration_branch`). */
   integrationBranch: z.string(),
-  /** The remote branch Keep main pushed pushes to: defaultBranch or integrationBranch. */
+  /** The branch the factory works on: the default branch unless a working branch is set. */
+  workingBranch: z.string(),
+  /** The remote branch Keep pushed pushes to: the working branch, else defaultBranch or integrationBranch. */
   keepPushedBranch: z.string(),
   /**
    * The last automatic push's failure (redacted), a push to keepPushedBranch; cleared by any

@@ -37,6 +37,7 @@ const base: RepositoryStatus = {
   keepMainPushed: false,
   pushTarget: 'integration_branch',
   integrationBranch: 'emberline/integration',
+  workingBranch: 'main',
   keepPushedBranch: 'emberline/integration',
   lastMainPushError: null,
   commitIdentity: null,
@@ -125,10 +126,16 @@ describe('pushMainBlocked and lastPushText', () => {
   });
 
   it('names the branch Keep main pushed pushes to', () => {
-    expect(keepPushedText(base)).toMatch(/^Keep main pushed pushes main to emberline\/integration after/);
+    expect(keepPushedText(base)).toMatch(/^Keep pushed pushes main to emberline\/integration after/);
     expect(keepPushedText(base)).toContain('you merge that branch into main on the forge');
     expect(keepPushedText({ ...base, pushTarget: 'default_branch', keepPushedBranch: 'main' })).toBe(
-      'Keep main pushed pushes main to main after each merge. It never forces a push.',
+      'Keep pushed pushes main to main after each merge. It never forces a push.',
+    );
+  });
+
+  it('names the working branch, and the Git page for main, when one is set', () => {
+    expect(keepPushedText({ ...base, workingBranch: 'develop', keepPushedBranch: 'develop' })).toBe(
+      'Pushes develop after each factory merge; main is pushed by Promote and Release on the Git page.',
     );
   });
 });

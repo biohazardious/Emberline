@@ -16,6 +16,7 @@ import {
   accountText,
   connectPrefill,
   createRepoEnabled,
+  hasWorkingBranch,
   lastPushText,
   mainStateText,
   mainTipText,
@@ -171,6 +172,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
   const lastPush = s ? lastPushText(s) : null;
   const credentials = s ? originCredentialsText(s) : null;
   const tip = s ? mainTipText(s) : null;
+  const separate = s ? hasWorkingBranch(s) : false;
 
   return (
     <section className="repo-block" aria-labelledby="repository-title">
@@ -234,16 +236,19 @@ export function RepositoryPanel({ project }: { project: Project }) {
       {s?.isGitRepo && (
         <>
           <div className="repo-actions">
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy !== null || blocked !== null}
-              aria-describedby={error?.form === 'actions' ? 'repo-actions-error' : undefined}
-              title={blocked ?? undefined}
-              onClick={() => void act('push', () => api<RepositoryStatus>(`${base}/push-main`, 'POST'))}
-            >
-              {busy === 'push' ? 'Pushing…' : 'Push main to origin'}
-            </button>
+            {/* With a working branch the main workspace is on it, which Push main refuses: main is pushed by Promote and Release. */}
+            {!separate && (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={busy !== null || blocked !== null}
+                aria-describedby={error?.form === 'actions' ? 'repo-actions-error' : undefined}
+                title={blocked ?? undefined}
+                onClick={() => void act('push', () => api<RepositoryStatus>(`${base}/push-main`, 'POST'))}
+              >
+                {busy === 'push' ? 'Pushing…' : 'Push main to origin'}
+              </button>
+            )}
             <label className="review-checkbox-label">
               <input
                 type="checkbox"
@@ -255,7 +260,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
                   )
                 }
               />
-              Keep main pushed
+              Keep pushed
             </label>
             <button
               type="button"
@@ -266,8 +271,17 @@ export function RepositoryPanel({ project }: { project: Project }) {
               {busy === 'refresh' ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-          {blocked !== null && <p className="muted small">{blocked}</p>}
-          {blocked === null && tip && <p className="muted small">Pushes {tip}.</p>}
+          {separate ? (
+            <p className="muted small">{s.defaultBranch} is pushed by Promote and Release on the Git page.</p>
+          ) : (
+            <>
+              {blocked !== null && <p className="muted small">{blocked}</p>}
+              {blocked === null && tip && <p className="muted small">Pushes {tip}.</p>}
+            </>
+          )}
+          <p className="small">
+            <Link href={`/projects/${project.id}/git`}>Open the Git page</Link>
+          </p>
           <PushTargetFields s={s} busy={busy !== null} onSave={saveSettings} />
           <p className="muted small">Origin is read when you press Refresh, connect, create or push.</p>
           <CommitIdentityFields s={s} busy={busy !== null} onSave={saveSettings} />

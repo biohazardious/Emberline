@@ -58,11 +58,16 @@ export function lastPushText(s: RepositoryStatus): string | null {
   return s.lastMainPushError ? `Main isn't pushed to ${s.keepPushedBranch}: ${s.lastMainPushError}` : null;
 }
 
-/** Where Keep main pushed sends main, in one line. */
+/** Whether the factory works on a branch other than the default branch. */
+export const hasWorkingBranch = (s: RepositoryStatus): boolean => s.workingBranch !== s.defaultBranch;
+
+/** Where Keep pushed sends the factory's merges, in one line. */
 export function keepPushedText(s: RepositoryStatus): string {
+  if (hasWorkingBranch(s))
+    return `Pushes ${s.workingBranch} after each factory merge; ${s.defaultBranch} is pushed by Promote and Release on the Git page.`;
   return s.pushTarget === 'integration_branch'
-    ? `Keep main pushed pushes main to ${s.keepPushedBranch} after each merge; you merge that branch into ${s.defaultBranch} on the forge. It is Emberline's branch: pushes only fast-forward it and are never forced.`
-    : `Keep main pushed pushes main to ${s.keepPushedBranch} after each merge. It never forces a push.`;
+    ? `Keep pushed pushes main to ${s.keepPushedBranch} after each merge; you merge that branch into ${s.defaultBranch} on the forge. It is Emberline's branch: pushes only fast-forward it and are never forced.`
+    : `Keep pushed pushes main to ${s.keepPushedBranch} after each merge. It never forces a push.`;
 }
 
 /** The commit identity in `Name <email>` form. */

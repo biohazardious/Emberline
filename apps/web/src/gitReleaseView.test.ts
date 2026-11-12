@@ -233,6 +233,62 @@ describe('the release tab', () => {
     expect(container.querySelector('textarea')!.value).toBe('Fresh');
   });
 
+  it('does not overwrite an edited version with a draft that finishes later', async () => {
+    const { container, rerender } = await show(status());
+    await typeInto(container.querySelector('input[aria-label="Version"]')!, 'v2.0.0');
+    await rerender(
+      createElement(GitReleaseTab, {
+        projectId: 'p1',
+        status: status({
+          releaseDraft: {
+            status: 'ready',
+            head: HEAD,
+            baseTag: null,
+            version: 'v0.9.0',
+            bump: 'minor',
+            notes: 'Fresh',
+            agent: null,
+            error: null,
+            at: '2026-11-13T00:00:00Z',
+          },
+        }),
+      }),
+    );
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('v2.0.0');
+    expect(container.querySelector('textarea')!.value).toBe('');
+    expect(container.textContent).toContain('A new draft is ready');
+  });
+
+  it('hides the version, the notes and the version alert for a promote only', async () => {
+    const { container } = await show(status());
+    await typeInto(container.querySelector('input[aria-label="Version"]')!, 'nine');
+    expect(container.textContent).toContain('A version looks like v1.2.3');
+    await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
+    expect(container.querySelector('input[aria-label="Version"]')).toBeNull();
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.textContent).not.toContain('A version looks like v1.2.3');
+    expect(getButton('Promote only').disabled).toBe(false);
+    await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('nine');
+  });
+
+  it.each(['done', 'undone'] as const)(
+    'starts the next release from the new suggestion once a job ends %s',
+    async (state) => {
+      const first = await show(status());
+      await typeInto(first.container.querySelector('input[aria-label="Version"]')!, 'v0.9.0');
+      await typeInto(first.container.querySelector('textarea')!, 'Old notes');
+      await first.rerender(
+        createElement(GitReleaseTab, { projectId: 'p1', status: status({ releaseJob: job({ state }) }) }),
+      );
+      expect(window.sessionStorage.getItem('emberline.git.release.p1')).toBeNull();
+      await first.unmount();
+      const { container } = await show(status({ latestTag: 'v0.9.0' }));
+      expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('v0.9.1');
+      expect(container.querySelector('textarea')!.value).toBe('');
+    },
+  );
+
   it('validates the version and sends the head with the notes', async () => {
     const { container } = await show(status());
     const version = container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!;

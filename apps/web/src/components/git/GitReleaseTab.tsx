@@ -7,7 +7,7 @@ import {
 } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check, CircleDashed, LoaderCircle, Minus, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiRequestError } from '../../api';
 import {
   canUndoPromote,
@@ -52,17 +52,20 @@ function JobSteps({ job, status }: { job: ReleaseJob; status: GitPageStatus }) {
 interface ReleaseForm {
   version: string;
   notes: string;
-  /** The draft the fields were last filled from, and its notes: told apart from the person's edits. */
+  /** The draft the fields were last filled from, and its version and notes: told apart from the person's edits. */
   appliedAt: string | null;
+  appliedVersion: string;
   appliedNotes: string;
 }
 
 const seedFrom = (draft: ReleaseDraft | null, suggestion: string): ReleaseForm => {
   const ready = draft?.status === 'ready' ? draft : null;
+  const version = ready?.version ?? suggestion;
   return {
-    version: ready?.version ?? suggestion,
+    version,
     notes: ready?.notes ?? '',
     appliedAt: ready?.at ?? null,
+    appliedVersion: version,
     appliedNotes: ready?.notes ?? '',
   };
 };
@@ -74,6 +77,29 @@ function readForm(projectId: string): ReleaseForm | null {
     return raw ? (JSON.parse(raw) as ReleaseForm) : null;
   } catch {
     return null;
+  }
+}
+function clearForm(projectId: string): void {
+  try {
+    window.sessionStorage.removeItem(formKey(projectId));
+  } catch {
+    // Nothing stored, nothing to clear.
+  }
+}
+// Which finished job already reset the form, so that opening the tab again does not reset the next edits.
+const endedKey = (projectId: string) => `emberline.git.release.ended.${projectId}`;
+function endedJobOf(projectId: string): string | null {
+  try {
+    return window.sessionStorage.getItem(endedKey(projectId));
+  } catch {
+    return null;
+  }
+}
+function markEnded(projectId: string, jobId: string): void {
+  try {
+    window.sessionStorage.setItem(endedKey(projectId), jobId);
+  } catch {
+    // Without storage the form is reset again when the tab is opened.
   }
 }
 function writeForm(projectId: string, form: ReleaseForm): void {
@@ -98,13 +124,36 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
   // Set when Retry answered `restart_needed`: the failed job is then replaced by a new start.
   const [restart, setRestart] = useState(false);
 
-  // The person's edits outlive a tab switch.
-  useEffect(() => writeForm(projectId, form), [projectId, form]);
+  // The person's edits outlive a tab switch, except the form a finished release reset (see below).
+  const fresh = useRef<ReleaseForm | null>(null);
+  useEffect(() => {
+    if (form !== fresh.current) writeForm(projectId, form);
+  }, [projectId, form]);
 
-  // A new draft fills the fields only while the person has not edited the notes; otherwise it waits
-  // behind "Use the new draft", so a draft that finishes late never overwrites their text.
+  // A release that is over leaves nothing to carry on: the next one starts from the new suggestion,
+  // not from the version and notes of the last. A draft already shown counts as applied.
+  const jobEnded = job?.state === 'done' || job?.state === 'undone';
+  useEffect(() => {
+    if (!job || !jobEnded || endedJobOf(projectId) === job.id) return;
+    markEnded(projectId, job.id);
+    clearForm(projectId);
+    const next: ReleaseForm = {
+      version: suggestion,
+      notes: '',
+      appliedAt: draft?.at ?? null,
+      appliedVersion: suggestion,
+      appliedNotes: '',
+    };
+    fresh.current = next;
+    setForm(next);
+    // Only the job's end matters here; the suggestion and draft are read as they are then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, jobEnded]);
+
+  // A new draft fills the fields only while the person has edited neither the notes nor the version;
+  // otherwise it waits behind "Use the new draft", so a draft that finishes late never overwrites their text.
   const newDraft = draft?.status === 'ready' && draft.at !== form.appliedAt ? draft : null;
-  const untouched = form.notes === form.appliedNotes;
+  const untouched = form.notes === form.appliedNotes && form.version === form.appliedVersion;
   useEffect(() => {
     if (newDraft && untouched) setForm(seedFrom(newDraft, suggestion));
     // `suggestion` only matters when a draft names no version.
@@ -217,31 +266,35 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
             <p className="muted small">{releaseChecksText(status)}</p>
           </section>
 
-          <label className="git-release-field">
-            <span>Version</span>
-            <input
-              className="input mono"
-              aria-label="Version"
-              value={version}
-              onChange={(e) => setForm({ ...form, version: e.target.value })}
-            />
-          </label>
-          {!versionOk && (
-            <p className="muted small" role="alert">
-              A version looks like v1.2.3 (or 1.2.3, with an optional pre-release such as -rc.1).
-            </p>
-          )}
+          {separateMode === 'publish' && (
+            <>
+              <label className="git-release-field">
+                <span>Version</span>
+                <input
+                  className="input mono"
+                  aria-label="Version"
+                  value={version}
+                  onChange={(e) => setForm({ ...form, version: e.target.value })}
+                />
+              </label>
+              {!versionOk && (
+                <p className="muted small" role="alert">
+                  A version looks like v1.2.3 (or 1.2.3, with an optional pre-release such as -rc.1).
+                </p>
+              )}
 
-          <label className="git-release-field">
-            <span>Release notes</span>
-            <textarea
-              className="input wizard-textarea"
-              rows={10}
-              aria-label="Release notes"
-              value={notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            />
-          </label>
+              <label className="git-release-field">
+                <span>Release notes</span>
+                <textarea
+                  className="input wizard-textarea"
+                  rows={10}
+                  aria-label="Release notes"
+                  value={notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                />
+              </label>
+            </>
+          )}
           <div className="git-release-actions">
             <button
               type="button"

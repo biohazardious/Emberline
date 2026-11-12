@@ -26,6 +26,7 @@ const status = {
   keepMainPushed: false,
   pushTarget: 'integration_branch',
   integrationBranch: 'emberline/integration',
+  workingBranch: 'main',
   keepPushedBranch: 'emberline/integration',
   commitIdentity: null,
   factoryCommitIdentity: { name: 'Emberline AI Factory', email: 'factory@emberline.local' },
