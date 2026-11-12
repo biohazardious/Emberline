@@ -191,7 +191,7 @@ export function passwordGitWouldShow(raw: string): boolean {
 }
 
 /** A failed git command reads as `fallback`; a runner that could not run it is thrown, never read as an answer. */
-const unlessRunnerUnavailable =
+export const unlessRunnerUnavailable =
   <T>(fallback: T) =>
   (error: unknown): T => {
     if (isRunnerUnavailable(error)) throw error;
@@ -215,7 +215,7 @@ export async function mainBranchState(
  * can write all three in the shared repository to make a commit look like another).
  */
 const REAL_OBJECTS_ENV = { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' };
-const realGit = (args: string[], cwd: string) =>
+export const realGit = (args: string[], cwd: string) =>
   execGitFile(['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false', ...args], {
     cwd,
     env: REAL_OBJECTS_ENV,

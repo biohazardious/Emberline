@@ -72,7 +72,7 @@ const parse = <T>(
   return r.data;
 };
 /** A full commit id (SHA-1 or SHA-256), never an abbreviation. */
-const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+export const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const remoteErrorText = (error: unknown, known?: KnownSecrets) =>
   error instanceof HttpError ? error.message : shortGitError(error, known);
 /**

@@ -38,6 +38,8 @@ import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { GitPageService } from './git-page/service.js';
+import { registerGitRoutes } from './routes/git.js';
 import { registerRepositoryRoutes } from './routes/repository.js';
 import { registerWorktreeConfigRoutes } from './routes/worktree-config.js';
 import { registerReviewRoutes } from './routes/review.js';
@@ -157,6 +159,7 @@ export async function buildServer(
       log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
     });
   const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
+  const gitPage = new GitPageService(deps.db, repository, { runs: deps.runs, forge, tickets: deps.tickets });
   const mainPush =
     deps.mainPush ??
     new KeepMainPushed(deps.db, deps.runs, repository, { log: (message) => app.log.warn(message) });
@@ -286,6 +289,7 @@ export async function buildServer(
   registerForgeAccountRoutes(app, forge.accounts, deps.db);
   registerSshKeyRoutes(app, deps.db);
   registerRepositoryRoutes(app, repository);
+  registerGitRoutes(app, gitPage);
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
