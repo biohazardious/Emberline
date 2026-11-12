@@ -78,6 +78,9 @@ export const SyncWorktreeBody = z.object({
 });
 export type SyncWorktreeBody = z.input<typeof SyncWorktreeBody>;
 
+export const SyncWorktreeResolution = z.enum(['auto_resolved', 'agent_resolving', 'resolver_started', 'manual']);
+export type SyncWorktreeResolution = z.infer<typeof SyncWorktreeResolution>;
+
 export const SyncWorktreeResponse = z.object({
   ok: z.boolean(),
   runId: z.string(),
@@ -87,6 +90,14 @@ export const SyncWorktreeResponse = z.object({
   conflicts: z.array(z.string()).default([]),
   /** The run's work was already in the main workspace: nothing was merged this time. */
   alreadyMerged: z.boolean().default(false),
+  /**
+   * How a conflicting merge is being healed: `auto_resolved` (additive hunks merged by union),
+   * `agent_resolving` (the run's own live agent was asked to resolve), `resolver_started` (a
+   * resolver run was started), `manual` (left for a person). Null on a clean merge.
+   */
+  resolution: SyncWorktreeResolution.nullable().default(null),
+  /** Files whose conflicts were resolved automatically (additive union). */
+  autoResolved: z.array(z.string()).default([]),
   summary: z.string(),
 });
 export type SyncWorktreeResponse = z.infer<typeof SyncWorktreeResponse>;

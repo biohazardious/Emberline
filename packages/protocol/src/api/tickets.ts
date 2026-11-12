@@ -47,6 +47,13 @@ export const TicketExternal = z.object({
 });
 export type TicketExternal = z.infer<typeof TicketExternal>;
 
+export const TicketOverlapWait = z.object({
+  ticketId: z.string(),
+  key: z.string(),
+  paths: z.array(z.string()),
+});
+export type TicketOverlapWait = z.infer<typeof TicketOverlapWait>;
+
 export const Ticket = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -71,6 +78,8 @@ export const Ticket = z.object({
   completion: TicketCompletion.nullable().default(null),
   /** The issue this ticket was imported from, if any. */
   external: TicketExternal.nullable().default(null),
+  /** The busy ticket whose files overlap this ready ticket's claims; it starts once that one is merged. */
+  waitingOn: TicketOverlapWait.nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

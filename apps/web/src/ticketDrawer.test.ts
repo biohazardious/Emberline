@@ -32,6 +32,7 @@ const ticket = (status: TicketStatus): Ticket => ({
   blockedBy: [],
   completion: null,
   external: null,
+  waitingOn: null,
   createdAt: '2026-10-23T10:00:00.000Z',
   updatedAt: '2026-10-23T10:00:00.000Z',
 });
