@@ -1,28 +1,40 @@
 import { type Project, type Run, type Ticket } from '@emberline/protocol';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import { answerOffered, answerTarget, refreshAfterAnswer } from '../answerDialog';
 import {
   ATTENTION_LABELS,
+  ATTENTION_ORDER,
   attentionDetail,
   dismissable,
   groupAttention,
   inboxHeading,
   needsElsewhere,
+  pendingAttention,
   type SeenMap,
   type TicketName,
 } from '../attention';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
-import { answerOffered, answerTarget, refreshAfterAnswer } from '../answerDialog';
 import { AnswerDialog } from '../components/AnswerDialog';
+import { SearchInput } from '../components/BoardFilterBar';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
-import { recoveryApplies } from '../holdRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
-import { notificationsSupported } from '../hooks/useAttention';
+import { recoveryApplies } from '../holdRecovery';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
+import { ticketsQuery } from '../hooks/liveData';
 import { useAllProjects } from '../hooks/useAllProjects';
 import { useApi } from '../hooks/useApi';
+import { notificationsSupported } from '../hooks/useAttention';
 import { inboxSubtitle, inScope } from '../projectScope';
-import { ticketsQuery } from '../hooks/liveData';
+import { toggled } from '../roadmapFilter';
+import {
+  countInboxReasons,
+  EMPTY_INBOX_FILTER,
+  filterInboxRuns,
+  type InboxFilter,
+  isInboxFilterActive,
+} from '../runFilter';
 import { timeAgo, useNow } from '../time';
 
 /** Ticket key and title by id, from the projects' ticket lists (stable reference: re-run only on new data). */
@@ -52,12 +64,10 @@ function InboxItem({
   const [expanded, setExpanded] = useState(false);
   useNow(30_000);
 
-  // Held detail is already the HOLD_LABELS label (the map covers an unexpected raw key); a failure's is its type.
   const detail = attentionDetail(attention);
   const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
 
   const recovering = recoveryApplies(run);
-  // A held run that can't take a prompt: the hold block says why and offers Copy instead of Answer.
   const recovery = useRunRecovery(run);
 
   return (
@@ -110,6 +120,9 @@ function InboxItem({
 
 export function InboxPage({
   runs,
+  runsLoading = false,
+  runsError,
+  onRetryRuns,
   seen,
   activeProjectId,
   projectName,
@@ -117,6 +130,9 @@ export function InboxPage({
   onDismiss,
 }: {
   runs: Run[] | undefined;
+  runsLoading?: boolean;
+  runsError?: unknown;
+  onRetryRuns?: () => Promise<void>;
   seen: SeenMap;
   activeProjectId: string | null;
   projectName?: string;
@@ -127,46 +143,62 @@ export function InboxPage({
   const projects = useApi<Project[]>('/api/projects', 15_000);
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const [all, setAll] = useAllProjects('inbox');
-  const groups = useMemo(
+  const [filter, setFilter] = useState<InboxFilter>(EMPTY_INBOX_FILTER);
+
+  const scopedPending = useMemo(
     () =>
-      groupAttention(
+      pendingAttention(
         inScope(runs ?? [], (r) => r.projectId, { activeProjectId, all }),
         seen,
       ),
     [runs, seen, activeProjectId, all],
   );
-  // The badges count every project; say what this view leaves out.
-  const elsewhere = all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId);
-  const scoped = Boolean(activeProjectId) && !all;
-  // Ticket key and current title from the live tickets cache (the Board's), one read per project
-  // that has a ticket run in the Inbox; ticket events keep it current.
+
   const ticketProjects = useMemo(
-    () =>
-      [...new Set(groups.flatMap((g) => g.runs.filter((r) => r.ticketId).map((r) => r.projectId)))].sort(),
-    [groups],
+    () => [...new Set(scopedPending.filter((r) => r.ticketId).map((r) => r.projectId))].sort(),
+    [scopedPending],
   );
   const ticketsById = useQueries({
     queries: ticketProjects.map(ticketsQuery),
     combine: ticketNames,
   });
+
+  const reasonCounts = useMemo(() => countInboxReasons(scopedPending), [scopedPending]);
+  const filteredPending = useMemo(
+    () =>
+      filterInboxRuns(scopedPending, filter, (run) => {
+        const heading = inboxHeading(run, ticketsById);
+        const pName = projectById.get(run.projectId)?.name ?? '';
+        return `${heading.key ?? ''} ${heading.title} ${pName}`;
+      }),
+    [scopedPending, filter, ticketsById, projectById],
+  );
+  const groups = useMemo(() => groupAttention(filteredPending, seen), [filteredPending, seen]);
+
+  const elsewhere = all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId);
+  const scoped = Boolean(activeProjectId) && !all;
+  const filterActive = isInboxFilterActive(filter);
+  const showFilterBar = scopedPending.length > 1 || filterActive;
+
   const [permission, setPermission] = useState<NotificationPermission>(() =>
     notificationsSupported() ? Notification.permission : 'denied',
   );
-  // The open Answer dialog. Held here, not in the item: the item remounts or leaves when the run's
-  // attention changes, and the dialog (with the files the person added) must stay until they close it.
   const [answering, setAnswering] = useState<{
     run: Run;
     heading: { key: string | null; title: string };
     text: string;
   } | null>(null);
   const answerRun = answering ? answerTarget(runs, answering.run) : null;
-  // Presence tells core the person is looking, so no push notification goes out while the dialog is open.
   const answerRunId = answerRun?.id;
   useEffect(() => {
     if (!answerRunId) return;
     setPresenceRun(answerRunId, 'inbox');
     return () => clearPresenceRun(answerRunId, 'inbox');
   }, [answerRunId]);
+
+  const visibleReasons = ATTENTION_ORDER.filter(
+    (reason) => reasonCounts[reason] > 0 || filter.reasons.includes(reason),
+  );
 
   return (
     <div className="inbox-page">
@@ -175,21 +207,86 @@ export function InboxPage({
           <h1>Inbox</h1>
           <span className="muted small">{inboxSubtitle(scoped, projectName)}</span>
         </div>
-        {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
-        {notificationsSupported() && permission === 'default' && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => void Notification.requestPermission().then(setPermission)}
-          >
-            Enable desktop alerts
-          </button>
-        )}
+        <div className="workspace-bar-controls">
+          {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
+          {notificationsSupported() && permission === 'default' && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void Notification.requestPermission().then(setPermission)}
+            >
+              Enable desktop alerts
+            </button>
+          )}
+        </div>
       </header>
+
       <MoreInOtherProjects count={elsewhere} onShow={() => setAll(true)} />
-      {groups.length === 0 ? (
+
+      {Boolean(runsError && !runs) && (
+        <ViewErrorBanner label="Could not load inbox items" error={runsError} onRetry={onRetryRuns} />
+      )}
+
+      {showFilterBar && (
+        <div className="board-filter inbox-filter" role="search" aria-label="Filter inbox items">
+          <SearchInput
+            id="inbox-search"
+            className="board-search"
+            ariaLabel="Filter inbox items"
+            placeholder="Filter by ticket, title, detail, provider…"
+            value={filter.query}
+            onChange={(query) => setFilter({ ...filter, query })}
+          />
+          {visibleReasons.length > 0 && (
+            <div className="board-filter-group" role="group" aria-label="Filter by attention reason">
+              {visibleReasons.map((reason) => {
+                const pressed = filter.reasons.includes(reason);
+                return (
+                  <button
+                    key={reason}
+                    type="button"
+                    className={`chip-btn${pressed ? ' active' : ''}`}
+                    aria-pressed={pressed}
+                    onClick={() => setFilter({ ...filter, reasons: toggled(filter.reasons, reason) })}
+                  >
+                    {ATTENTION_LABELS[reason]}
+                    <span className="board-filter-count mono">{reasonCounts[reason]}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {filterActive && (
+            <div className="board-filter-status">
+              <span className="muted small mono">
+                {filteredPending.length} of {scopedPending.length}
+              </span>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setFilter(EMPTY_INBOX_FILTER)}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {runsLoading && !runs && !runsError ? (
+        <ViewLoadingState label="Checking runs needing attention…" />
+      ) : groups.length === 0 ? (
         <div className="empty">
-          <p>{scoped ? 'Nothing in this project needs you right now.' : 'Nothing needs you right now.'}</p>
+          {filterActive && scopedPending.length > 0 ? (
+            <>
+              <p>No inbox items match your filter.</p>
+              <button type="button" className="btn btn-sm" onClick={() => setFilter(EMPTY_INBOX_FILTER)}>
+                Clear filter
+              </button>
+            </>
+          ) : (
+            <p>{scoped ? 'Nothing in this project needs you right now.' : 'Nothing needs you right now.'}</p>
+          )}
         </div>
       ) : (
         groups.map((group) => (

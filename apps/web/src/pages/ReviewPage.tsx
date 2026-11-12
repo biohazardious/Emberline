@@ -1,8 +1,9 @@
+import type { Run, RunDetail } from '@emberline/protocol';
 import { GitBranch } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
-import type { Run, RunDetail } from '@emberline/protocol';
 import { api, errorMessage } from '../api';
+import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { ReviewView } from '../components/ReviewView';
 import { RunStatePill } from '../components/RunStatePill';
 
@@ -11,6 +12,7 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
   const [error, setError] = useState<string | null>(null);
 
   const loadRun = useCallback(async () => {
+    setError(null);
     try {
       const r = await api<RunDetail>(`/api/runs/${id}`);
       setRun(r);
@@ -25,16 +27,21 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
 
   if (error) {
     return (
-      <div style={{ padding: '1rem' }}>
-        <p className="form-error">{error}</p>
+      <div className="board-page">
+        <div className="board-head">
+          <Link href="/" className="btn btn-sm btn-ghost">
+            ← Overview
+          </Link>
+        </div>
+        <ViewErrorBanner label="Could not load run review" error={error} onRetry={loadRun} />
       </div>
     );
   }
 
   if (!run) {
     return (
-      <div style={{ padding: '1rem' }} className="muted small">
-        Loading run review…
+      <div className="board-page">
+        <ViewLoadingState label="Loading run review…" />
       </div>
     );
   }
@@ -63,7 +70,7 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
               <GitBranch className="icon" aria-hidden /> {run.branch}
             </span>
           )}
-          {run.worktreePath && <span className="mono muted small">{run.worktreePath}</span>}
+          {run.worktreePath && <span className="mono muted small hide-sm">{run.worktreePath}</span>}
         </div>
 
         <div className="review-toolbar-group">
@@ -82,7 +89,9 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
 
       <div className="review-page-body">
         <div className="review-page-main">
-          <ReviewView run={run} onRunUpdated={setRun} />
+          <ErrorBoundary resetKey={run.id}>
+            <ReviewView run={run} onRunUpdated={setRun} />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

@@ -3,7 +3,7 @@ import type {
   ProjectBuildOutput,
   ProjectBuildOutputsResponse,
 } from '@emberline/protocol';
-import { Check, Copy, Download, Package, Pin, PinOff, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Download, Package, Pin, PinOff, RefreshCw, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
@@ -17,7 +17,9 @@ import {
   usageText,
 } from '../buildOutputs';
 import { copyText } from '../clipboard';
+import { SearchInput } from '../components/BoardFilterBar';
 import { CopyFallback } from '../components/CopyFallback';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { PERSONA_BY_ID } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useQueryParam } from '../hooks/navigation';
@@ -273,9 +275,12 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
         </section>
       )}
 
-      {(error || loadError !== undefined) && (
-        <div className="error-text" role="alert">
-          {error ?? errorMessage(loadError)}
+      {Boolean(loadError) && (
+        <ViewErrorBanner label="Could not load build outputs" error={loadError} onRetry={refresh} />
+      )}
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
         </div>
       )}
 
@@ -302,25 +307,17 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
               </button>
             )}
           </div>
-          <label className="build-outputs-search">
-            <Search className="icon" aria-hidden />
-            <input
-              type="search"
-              className="input"
-              placeholder="Search name or ticket"
-              aria-label="Search build outputs"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+          <SearchInput
+            className="build-outputs-search"
+            ariaLabel="Search build outputs"
+            placeholder="Search name or ticket"
+            value={query}
+            onChange={setQuery}
+          />
         </div>
       )}
 
-      {loading && !data && (
-        <p className="muted" aria-busy="true">
-          Loading…
-        </p>
-      )}
+      {loading && !data && !loadError && <ViewLoadingState label="Loading build outputs…" />}
 
       {data && total === 0 && (
         <div className="build-outputs-empty">
@@ -336,7 +333,22 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {total > 0 && outputs.length === 0 && <p className="muted">No outputs match the filter.</p>}
+      {total > 0 && outputs.length === 0 && (
+        <div className="empty">
+          <p>No outputs match the filter.</p>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              setGroup('all');
+              setQuery('');
+              setRunFilter(null);
+            }}
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
 
       {outputs.length > 0 && (
         <>

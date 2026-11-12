@@ -26,7 +26,6 @@ import {
   Map as MapIcon,
   Palette,
   Rocket,
-  Search,
   Shield,
   Sparkles,
   Square,
@@ -40,6 +39,8 @@ import {
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { SearchInput } from '../components/BoardFilterBar';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { ProviderMark } from '../components/ProviderMark';
 import { useApi } from '../hooks/useApi';
@@ -726,9 +727,18 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   };
 
   if (!roadmap) {
+    if (roadmapPoll.error) {
+      return (
+        <ViewErrorBanner
+          label="Could not load Interactive Roadmap"
+          error={roadmapPoll.error}
+          onRetry={roadmapPoll.refresh}
+        />
+      );
+    }
     return (
       <section className="panel" aria-busy="true">
-        <p className="muted">Loading Interactive Roadmap &amp; AI Brainstorming Studio…</p>
+        <ViewLoadingState label="Loading Interactive Roadmap & AI Brainstorming Studio…" compact />
       </section>
     );
   }
@@ -1361,16 +1371,13 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
 
           <div className="roadmap-filter" aria-label="Filter roadmap items">
             <div className="roadmap-filter-row">
-              <label className="roadmap-search">
-                <Search className="icon" aria-hidden />
-                <input
-                  className="input"
-                  type="search"
-                  placeholder="Search items, ticket keys or milestones…"
-                  value={itemFilter.query}
-                  onChange={(e) => setItemFilter((f) => ({ ...f, query: e.target.value }))}
-                />
-              </label>
+              <SearchInput
+                className="roadmap-search"
+                ariaLabel="Search roadmap items"
+                placeholder="Search items, ticket keys or milestones…"
+                value={itemFilter.query}
+                onChange={(query) => setItemFilter((f) => ({ ...f, query }))}
+              />
               {filterActive && (
                 <>
                   <span className="muted small mono">

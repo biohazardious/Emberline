@@ -39,6 +39,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api } from '../api';
+import { SearchInput } from '../components/BoardFilterBar';
+import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { PERSONA_BY_ID, PERSONA_LIST } from '../components/PersonaBadge';
 import { useApi } from '../hooks/useApi';
 import { useRuns } from '../hooks/liveData';
@@ -597,15 +599,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   );
 
   return (
-    <div
-      className="code-explorer-page"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: 'calc(100vh - 56px)',
-        gap: '10px',
-      }}
-    >
+    <div className="code-explorer-page">
       {/* Top Bar */}
       <div
         className="panel"
@@ -673,8 +667,15 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         </div>
       </div>
 
+      {Boolean(fileList.error && !fileList.data) && (
+        <ViewErrorBanner
+          label="Could not load workspace files"
+          error={fileList.error}
+          onRetry={fileList.refresh}
+        />
+      )}
       {error && (
-        <div className="banner banner-error" style={{ margin: 0 }}>
+        <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
           {error}
         </div>
       )}
@@ -842,12 +843,11 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
             </form>
           )}
 
-          <input
-            className="input"
-            style={{ padding: '5px 8px', fontSize: '0.78rem' }}
+          <SearchInput
+            ariaLabel="Filter workspace files"
             placeholder="Filter files (e.g. .apk, .ts, dist)…"
             value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
+            onChange={setFilterText}
           />
 
           <div
@@ -859,6 +859,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
               gap: '2px',
             }}
           >
+            {fileList.loading && !fileList.data && !fileList.error && (
+              <ViewLoadingState compact label="Loading workspace files…" />
+            )}
             {visibleEntries.map((entry: WorkspaceFileEntry) => {
               const depth = entry.path.split('/').length - 1;
               const isDir = entry.kind === 'directory';
@@ -969,9 +972,9 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                 </div>
               );
             })}
-            {visibleEntries.length === 0 && (
+            {visibleEntries.length === 0 && !fileList.loading && (
               <p className="muted small" style={{ padding: '8px' }}>
-                No matching files in workspace.
+                {filterText.trim() ? 'No files match the filter.' : 'No matching files in workspace.'}
               </p>
             )}
           </div>
@@ -1232,18 +1235,20 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
                     </p>
                   )}
                   <div style={{ flex: 1, minHeight: 0 }}>
-                    <MonacoEditor
-                      filePath={`${targetId}:${activeTab.path}`}
-                      language={detectLanguage(activeTab.path)}
-                      theme={monacoTheme(themeMode)}
-                      value={activeTab.content}
-                      readOnly={isWorktreeYmlPath(activeTab.path)}
-                      onChange={(nextVal: string) => {
-                        setTabs((prev) =>
-                          prev.map((t) => (t.path === activeTab.path ? { ...t, content: nextVal } : t)),
-                        );
-                      }}
-                    />
+                    <ErrorBoundary resetKey={`${targetId}:${activeTab.path}`} compact>
+                      <MonacoEditor
+                        filePath={`${targetId}:${activeTab.path}`}
+                        language={detectLanguage(activeTab.path)}
+                        theme={monacoTheme(themeMode)}
+                        value={activeTab.content}
+                        readOnly={isWorktreeYmlPath(activeTab.path)}
+                        onChange={(nextVal: string) => {
+                          setTabs((prev) =>
+                            prev.map((t) => (t.path === activeTab.path ? { ...t, content: nextVal } : t)),
+                          );
+                        }}
+                      />
+                    </ErrorBoundary>
                   </div>
                 </div>
               )

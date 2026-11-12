@@ -1,49 +1,36 @@
 import type {
-  GarbageCollectRunsResponse,
-  AgentId,
-  AgentModelId,
   AgentPersona,
-  PermissionMode,
   Project,
   PruneWorktreeResponse,
-  Run,
   RunDetail,
   SystemStatus,
   TerminalInfo,
 } from '@emberline/protocol';
 import { API_VERSION } from '@emberline/protocol';
-import { Bot, ChartColumn, Eraser, FileText, Rocket, Target, Timer, Trash, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'wouter';
-import { api, ApiRequestError, errorMessage } from '../api';
-import { keptWorktreesSummary, type PrunePending, prunePendingNote } from '../gcSummary';
-import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
+import { Bot, ChartColumn, FileText, Rocket, Target, Timer } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'wouter';
+import { ApiRequestError, api, errorMessage } from '../api';
 import { BlueprintModal } from '../components/BlueprintModal';
 import { BudgetPanel } from '../components/BudgetPanel';
+import { DashboardRunsSection } from '../components/DashboardRunsSection';
+import { DashboardWorkspaceGrid } from '../components/DashboardWorkspaceGrid';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { UnfinishedImportNote } from '../components/ImportRecovery';
 import { NotificationsPanel } from '../components/NotificationsPanel';
-import { modeHint, PermissionModePicker } from '../components/PermissionModePicker';
-import { PersonaBadge, PersonaPicker, TaskTemplateBar } from '../components/PersonaBadge';
 import { ProjectAdvisorPanel } from '../components/ProjectAdvisorPanel';
-import { ProjectDeleteConfirm } from '../components/ProjectDeleteConfirm';
 import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
-import { RunStatePill } from '../components/RunStatePill';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
-import { useApi } from '../hooks/useApi';
+import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
+import { type PrunePending, prunePendingNote } from '../gcSummary';
 import { useRuns } from '../hooks/liveData';
 import { useQueryParam } from '../hooks/navigation';
-import { timeAgo } from '../time';
-import { MODEL_LABELS, RoadmapStudioPanel } from './RoadmapPage';
-
-const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
-  shell: 'shell',
-  claude: 'claude',
-  clone: 'git clone',
-  agent: 'agent',
-};
+import { useApi } from '../hooks/useApi';
+import type { DashboardRunCategory } from '../runFilter';
+import { RoadmapStudioPanel } from './RoadmapPage';
 
 const OVERVIEW_TABS = ['studio', 'roadmap', 'runs', 'automation', 'system'] as const;
 type OverviewTab = (typeof OVERVIEW_TABS)[number];
@@ -64,21 +51,19 @@ export function Dashboard({
   const [, navigate] = useLocation();
   const terminals = useApi<TerminalInfo[]>('/api/terminals', 3_000);
   const projects = useApi<Project[]>('/api/projects', 10_000);
-  const { runs } = useRuns();
-  // The section lives in the address, so coming back from a run's terminal returns to it.
+  const { runs, loading: runsLoading, error: runsError, refresh: refreshRuns } = useRuns();
   const [sectionParam, setSectionParam] = useQueryParam('section');
   const overviewTab: OverviewTab = OVERVIEW_TABS.includes(sectionParam as OverviewTab)
     ? (sectionParam as OverviewTab)
     : 'studio';
   const setOverviewTab = (tab: OverviewTab) => setSectionParam(tab === 'studio' ? null : tab);
-  const [hideCompletedRuns, setHideCompletedRuns] = useState<boolean>(false);
+  const [runCategory, setRunCategory] = useState<DashboardRunCategory>('all');
+  const [runQuery, setRunQuery] = useState<string>('');
   const [actionError, setActionError] = useState<string>();
   const [cleanupNotice, setCleanupNotice] = useState<string>();
   const [pruneBlocked, setPruneBlocked] = useState<{ id: string; message: string }>();
-  // The run whose Prune goes on in the background (its teardown outlasted the request).
   const [prunePending, setPrunePending] = useState<PrunePending>();
   const [runFormFor, setRunFormFor] = useState<string>();
-  const [deleteConfirmFor, setDeleteConfirmFor] = useState<string>();
   const [runFormPersona, setRunFormPersona] = useState<AgentPersona>('coder');
   const [runFormPrompt, setRunFormPrompt] = useState<string>('');
   const [blueprintFor, setBlueprintFor] = useState<Project>();
@@ -112,20 +97,24 @@ export function Dashboard({
     return list;
   }, [runs, activeProject]);
 
-  const filteredRuns = useMemo(() => {
-    if (!hideCompletedRuns) return visibleRuns;
-    return visibleRuns.filter((r) => !r.endedAt && r.state !== 'done' && r.state !== 'failed');
-  }, [visibleRuns, hideCompletedRuns]);
-
   const stats = useMemo(() => {
     const all = visibleRuns;
     return {
       working: all.filter((r) => r.state === 'starting' || r.state === 'working').length,
-      attention: all.filter((r) => r.state === 'waiting_input').length,
+      attention: all.filter((r) => r.state === 'waiting_input' || Boolean(r.attention)).length,
       queuedOrPaused: all.filter((r) => r.state === 'queued' || r.state === 'rate_limited').length,
       completed: all.filter((r) => r.state === 'done').length,
     };
   }, [visibleRuns]);
+
+  const selectStatCategory = (target: DashboardRunCategory) => {
+    if (overviewTab === 'runs' && runCategory === target) {
+      setRunCategory('all');
+    } else {
+      setRunCategory(target);
+      setOverviewTab('runs');
+    }
+  };
 
   const openTerminal = async (kind: 'shell' | 'claude', projectId?: string) => {
     setActionError(undefined);
@@ -158,7 +147,6 @@ export function Dashboard({
           'POST',
           force ? { force: true } : {},
         );
-        // A teardown that outlasts the request finishes in the background: say so, or it looks like nothing happened.
         setPrunePending(res.pending ? { runId: id, since: res.since ?? null } : undefined);
       } else await api(`/api/runs/${id}`, 'DELETE');
     } catch (e) {
@@ -170,19 +158,15 @@ export function Dashboard({
     }
   };
 
-  // The pending prune's outcome is read from the run's events: a later event must not hide it. Keyed
-  // by the prune, so a refetch that is still out, or that failed, keeps what was read.
   const prunedRun = runs?.find((r) => r.id === prunePending?.runId);
   const pruneEvents = useQuery({
     queryKey: ['prune-outcome', prunePending?.runId, prunePending?.since],
     queryFn: () => api<RunDetail>(`/api/runs/${prunePending!.runId}`),
     enabled: Boolean(prunePending && prunedRun),
     select: (detail) => detail.events,
-    // Polled while the note says the teardown runs (a missed run update must not leave it there).
     refetchInterval: (query) =>
       prunePendingNote(prunePending, runs, query.state.data?.events)?.failed === false ? 5_000 : false,
   });
-  // Each update of the run reads its events again.
   const refetchPruneEvents = pruneEvents.refetch;
   const prunedRunEvent = prunedRun?.lastEvent;
   useEffect(() => {
@@ -213,9 +197,15 @@ export function Dashboard({
       )}
       {system && system.apiVersion !== API_VERSION && (
         <div className="banner banner-warn" role="status">
-          Emberline was updated. <button onClick={() => window.location.reload()}>Reload</button> to use the
-          new version.
+          <span>Emberline was updated.</span>
+          <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+          <span>to use the new version.</span>
         </div>
+      )}
+      {Boolean(projects.error && !projects.data) && (
+        <ViewErrorBanner label="Could not load projects" error={projects.error} onRetry={projects.refresh} />
       )}
       {cleanupNotice && (
         <div className="banner banner-warn" role="status">
@@ -245,68 +235,52 @@ export function Dashboard({
         </div>
       )}
 
-      {/* Top Telemetry Strip + Overview Section Tabs */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}
-      >
-        <div className="stat-strip" aria-label="Fleet telemetry">
-          <div
-            className="stat-card"
-            style={{ cursor: 'pointer' }}
-            onClick={() => setOverviewTab('runs')}
-            title="View active agent runs"
+      <div className="dashboard-head-stack">
+        <div className="stat-strip" role="group" aria-label="Fleet telemetry quick filters">
+          <button
+            type="button"
+            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'working' ? ' stat-card-active' : ''}`}
+            aria-pressed={overviewTab === 'runs' && runCategory === 'working'}
+            onClick={() => selectStatCategory('working')}
+            title="Filter runs to working agents"
           >
             <span className="stat-label">Active Agents</span>
             <strong className="stat-value mono">{stats.working}</strong>
-          </div>
-          <div
-            className={`stat-card${stats.attention > 0 ? ' stat-card-warn' : ''}`}
-            style={{ cursor: 'pointer' }}
-            onClick={() => setOverviewTab('runs')}
-            title="View agents waiting for input"
+          </button>
+          <button
+            type="button"
+            className={`stat-card stat-card-btn${stats.attention > 0 ? ' stat-card-warn' : ''}${overviewTab === 'runs' && runCategory === 'attention' ? ' stat-card-active' : ''}`}
+            aria-pressed={overviewTab === 'runs' && runCategory === 'attention'}
+            onClick={() => selectStatCategory('attention')}
+            title="Filter runs waiting for input"
           >
             <span className="stat-label">Needs Your Input</span>
             <strong className="stat-value mono">{stats.attention}</strong>
-          </div>
-          <div
-            className="stat-card"
-            style={{ cursor: 'pointer' }}
-            onClick={() => setOverviewTab('runs')}
-            title="View queued or rate-limited runs"
+          </button>
+          <button
+            type="button"
+            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'queued' ? ' stat-card-active' : ''}`}
+            aria-pressed={overviewTab === 'runs' && runCategory === 'queued'}
+            onClick={() => selectStatCategory('queued')}
+            title="Filter queued or rate-limited runs"
           >
             <span className="stat-label">Queued / Paused</span>
             <strong className="stat-value mono">{stats.queuedOrPaused}</strong>
-          </div>
-          <div
-            className="stat-card"
-            style={{ cursor: 'pointer' }}
-            onClick={() => setOverviewTab('runs')}
-            title="View completed runs"
+          </button>
+          <button
+            type="button"
+            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'done' ? ' stat-card-active' : ''}`}
+            aria-pressed={overviewTab === 'runs' && runCategory === 'done'}
+            onClick={() => selectStatCategory('done')}
+            title="Filter completed runs"
           >
             <span className="stat-label">Completed Runs</span>
             <strong className="stat-value mono">{stats.completed}</strong>
-          </div>
+          </button>
         </div>
 
-        {/* Factory Overview Navigation Tabs */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 10,
-            padding: '8px 12px',
-            borderRadius: 'var(--radius)',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div className="segmented" role="tablist" aria-label="Factory Overview Sections">
+        <div className="overview-nav-bar">
+          <div className="segmented segmented-scroll" role="tablist" aria-label="Factory Overview Sections">
             <button
               id="overview-tab-studio"
               type="button"
@@ -400,10 +374,11 @@ export function Dashboard({
         {overviewTab !== 'system' && <QuotaPanel compact />}
       </div>
 
-      {/* TAB 1: Command Center (Project Status, AI Factory, Live Demo/Browser, AI Advisor) */}
       {overviewTab === 'studio' && (
         <>
-          {activeProject ? (
+          {projects.loading && !projects.data && !projects.error ? (
+            <ViewLoadingState label="Loading workspace…" />
+          ) : activeProject ? (
             <>
               <ProjectStatusAndDemoPanel key={`status-${activeProject.id}`} project={activeProject} />
               <ProjectAdvisorPanel
@@ -423,7 +398,7 @@ export function Dashboard({
                 }}
               />
             </>
-          ) : (
+          ) : !projects.error ? (
             <section className="panel">
               <header className="panel-head">
                 <div>
@@ -437,273 +412,82 @@ export function Dashboard({
                 )}
               </header>
             </section>
-          )}
+          ) : null}
         </>
       )}
 
-      {/* TAB 2: Runs & Terminals */}
       {overviewTab === 'runs' && (
         <>
-          <div className="dashboard-grid">
-            <section className="panel" aria-labelledby="projects-title">
-              <header className="panel-head">
-                <div>
-                  <h2 id="projects-title">{activeProject ? 'Workspace Controls' : 'Projects'}</h2>
-                  <p className="muted">
-                    {activeProject
-                      ? `Repository path and quick actions for ${activeProject.name}.`
-                      : 'Create your first project to start the AI Coding Factory.'}
-                  </p>
-                </div>
-                {onOpenWizard && (
-                  <div className="actions">
-                    <button
-                      id="open-project-wizard"
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      onClick={onOpenWizard}
-                    >
-                      + AI Factory Wizard
-                    </button>
-                  </div>
-                )}
-              </header>
-              <ul className="list">
-                {visibleProjects.map((p) => (
-                  <li key={p.id} className="row row-wrap">
-                    <div className="row-main">
-                      <span className="row-title">{p.name}</span>
-                      {p.appType && p.appType !== 'custom' && (
-                        <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
-                      )}
-                      <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
-                    </div>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => setBlueprintFor(p)}
-                        title="Open PROJECT.md Blueprint"
-                      >
-                        PROJECT.md
-                      </button>
-                      <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
-                        Board
-                      </Link>
-                      <button
-                        className="btn btn-sm"
-                        disabled={runnerDown}
-                        onClick={() => void openTerminal('shell', p.id)}
-                      >
-                        Shell
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        title="Prune finished git worktrees for this project"
-                        onClick={async () => {
-                          setActionError(undefined);
-                          try {
-                            const res = await api<GarbageCollectRunsResponse>(
-                              `/api/projects/${p.id}/cleanup-worktrees`,
-                              'POST',
-                            );
-                            setCleanupNotice(keptWorktreesSummary(res) ?? undefined);
-                            setPrunePending(undefined); // the clean-up's own result says what it left
-                          } catch (e) {
-                            setActionError(errorMessage(e));
-                          }
-                        }}
-                      >
-                        <Eraser className="icon" aria-hidden /> Clean Worktrees
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        style={{ color: 'var(--danger)' }}
-                        title="Remove the project from Emberline, keeping or deleting its files"
-                        aria-expanded={deleteConfirmFor === p.id}
-                        onClick={() => setDeleteConfirmFor(deleteConfirmFor === p.id ? undefined : p.id)}
-                      >
-                        <Trash className="icon" aria-hidden /> Remove
-                      </button>
-                      <button
-                        id={`start-run-${p.slug}`}
-                        className="btn btn-sm btn-primary"
-                        disabled={runnerDown}
-                        aria-expanded={runFormFor === p.id}
-                        onClick={() => {
-                          setRunFormPersona('coder');
-                          setRunFormPrompt('');
-                          setRunFormFor(runFormFor === p.id ? undefined : p.id);
-                        }}
-                      >
-                        Start run
-                      </button>
-                    </div>
-                    {deleteConfirmFor === p.id && (
-                      <ProjectDeleteConfirm
-                        project={p}
-                        onCancel={() => setDeleteConfirmFor(undefined)}
-                        onDeleted={async (res) => {
-                          setDeleteConfirmFor(undefined);
-                          await projects.refresh();
-                          onSelectProject?.(res.nextActiveProjectId);
-                        }}
-                      />
-                    )}
-                    {runFormFor === p.id && (
-                      <StartRunForm
-                        key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
-                        project={p}
-                        initialPersona={runFormPersona}
-                        initialPrompt={runFormPrompt}
-                        onCancel={() => setRunFormFor(undefined)}
-                        onStarted={(run) => {
-                          setRunFormFor(undefined);
-                          if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
-                          else onInspectRun?.(run.id);
-                        }}
-                      />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
+          <DashboardWorkspaceGrid
+            activeProject={activeProject}
+            visibleProjects={visibleProjects}
+            runnerDown={runnerDown}
+            onOpenWizard={onOpenWizard}
+            onOpenBlueprint={setBlueprintFor}
+            onOpenTerminal={(kind, projectId) => void openTerminal(kind, projectId)}
+            onRemoveTerminal={(id) => void removeTerminal(id)}
+            onCleanedWorktrees={(notice) => {
+              setCleanupNotice(notice);
+              setPrunePending(undefined);
+            }}
+            onActionError={setActionError}
+            onProjectDeleted={async (res) => {
+              await projects.refresh();
+              onSelectProject?.(res.nextActiveProjectId);
+            }}
+            runFormFor={runFormFor}
+            onToggleRunForm={(projectId, persona = 'coder', prompt = '') => {
+              setRunFormPersona(persona);
+              setRunFormPrompt(prompt);
+              setRunFormFor(projectId);
+            }}
+            runFormPersona={runFormPersona}
+            runFormPrompt={runFormPrompt}
+            onRunStarted={(run) => {
+              setRunFormFor(undefined);
+              if (run.terminalId) navigate(`/terminals/${run.terminalId}`);
+              else onInspectRun?.(run.id);
+            }}
+            plainTerminals={plainTerminals}
+            terminalsLoading={terminals.loading}
+            terminalsError={terminals.error}
+            hasTerminalsData={Boolean(terminals.data)}
+            onRetryTerminals={terminals.refresh}
+            projectName={projectName}
+          />
 
-            <section className="panel" aria-labelledby="terminals-title">
-              <header className="panel-head">
-                <div>
-                  <h2 id="terminals-title">Terminals</h2>
-                  <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
-                </div>
-                <div className="actions">
-                  <button
-                    id="new-shell"
-                    className="btn btn-sm"
-                    disabled={runnerDown}
-                    onClick={() => void openTerminal('shell', activeProject?.id)}
-                  >
-                    New shell
-                  </button>
-                  <button
-                    id="new-claude"
-                    className="btn btn-sm btn-primary"
-                    disabled={runnerDown}
-                    onClick={() => void openTerminal('claude', activeProject?.id)}
-                    title="Starts Claude Code; on first run it walks you through logging in with your subscription"
-                  >
-                    Claude
-                  </button>
-                </div>
-              </header>
-
-              {plainTerminals?.length === 0 && (
-                <div className="empty">
-                  <p>No terminals yet.</p>
-                  <p className="muted">
-                    First time here? Open <strong>Claude</strong> and log in with your own subscription.
-                  </p>
-                </div>
-              )}
-              <ul className="list">
-                {plainTerminals?.map((t) => (
-                  <li key={t.id} className="row">
-                    <Link href={`/terminals/${t.id}`} className="row-main">
-                      <span className={`dot dot-${t.status}`} aria-label={t.status} />
-                      <span className="row-title">{t.title}</span>
-                      <span className="badge">{KIND_LABEL[t.kind]}</span>
-                      {t.projectId && (
-                        <span className="badge badge-soft">{projectName(t.projectId) ?? 'project'}</span>
-                      )}
-                      <span className="row-meta mono">
-                        {t.status === 'exited'
-                          ? `exited${t.exitCode !== null ? ` (${t.exitCode})` : ''} · `
-                          : ''}
-                        {timeAgo(t.createdAt)}
-                      </span>
-                    </Link>
-                    <button
-                      className="icon-btn"
-                      aria-label={`Close ${t.title}`}
-                      title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
-                      onClick={() => void removeTerminal(t.id)}
-                    >
-                      <X className="icon" aria-hidden />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </div>
-
-          <section className="panel" aria-labelledby="runs-title">
-            <header className="panel-head">
-              <div>
-                <h2 id="runs-title">Runs ({filteredRuns.length})</h2>
-                <p className="muted">
-                  Agent sessions on their own branch and worktree. State comes live from hooks.
-                </p>
-              </div>
-              <div className="actions">
-                <label
-                  className="small"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    cursor: 'pointer',
-                    padding: '4px 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--surface-2)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={hideCompletedRuns}
-                    onChange={() => setHideCompletedRuns((v) => !v)}
-                  />
-                  <span>Hide Completed ({stats.completed})</span>
-                </label>
-                <Link href="/fleet" className="btn btn-sm">
-                  Open Fleet Multiplexer →
-                </Link>
-              </div>
-            </header>
-            {filteredRuns.length === 0 && (
-              <div className="empty">
-                <p>{hideCompletedRuns ? 'No active runs right now.' : 'No runs yet.'}</p>
-                <p className="muted">
-                  Pick a project above and press <strong>Start run</strong>, or dispatch a ticket from its{' '}
-                  <strong>Board</strong>.
-                </p>
-              </div>
-            )}
-            <ul className="list">
-              {filteredRuns.map((run) => (
-                <RunRow
-                  key={run.id}
-                  run={run}
-                  projectName={projectName(run.projectId)}
-                  onInspect={onInspectRun ? () => onInspectRun(run.id) : undefined}
-                  onStop={() => void runAction(run.id, 'stop')}
-                  onResume={() => void runAction(run.id, 'resume')}
-                  onPrune={() => void runAction(run.id, 'prune')}
-                  onRemove={() => void runAction(run.id, 'remove')}
-                />
-              ))}
-            </ul>
-          </section>
+          <DashboardRunsSection
+            runs={visibleRuns}
+            runsLoading={runsLoading}
+            runsError={runsError}
+            onRetryRuns={refreshRuns}
+            category={runCategory}
+            onCategoryChange={setRunCategory}
+            query={runQuery}
+            onQueryChange={setRunQuery}
+            projectName={projectName}
+            onInspectRun={onInspectRun}
+            onRunAction={(id, action) => void runAction(id, action)}
+          />
         </>
       )}
 
-      {/* TAB 2.5: Roadmap & Brainstorm Studio */}
-      {overviewTab === 'roadmap' && activeProject && (
-        <RoadmapStudioPanel key={`roadmap-${activeProject.id}`} projectId={activeProject.id} />
-      )}
+      {overviewTab === 'roadmap' &&
+        (activeProject ? (
+          <RoadmapStudioPanel key={`roadmap-${activeProject.id}`} projectId={activeProject.id} />
+        ) : (
+          <section className="panel">
+            <div className="empty">
+              <p>Select or create a project first to open its Roadmap &amp; Brainstorm Studio.</p>
+              {onOpenWizard && (
+                <button type="button" className="btn btn-sm btn-primary" onClick={onOpenWizard}>
+                  + AI Factory Wizard
+                </button>
+              )}
+            </div>
+          </section>
+        ))}
 
-      {/* TAB 3: Automation & Cron */}
       {overviewTab === 'automation' && (
         <>
           {activeProject && <BudgetPanel key={`budget-${activeProject.id}`} project={activeProject} />}
@@ -714,7 +498,6 @@ export function Dashboard({
         </>
       )}
 
-      {/* TAB 4: Quota & Alerts */}
       {overviewTab === 'system' && (
         <>
           <QuotaPanel />
@@ -734,243 +517,5 @@ export function Dashboard({
         />
       )}
     </div>
-  );
-}
-
-function RunRow({
-  run,
-  projectName,
-  onInspect,
-  onStop,
-  onResume,
-  onPrune,
-  onRemove,
-}: {
-  run: Run;
-  projectName: string | undefined;
-  onInspect: (() => void) | undefined;
-  onStop: () => void;
-  onResume: () => void;
-  onPrune: () => void;
-  onRemove: () => void;
-}) {
-  const ticketKey = run.title?.split(' ')[0];
-  const canPrune =
-    Boolean(run.endedAt) && run.worktreePath.includes('/.worktrees/') && run.lastEvent !== 'worktree_pruned';
-  const body = (
-    <>
-      <RunStatePill
-        state={run.state}
-        cancelled={run.cancelled}
-        autoRetry={run.autoRetry}
-        handedOffTo={run.handedOffTo}
-      />
-      <PersonaBadge persona={run.persona} />
-      <span className="row-title">{run.title ?? projectName ?? 'project'}</span>
-      {run.title && projectName && <span className="badge">{projectName}</span>}
-      {!run.title && run.ticketId && <span className="badge">{ticketKey ?? 'ticket'}</span>}
-      {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
-      <span className="row-prompt">{run.prompt || <em className="muted">interactive</em>}</span>
-      <span className="row-meta mono">
-        {run.lastEvent ? `${run.lastEvent} · ` : ''}
-        {timeAgo(run.stateChangedAt)}
-      </span>
-    </>
-  );
-  return (
-    <li className={`row run-row run-row-${run.state}`}>
-      {run.terminalId ? (
-        <Link href={`/terminals/${run.terminalId}`} className="row-main">
-          {body}
-        </Link>
-      ) : (
-        <div className="row-main" onClick={onInspect} style={onInspect ? { cursor: 'pointer' } : undefined}>
-          {body}
-        </div>
-      )}
-      {run.worktreePath && (
-        <Link
-          href={`/runs/${run.id}/review`}
-          className="btn btn-sm btn-ghost"
-          title="Inspect git diff, add line comments, commit or push branch"
-        >
-          Review
-        </Link>
-      )}
-      {onInspect && (
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={onInspect}
-          title="Dock live terminal and hook event timeline"
-        >
-          Inspect
-        </button>
-      )}
-      {(run.state === 'rate_limited' || run.resumable) && (
-        <button
-          className="btn btn-sm"
-          onClick={onResume}
-          title={
-            run.state === 'rate_limited'
-              ? run.autoRetry
-                ? 'Retry now instead of waiting'
-                : 'Try now instead of waiting for the reset'
-              : `Continue this ${run.agent ?? 'agent'} session`
-          }
-        >
-          Resume
-        </button>
-      )}
-      {canPrune && (
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={onPrune}
-          title="Delete linked git worktree directory on disk to reclaim space (keeps branch & run record)"
-        >
-          Prune worktree
-        </button>
-      )}
-      {!run.endedAt && (
-        <button
-          className="btn btn-sm btn-ghost"
-          onClick={onStop}
-          title={run.state === 'queued' ? 'Remove from the queue' : 'Terminate the agent process'}
-        >
-          {run.state === 'queued' ? 'Cancel' : 'Stop'}
-        </button>
-      )}
-      <button
-        className="icon-btn"
-        aria-label="Remove run"
-        title="Remove run (the worktree and branch are kept)"
-        onClick={onRemove}
-      >
-        <X className="icon" aria-hidden />
-      </button>
-    </li>
-  );
-}
-
-function StartRunForm({
-  project,
-  initialPersona = 'coder',
-  initialPrompt = '',
-  onStarted,
-  onCancel,
-}: {
-  project: Project;
-  initialPersona?: AgentPersona;
-  initialPrompt?: string;
-  onStarted: (run: Run) => void;
-  onCancel: () => void;
-}) {
-  const [agent, setAgent] = useState<AgentId>('claude');
-  const [model, setModel] = useState<AgentModelId>('auto');
-  const [persona, setPersona] = useState<AgentPersona>(initialPersona);
-  const [prompt, setPrompt] = useState(initialPrompt);
-  const [mode, setMode] = useState<PermissionMode>('default');
-  const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    try {
-      onStarted(
-        await api<Run>('/api/runs', 'POST', {
-          projectId: project.id,
-          agent,
-          model,
-          persona,
-          prompt,
-          permissionMode: mode,
-        }),
-      );
-    } catch (e) {
-      setError(errorMessage(e));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form className="run-form" onSubmit={(e) => void submit(e)}>
-      <TaskTemplateBar
-        onSelect={(tpl) => {
-          setPersona(tpl.persona);
-          setMode(tpl.permissionMode);
-          setPrompt(tpl.promptTemplate);
-        }}
-      />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span className="muted small mono">Specialist Persona:</span>
-        <PersonaPicker value={persona} onChange={setPersona} />
-      </div>
-      <textarea
-        id="run-prompt"
-        className="input"
-        rows={3}
-        autoFocus
-        placeholder={`What should ${agent === 'antigravity' ? 'Antigravity' : agent === 'copilot' ? 'Copilot' : agent === 'codex' ? 'Codex' : agent === 'aider' ? 'Aider' : 'Claude'} do in ${project.name}? (optional, leave empty for an interactive session)`}
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit(e);
-        }}
-      />
-      <div className="run-form-foot" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <div className="segmented" role="radiogroup" aria-label="CLI Agent">
-          {(['claude', 'antigravity', 'copilot', 'codex', 'aider'] as const).map((a) => (
-            <button
-              key={a}
-              type="button"
-              role="radio"
-              aria-checked={agent === a}
-              className={agent === a ? 'active' : ''}
-              onClick={() => {
-                setAgent(a);
-                if (a === 'antigravity' && model === 'auto') setModel('argon');
-              }}
-            >
-              {a === 'claude'
-                ? 'Claude'
-                : a === 'antigravity'
-                  ? 'Antigravity'
-                  : a === 'copilot'
-                    ? 'Copilot'
-                    : a === 'codex'
-                      ? 'Codex'
-                      : 'Aider'}
-            </button>
-          ))}
-        </div>
-        <select
-          className="input mono"
-          style={{ fontSize: '0.78rem', padding: '4px 8px' }}
-          value={model}
-          onChange={(e) => setModel(e.target.value as AgentModelId)}
-          title="Model Tier (Fable / Opus / Sonnet / Argon / Auto)"
-        >
-          {(Object.keys(MODEL_LABELS) as AgentModelId[]).map((m) => (
-            <option key={m} value={m}>
-              {MODEL_LABELS[m]}
-            </option>
-          ))}
-        </select>
-        <PermissionModePicker value={mode} onChange={setMode} />
-        <div className="actions">
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>
-            Cancel
-          </button>
-          <button id="run-start" className="btn btn-sm btn-primary" disabled={busy}>
-            {busy ? 'Starting…' : 'Start'}
-          </button>
-        </div>
-      </div>
-      <p className="muted small">{modeHint(mode)}. Runs on a new branch in its own worktree.</p>
-      {error && <p className="form-error">{error}</p>}
-    </form>
   );
 }

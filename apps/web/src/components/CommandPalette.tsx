@@ -1,7 +1,8 @@
 import type { Project, Run, SchedulerState, TerminalInfo } from '@emberline/protocol';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
-import { api } from '../api';
+import { api, errorMessage } from '../api';
+import { toastError } from '../toast';
 
 interface CommandItem {
   id: string;
@@ -18,6 +19,7 @@ export function CommandPalette({
   projects,
   runs,
   scheduler,
+  dockerEnabled = false,
   onInspectRun,
   onLogout,
 }: {
@@ -26,6 +28,7 @@ export function CommandPalette({
   projects: Project[];
   runs: Run[];
   scheduler: SchedulerState | undefined;
+  dockerEnabled?: boolean;
   onInspectRun: (runId: string) => void;
   onLogout: () => void;
 }) {
@@ -48,7 +51,6 @@ export function CommandPalette({
     }
   }, [open]);
 
-  // Fallback for browsers without <dialog closedby="any"> support (per modern-web-guidance).
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -101,6 +103,18 @@ export function CommandPalette({
         badge: 'G F',
         run: () => navigate('/fleet'),
       },
+      ...(dockerEnabled
+        ? [
+            {
+              id: 'nav-docker',
+              group: 'Navigation',
+              label: 'Go to Docker Engine',
+              meta: 'Compose projects & container previews',
+              badge: 'G D',
+              run: () => navigate('/docker'),
+            },
+          ]
+        : []),
       {
         id: 'nav-settings',
         group: 'Navigation',
@@ -112,22 +126,56 @@ export function CommandPalette({
     ];
 
     for (const p of projects) {
-      list.push({
-        id: `board-${p.id}`,
-        group: 'Project Boards',
-        label: `Board · ${p.name}`,
-        meta: p.repoUrl ?? p.path,
-        badge: p.slug,
-        run: () => navigate(`/projects/${p.id}/board`),
-      });
-      list.push({
-        id: `code-${p.id}`,
-        group: 'Project Code Explorer',
-        label: `Code Explorer · ${p.name}`,
-        meta: p.path,
-        badge: 'code',
-        run: () => navigate(`/projects/${p.id}/code`),
-      });
+      list.push(
+        {
+          id: `board-${p.id}`,
+          group: 'Projects',
+          label: `Board · ${p.name}`,
+          meta: p.repoUrl ?? p.path,
+          badge: p.slug,
+          run: () => navigate(`/projects/${p.id}/board`),
+        },
+        {
+          id: `roadmap-${p.id}`,
+          group: 'Projects',
+          label: `Roadmap & Brainstorm · ${p.name}`,
+          meta: p.path,
+          badge: 'roadmap',
+          run: () => navigate(`/projects/${p.id}/roadmap`),
+        },
+        {
+          id: `code-${p.id}`,
+          group: 'Projects',
+          label: `Code Explorer · ${p.name}`,
+          meta: p.path,
+          badge: 'code',
+          run: () => navigate(`/projects/${p.id}/code`),
+        },
+        {
+          id: `outputs-${p.id}`,
+          group: 'Projects',
+          label: `Build Outputs · ${p.name}`,
+          meta: p.path,
+          badge: 'outputs',
+          run: () => navigate(`/projects/${p.id}/outputs`),
+        },
+        {
+          id: `browser-${p.id}`,
+          group: 'Projects',
+          label: `Live Browser · ${p.name}`,
+          meta: p.path,
+          badge: 'browser',
+          run: () => navigate(`/projects/${p.id}/browser`),
+        },
+        {
+          id: `proj-settings-${p.id}`,
+          group: 'Projects',
+          label: `Project Settings · ${p.name}`,
+          meta: p.path,
+          badge: 'settings',
+          run: () => navigate(`/projects/${p.id}/settings`),
+        },
+      );
     }
 
     for (const r of runs.slice(0, 12)) {
@@ -135,7 +183,7 @@ export function CommandPalette({
       const title = r.title ?? (r.prompt ? r.prompt.slice(0, 48) : `${proj} run`);
       list.push({
         id: `run-${r.id}`,
-        group: r.state === 'waiting_input' ? 'Needs Your Attention' : 'Agent Runs',
+        group: r.state === 'waiting_input' || r.attention ? 'Needs Your Attention' : 'Agent Runs',
         label: `Inspect · ${title}`,
         meta: `${proj}${r.branch ? ` · ${r.branch}` : ''}`,
         badge: r.state,
@@ -212,18 +260,15 @@ export function CommandPalette({
     });
 
     return list;
-  }, [projects, runs, projectById, scheduler, navigate, onInspectRun, onLogout]);
+  }, [projects, runs, projectById, scheduler, dockerEnabled, navigate, onInspectRun, onLogout]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (item) =>
-        item.label.toLowerCase().includes(q) ||
-        item.group.toLowerCase().includes(q) ||
-        (item.meta?.toLowerCase().includes(q) ?? false) ||
-        (item.badge?.toLowerCase().includes(q) ?? false),
-    );
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return items;
+    return items.filter((item) => {
+      const haystack = [item.label, item.group, item.meta ?? '', item.badge ?? ''].join(' ').toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    });
   }, [items, query]);
 
   useEffect(() => {
@@ -233,7 +278,9 @@ export function CommandPalette({
   const execute = (item: CommandItem | undefined) => {
     if (!item) return;
     onClose();
-    void item.run();
+    Promise.resolve(item.run()).catch((e: unknown) => {
+      toastError(errorMessage(e));
+    });
   };
 
   return (
@@ -253,7 +300,7 @@ export function CommandPalette({
             ref={inputRef}
             id="cmd-input"
             className="cmd-input"
-            placeholder="Jump to board, fleet, run, or trigger an action…"
+            placeholder="Jump to board, roadmap, fleet, run, or trigger an action…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {

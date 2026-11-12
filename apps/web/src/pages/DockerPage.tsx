@@ -10,8 +10,10 @@ import type {
 import { Container, FileText, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
-import { api, errorMessage } from '../api';
+import { api } from '../api';
 import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProjectsToggle';
+import { SearchInput } from '../components/BoardFilterBar';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { dockerEngineLine, dockerEngineOffState } from '../dockerEngine';
 import {
   actionsFor,
@@ -401,6 +403,7 @@ export function DockerPage({
 }) {
   const { data, error: loadError, loading, refresh } = useApi<DockerOverview>('/api/docker', 10_000);
   const [all, setAll] = useAllProjects('docker');
+  const [query, setQuery] = useState('');
   const names = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p.name])), [projects]);
   const [done, setDone] = useState<DockerDone | null>(null);
   const statusLine = useRef<HTMLParagraphElement>(null);
@@ -423,10 +426,31 @@ export function DockerPage({
     if (done && data && !doneStillCurrent(done, data.projects)) setDone(null);
   }, [data, done]);
 
-  const scope = { activeProjectId, all };
-  const shown = data ? inScope(data.projects, (p) => p.projectId, scope) : [];
-  const hidden = data ? outOfScope(data.projects, (p) => p.projectId, scope) : 0;
-  const groups = groupDockerProjects(shown);
+  const shown = useMemo(
+    () => (data ? inScope(data.projects, (p) => p.projectId, { activeProjectId, all }) : []),
+    [data, activeProjectId, all],
+  );
+  const hidden = data ? outOfScope(data.projects, (p) => p.projectId, { activeProjectId, all }) : 0;
+  const filteredProjects = useMemo(() => {
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return shown;
+    return shown.filter((p) => {
+      const owner = ownerSummary(p.owner);
+      const haystack = [
+        p.name,
+        p.status,
+        owner.prefix,
+        owner.text ?? '',
+        owner.detail ?? '',
+        dockerProjectLabel(p.projectId, names) ?? '',
+        ...p.containers.map((c) => `${c.name} ${c.service} ${c.image} ${c.state}`),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    });
+  }, [shown, query, names]);
+  const groups = groupDockerProjects(filteredProjects);
   const scoped = Boolean(activeProjectId) && !all;
   const enabled = data?.engine.enabled ?? false;
 
@@ -437,16 +461,14 @@ export function DockerPage({
           <Container className="icon" aria-hidden />
           <h1>Docker</h1>
         </div>
-        <span className="muted small">Emberline's compose projects in the Docker engine</span>
+        <span className="muted small">Emberline&apos;s compose projects in the Docker engine</span>
         {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
       </div>
 
-      {loadError !== undefined && <DockerAlert error={errorMessage(loadError)} />}
-      {loading && !data && (
-        <p className="muted" aria-busy="true">
-          Loading…
-        </p>
+      {loadError !== undefined && (
+        <ViewErrorBanner label="Could not load Docker status" error={loadError} onRetry={refresh} />
       )}
+      {loading && !data && !loadError && <ViewLoadingState label="Loading Docker engine status…" />}
 
       {data && !enabled && (
         <div className="docker-empty">
@@ -478,7 +500,39 @@ export function DockerPage({
 
           <MoreInOtherProjects count={hidden} onShow={() => setAll(true)} />
 
-          {groups.length === 0 && dockerEmptyText(data, scoped) && (
+          {(shown.length > 1 || query.trim() !== '') && (
+            <div className="board-filter" role="search" aria-label="Filter Docker compose projects">
+              <SearchInput
+                id="docker-search"
+                className="board-search"
+                ariaLabel="Filter compose projects"
+                placeholder="Filter by stack, service, image, or ticket…"
+                value={query}
+                onChange={setQuery}
+              />
+              {query.trim() !== '' && (
+                <div className="board-filter-status">
+                  <span className="muted small mono">
+                    {filteredProjects.length} of {shown.length}
+                  </span>
+                  <button type="button" className="btn btn-xs btn-ghost" onClick={() => setQuery('')}>
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {groups.length === 0 && query.trim() !== '' && shown.length > 0 && (
+            <div className="empty">
+              <p>No compose projects match your filter.</p>
+              <button type="button" className="btn btn-sm" onClick={() => setQuery('')}>
+                Clear filter
+              </button>
+            </div>
+          )}
+
+          {groups.length === 0 && query.trim() === '' && dockerEmptyText(data, scoped) && (
             <p className="muted">{dockerEmptyText(data, scoped)}</p>
           )}
 

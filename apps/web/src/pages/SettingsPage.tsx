@@ -67,9 +67,10 @@ import { useQueryParam } from '../hooks/navigation';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { clampQuotaGb } from '../buildOutputs';
-import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { AccountPanel } from '../components/AccountPanel';
+import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { ForgeAccountsPanel } from '../components/ForgeAccountsPanel';
+import { McpPluginsPanel } from '../components/McpPluginsPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { PERSONA_LIST } from '../components/PersonaBadge';
 import { QuotaPanel } from '../components/QuotaPanel';
@@ -197,35 +198,47 @@ export function SettingsPage({
     }
   }, []);
 
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [loadError, setLoadError] = useState<unknown>(undefined);
+
+  const loadSettings = useCallback(async () => {
+    setLoadingSettings(true);
+    setLoadError(undefined);
+    try {
+      const res = await api<FactorySettings>('/api/factory/settings');
+      setSettings(res);
+      setThemePref(res.theme);
+      setAutoPickupReady(res.autoPickupReady);
+      setAutoPickupBacklog(res.autoPickupBacklog);
+      setAutoSyncToMain(res.autoSyncToMain);
+      setSelfHealingBuildGate(res.selfHealingBuildGate);
+      setAntiSlopGate(res.antiSlopGate ?? true);
+      setSecretGuardGate(res.secretGuardGate ?? true);
+      setRequireCompletionSignal(res.requireCompletionSignal ?? true);
+      setCrossProviderCritic(res.crossProviderCritic ?? false);
+      setAutoMoveToDone(res.autoMoveToDone);
+      setMaxTicketDepth(res.maxTicketDepth);
+      setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
+      setMaxParallelTickets(String(res.maxParallelTicketsPerProject ?? 2));
+      setBuildOutputsQuotaGb(String(res.buildOutputsQuotaGb ?? 5));
+      setDefaultAgent(res.defaultAgent);
+      setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
+      setAntigravityAck(res.antigravityTermsAcknowledged ?? false);
+      setPersonaRoutes(res.personaRoutes);
+      if (res.quotaPolicy) setQuotaPolicy(res.quotaPolicy);
+      if (res.mcpServers?.length) setMcpServers(res.mcpServers);
+      if (res.skillPlugins?.length) setSkillPlugins(res.skillPlugins);
+    } catch (err) {
+      setLoadError(err);
+    } finally {
+      setLoadingSettings(false);
+    }
+  }, []);
+
   useEffect(() => {
-    void api<FactorySettings>('/api/factory/settings')
-      .then((res) => {
-        setSettings(res);
-        setThemePref(res.theme);
-        setAutoPickupReady(res.autoPickupReady);
-        setAutoPickupBacklog(res.autoPickupBacklog);
-        setAutoSyncToMain(res.autoSyncToMain);
-        setSelfHealingBuildGate(res.selfHealingBuildGate);
-        setAntiSlopGate(res.antiSlopGate ?? true);
-        setSecretGuardGate(res.secretGuardGate ?? true);
-        setRequireCompletionSignal(res.requireCompletionSignal ?? true);
-        setCrossProviderCritic(res.crossProviderCritic ?? false);
-        setAutoMoveToDone(res.autoMoveToDone);
-        setMaxTicketDepth(res.maxTicketDepth);
-        setMaxAutoRunsPerDay(res.maxAutoRunsPerProjectPerDay);
-        setMaxParallelTickets(String(res.maxParallelTicketsPerProject ?? 2));
-        setBuildOutputsQuotaGb(String(res.buildOutputsQuotaGb ?? 5));
-        setDefaultAgent(res.defaultAgent);
-        setEnabledProviders(res.enabledProviders?.length ? res.enabledProviders : ['claude']);
-        setAntigravityAck(res.antigravityTermsAcknowledged ?? false);
-        setPersonaRoutes(res.personaRoutes);
-        if (res.quotaPolicy) setQuotaPolicy(res.quotaPolicy);
-        if (res.mcpServers?.length) setMcpServers(res.mcpServers);
-        if (res.skillPlugins?.length) setSkillPlugins(res.skillPlugins);
-      })
-      .catch((err) => setError(errorMessage(err)));
+    void loadSettings();
     void refreshToolchain();
-  }, [refreshToolchain]);
+  }, [loadSettings, refreshToolchain]);
 
   useEffect(() => {
     const anyInstalling =
@@ -547,9 +560,11 @@ export function SettingsPage({
           </h2>
         </div>
 
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <div className="settings-tabs" role="tablist" aria-label="Factory settings sections">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'autopilot'}
             className={`btn btn-sm ${activeTab === 'autopilot' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('autopilot')}
           >
@@ -557,6 +572,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'providers'}
             className={`btn btn-sm ${activeTab === 'providers' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('providers')}
           >
@@ -564,6 +581,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'mcp_plugins'}
             className={`btn btn-sm ${activeTab === 'mcp_plugins' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('mcp_plugins')}
           >
@@ -571,6 +590,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'quota'}
             className={`btn btn-sm ${activeTab === 'quota' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('quota')}
           >
@@ -578,6 +599,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'notifications'}
             className={`btn btn-sm ${activeTab === 'notifications' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('notifications')}
           >
@@ -585,6 +608,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'ssh_key'}
             className={`btn btn-sm ${activeTab === 'ssh_key' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('ssh_key')}
           >
@@ -592,6 +617,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'updates'}
             className={`btn btn-sm ${activeTab === 'updates' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('updates')}
           >
@@ -599,6 +626,8 @@ export function SettingsPage({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'account'}
             className={`btn btn-sm ${activeTab === 'account' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveTab('account')}
           >
@@ -607,8 +636,20 @@ export function SettingsPage({
         </div>
       </header>
 
-      {error && <div className="banner banner-error">{error}</div>}
-      {notice && <div className="banner banner-ok">{notice}</div>}
+      {Boolean(loadError) && (
+        <ViewErrorBanner label="Could not load factory settings" error={loadError} onRetry={loadSettings} />
+      )}
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="banner banner-ok" role="status">
+          {notice}
+        </div>
+      )}
+      {loadingSettings && !settings && !loadError && <ViewLoadingState label="Loading factory settings…" />}
 
       {activeTab === 'autopilot' && (
         <form
