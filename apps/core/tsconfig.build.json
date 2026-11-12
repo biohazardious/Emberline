@@ -11,6 +11,7 @@
     "src/test-agent-harness.ts",
     "src/test-setup.ts",
     "src/test-fake-forge.ts",
-    "src/test-ssh-forge.ts"
+    "src/test-ssh-forge.ts",
+    "src/test-seed-events.ts"
   ]
 }

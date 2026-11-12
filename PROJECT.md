@@ -147,6 +147,9 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
       Every table is declared in `apps/core/src/db/schema.ts` (DESIGN §3.7) and opened through `openDb` (WAL, foreign keys,
       a backup before pending migrations). Services in `apps/core/src/{tickets,runs,scheduler,review,repository}` own the domain
       logic. `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
+      Event retention (`runs/event-retention.ts`, `EMBERLINE_EVENT_RETENTION_DAYS`, default 90, `0` off) compacts old `done`
+      runs to their state changes, summary, handoff note and usage totals (`run_event_compactions`); `event-indexes.test.ts`
+      holds the inbox and board under 50 ms on a seeded 100k-event database and pins the hot query plans.
 - [ ] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
 - [x] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:

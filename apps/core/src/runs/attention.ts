@@ -191,12 +191,6 @@ export function computeAttention(
 const pipelineClear = (facts: AttentionFacts | undefined): boolean =>
   decidePipelineOutcome((facts?.pipeline ?? []).map((e) => e.type)) !== 'held';
 
-const idList = (ids: string[]) =>
-  sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-
 interface Bounds {
   run_id: string;
   entered: number | null;
@@ -206,14 +200,16 @@ interface Bounds {
 
 /**
  * Per run: the newest state-changing event, the newest switch to `done` and to `failed`. Reads only
- * `state IS NOT NULL` events, through the partial index `run_events_state_idx`.
+ * `state IS NOT NULL` events, through the partial index `run_events_state_idx`. The ids travel as
+ * one JSON parameter: short SQL that builds and prepares in constant time however many runs.
  */
 export const attentionBoundsQuery = (runIds: string[]) => sql`SELECT run_id,
     MAX(id) AS entered,
     MAX(CASE WHEN state = 'done' THEN id END) AS last_done,
     MAX(CASE WHEN state = 'failed' THEN id END) AS last_failed
   FROM run_events
-  WHERE state IS NOT NULL AND run_id IN (${idList(runIds)}) GROUP BY run_id`;
+  WHERE state IS NOT NULL AND run_id IN (SELECT value FROM json_each(${JSON.stringify(runIds)}))
+  GROUP BY run_id`;
 
 interface EventRow {
   id: number;
@@ -247,11 +243,8 @@ export function loadAttentionFacts(db: Db, runIds: string[]): Map<string, Attent
     const boundRows = db.all<Bounds>(attentionBoundsQuery(ids));
     if (boundRows.length === 0) continue;
     for (const b of boundRows) facts.set(b.run_id, { ...blank(), enteredId: b.entered });
-    // The bounds travel back as values, so they are computed once.
-    const values = sql.join(
-      boundRows.map((b) => sql`(${b.run_id}, ${b.entered}, ${b.last_done}, ${b.last_failed})`),
-      sql`, `,
-    );
+    // The bounds travel back as one JSON parameter, so they are computed once.
+    const bounds = JSON.stringify(boundRows.map((b) => [b.run_id, b.entered, b.last_done, b.last_failed]));
     const outcomeTypes = sql.join(
       PIPELINE_OUTCOME_EVENTS.map((t) => sql`${t}`),
       sql`, `,
@@ -260,16 +253,29 @@ export function loadAttentionFacts(db: Db, runIds: string[]): Map<string, Attent
       WAITING_TYPES.map((t) => sql`${t}`),
       sql`, `,
     );
+    // One branch per condition with a fixed join order (CROSS JOIN), so the plan holds without table
+    // statistics. After a bound, `run_events_run_idx` (run_id, id) reads only the few events since the
+    // run's last state change (`+type` keeps the planner off one seek per type and run); a run never
+    // `done` seeks its outcome notes by `run_events_type_run_idx`. UNION drops a doubly matched event.
+    const columns = sql`e.id, e.run_id, e.ts, e.type, e.payload, b.entered, b.last_done, b.last_failed`;
     const rows = db.all<
       EventRow & { entered: number | null; last_done: number | null; last_failed: number | null }
     >(sql`
-      WITH b(run_id, entered, last_done, last_failed) AS (VALUES ${values})
-      SELECT e.id, e.run_id, e.ts, e.type, e.payload, b.entered, b.last_done, b.last_failed
-      FROM run_events e JOIN b ON b.run_id = e.run_id
-      WHERE (e.type IN (${waitingTypes}) AND e.id >= COALESCE(b.entered, 0))
-         OR (e.type IN (${outcomeTypes}) AND e.id > COALESCE(b.last_done, 0))
-         OR e.id = b.last_failed
-      ORDER BY e.id`);
+      WITH b(run_id, entered, last_done, last_failed) AS (
+        SELECT value ->> 0, value ->> 1, value ->> 2, value ->> 3 FROM json_each(${bounds})
+      )
+      SELECT ${columns} FROM b CROSS JOIN run_events e
+        WHERE e.run_id = b.run_id AND e.id >= COALESCE(b.entered, 0) AND +e.type IN (${waitingTypes})
+      UNION
+      SELECT ${columns} FROM b CROSS JOIN run_events e
+        WHERE b.last_done IS NOT NULL AND e.run_id = b.run_id AND e.id > b.last_done
+          AND +e.type IN (${outcomeTypes})
+      UNION
+      SELECT ${columns} FROM b CROSS JOIN run_events e
+        WHERE b.last_done IS NULL AND e.run_id = b.run_id AND e.type IN (${outcomeTypes})
+      UNION
+      SELECT ${columns} FROM b CROSS JOIN run_events e WHERE e.id = b.last_failed
+      ORDER BY 1`);
     for (const r of rows) {
       const f = facts.get(r.run_id);
       if (!f) continue;
