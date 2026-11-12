@@ -442,6 +442,8 @@ export async function syncWorktreeToMainWorkspace(params: {
     mainHead: null,
     conflicts: [],
     alreadyMerged: false,
+    resolution: null,
+    autoResolved: [],
     summary,
     ...extra,
   });

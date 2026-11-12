@@ -277,6 +277,10 @@ export const FactorySettings = z.object({
   maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000).default(40),
   /** Tickets of one project that may run at the same time. */
   maxParallelTicketsPerProject: z.number().int().min(1).max(4).default(2),
+  /** A merge conflict made only of additive hunks (both sides only added lines) is resolved by union. */
+  autoResolveAdditiveConflicts: z.boolean().default(true),
+  /** A ready ticket whose claimed files overlap a busy ticket's waits until that ticket is merged. */
+  serializeOverlappingTickets: z.boolean().default(true),
   /** Archive quota for run build outputs, per project, in GB. */
   buildOutputsQuotaGb: z.number().min(0.5).max(1000).default(5),
   /** A Claude factory run moves its ticket on only after the agent called `ticket_complete`. */
@@ -328,6 +332,8 @@ export const UpdateFactorySettingsBody = z
     maxTicketDepth: z.number().int().min(1).max(10),
     maxAutoRunsPerProjectPerDay: z.number().int().min(0).max(1000),
     maxParallelTicketsPerProject: z.number().int().min(1).max(4),
+    autoResolveAdditiveConflicts: z.boolean(),
+    serializeOverlappingTickets: z.boolean(),
     buildOutputsQuotaGb: z.number().min(0.5).max(1000),
     requireCompletionSignal: z.boolean(),
     mcpServers: z.array(McpServerEntry),

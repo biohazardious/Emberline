@@ -18,6 +18,7 @@ function ticket(over: Partial<Ticket> & Pick<Ticket, 'id' | 'key' | 'status'>): 
     blockedBy: [],
     completion: null,
     external: null,
+    waitingOn: null,
     createdAt: '2026-11-01T00:00:00.000Z',
     updatedAt: '2026-11-02T00:00:00.000Z',
     ...over,

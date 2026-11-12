@@ -220,6 +220,7 @@ export const toTicket = (
           triage: row.externalTriage,
         }
       : null,
+  waitingOn: null,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

@@ -26,6 +26,7 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
     blockedBy: [],
     completion: null,
     external: null,
+    waitingOn: null,
     createdAt: '2026-11-12T00:00:00.000Z',
     updatedAt: '2026-11-12T00:00:00.000Z',
     ...overrides,
