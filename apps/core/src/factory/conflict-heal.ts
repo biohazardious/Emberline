@@ -236,7 +236,8 @@ export function argChunks(text: string, size = ARG_CHUNK_CHARS): string[] {
   return chunks;
 }
 
-async function writeResolved(worktreePath: string, file: string, text: string): Promise<void> {
+/** Writes `text` to the regular file `file` of `worktreePath`, in ops (a link there is refused). */
+export async function writeResolved(worktreePath: string, file: string, text: string): Promise<void> {
   const chunks = argChunks(text);
   await execFileChecked(
     systemCommand({

@@ -148,6 +148,10 @@ export const ReleaseJob = z.object({
   mode: z.enum(['publish', 'promote_only']),
   version: z.string().nullable(),
   notes: z.string().nullable(),
+  /** The working branch's tip the person approved: what the promote merges, and nothing more. */
+  head: z.string(),
+  /** The working branch the release was started on. */
+  working: z.string(),
   state: z.enum(['running', 'failed', 'done', 'undone']),
   steps: z.array(ReleaseStep),
   startedAt: z.string(),

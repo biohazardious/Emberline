@@ -1,35 +1,66 @@
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
 import {
+  type BranchRemoteState,
   CreateBranchBody,
   type GitBranch,
   type GitCommitDetail,
   type GitCommitsPage,
   type GitCompare,
   type GitFileDiff,
+  type GitPageStatus,
   type GitSync,
   type ReleaseDraft,
+  type ReleaseJob,
   SetWorkingBranchBody,
   UpdateGitSettingsBody,
 } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { readRepositorySettings, workingBranchOf, writeRepositorySettings } from '../db/project-settings.js';
+import {
+  factoryWorkingBranch,
+  readRepositorySettings,
+  workingBranchOf,
+  writeRepositorySettings,
+} from '../db/project-settings.js';
 import { projects } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import type { buildWorkspaceDemo } from '../factory/demo.js';
-import type { ForgeService } from '../forge/service.js';
+import { credentialAccountForRemote } from '../forge/account-store.js';
+import { parseForgeRemote, type ForgeService } from '../forge/service.js';
+import { mainBranchState, originUrls, realGit, remoteUrlForDisplay } from '../repository/git.js';
 import type { RepositoryService } from '../repository/service.js';
 import type { RunService } from '../runs/service.js';
 import type { TicketService } from '../tickets/service.js';
 import {
+  classify,
   createBranch,
   type DeleteBranchResult,
   deleteBranch,
   listBranches,
+  localTip,
+  refTip,
   setWorkingBranch,
 } from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
 import { currentReleaseDraft, DraftJobs, draftReleaseNotes } from './release-notes.js';
-import { fetchOrigin, HealJobs, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
+import { latestVersionTag, ReleaseJobs } from './release.js';
+import {
+  fetchOrigin,
+  HealJobs,
+  listBackups,
+  matchOrigin,
+  pull,
+  pullTicketText,
+  type SyncDeps,
+} from './sync.js';
+
+const IDLE_SYNC: GitSync = { state: 'idle', at: null, branch: null, files: [], message: null };
+const isGitRepo = (dir: string) =>
+  lstat(path.join(dir, '.git')).then(
+    () => true,
+    () => false,
+  );
 
 /** What the Git page needs from the rest of core; later actions add to this. */
 export interface GitPageDeps {
@@ -40,6 +71,8 @@ export interface GitPageDeps {
   workspacesDir: string;
   /** Runs the checks on a healed pull merge (tests inject it); default: buildWorkspaceDemo. */
   buildWorkspaceDemo?: typeof buildWorkspaceDemo;
+  /** The release jobs (server.ts makes them); made from the deps above when omitted. */
+  releases?: ReleaseJobs;
 }
 
 /**
@@ -52,12 +85,24 @@ export class GitPageService {
   private readonly heals = new HealJobs();
   /** Release-notes drafts that run in the background. */
   private readonly drafts = new DraftJobs();
+  /** Promote and release jobs that run in the background. */
+  private readonly releases: ReleaseJobs;
 
   constructor(
     private readonly db: Db,
     readonly repository: RepositoryService,
     readonly deps: GitPageDeps,
-  ) {}
+  ) {
+    this.releases =
+      deps.releases ??
+      new ReleaseJobs(db, {
+        repository,
+        forge: deps.forge,
+        runs: deps.runs,
+        workspacesDir: deps.workspacesDir,
+        ...(deps.buildWorkspaceDemo ? { buildWorkspaceDemo: deps.buildWorkspaceDemo } : {}),
+      });
+  }
 
   private project(projectId: string) {
     const row = this.db.select().from(projects).where(eq(projects.id, projectId)).get();
@@ -135,14 +180,111 @@ export class GitPageService {
     return pull(this.syncDeps(), projectId, opts);
   }
 
-  /** Resolves once no pull's heal and no release-notes draft runs in the background. */
+  /** Resolves once no pull's heal, release-notes draft or release job runs in the background. */
   async idle(): Promise<void> {
-    await Promise.all([this.heals.idle(), this.drafts.idle()]);
+    await Promise.all([this.heals.idle(), this.drafts.idle(), this.releases.idle()]);
   }
 
-  /** Makes the background heals and drafts give up, and waits for them at most `timeoutMs`. */
+  /**
+   * Makes the background heals and drafts give up and a release job end at its next step, and
+   * waits for them at most `timeoutMs`.
+   */
   async stop(timeoutMs?: number): Promise<void> {
-    await Promise.all([this.heals.stop(timeoutMs), this.drafts.stop(timeoutMs)]);
+    await Promise.all([
+      this.heals.stop(timeoutMs),
+      this.drafts.stop(timeoutMs),
+      this.releases.stop(timeoutMs),
+    ]);
+  }
+
+  /** Approve and publish, or Promote only: checked now, run in the background (the job as it starts). */
+  startRelease(projectId: string, raw: unknown): Promise<ReleaseJob> {
+    this.project(projectId);
+    return this.releases.start(projectId, raw);
+  }
+
+  /** Goes on with a stopped release from the step it stopped at. */
+  retryRelease(projectId: string): Promise<ReleaseJob> {
+    this.project(projectId);
+    return this.releases.retry(projectId);
+  }
+
+  /** Puts main back where a stopped release found it, while nothing of it is pushed. */
+  undoPromote(projectId: string): Promise<ReleaseJob> {
+    this.project(projectId);
+    return this.releases.undoPromote(projectId);
+  }
+
+  /**
+   * What the Git page shows, read locally (no network): the branches, main and the working branch
+   * against origin as last read (`refs/remotes/origin/<b>`), the last pull, and the release.
+   */
+  async status(projectId: string): Promise<GitPageStatus> {
+    const project = this.project(projectId);
+    const settings = readRepositorySettings(this.db, projectId);
+    const main = project.defaultBranch;
+    const working = workingBranchOf(settings, main);
+    const base: GitPageStatus = {
+      isGitRepo: false,
+      defaultBranch: main,
+      workingBranch: working,
+      checkedOut: null,
+      workingMismatch: false,
+      mainBehindWorking: 0,
+      latestTag: null,
+      hasOrigin: false,
+      originUrl: null,
+      working: 'unknown',
+      main: 'unknown',
+      checkedAt: settings.lastRemoteCheck?.at ?? null,
+      autoPull: settings.autoPull,
+      sync: settings.sync ?? IDLE_SYNC,
+      forgeRelease: false,
+      release: { ok: false, reason: 'The project folder is not a git repository.' },
+      releaseJob: this.releases.current(projectId),
+      releaseDraft: this.releaseDraft(projectId),
+      backups: [],
+    };
+    const dir = project.path;
+    if (!(await isGitRepo(dir))) return base;
+    const { branch: checkedOut } = await mainBranchState(dir);
+    const stored = factoryWorkingBranch(this.db, projectId, main);
+    const { fetch: origin } = await originUrls(dir);
+    const mainTip = await localTip(dir, main);
+    const workingTip = await localTip(dir, working);
+    const behind =
+      mainTip && workingTip && mainTip !== workingTip
+        ? Number(
+            (await realGit(['rev-list', '--count', `${mainTip}..${workingTip}`, '--'], dir)).stdout.trim(),
+          )
+        : 0;
+    // Against origin as last read: a branch origin lacks has no tracking ref after a read that worked.
+    const check = settings.lastRemoteCheck;
+    const against = async (branch: string, local: string | null): Promise<BranchRemoteState> => {
+      if (!origin) return 'unknown';
+      const remote = await refTip(dir, `refs/remotes/origin/${branch}`);
+      if (remote) return classify(dir, local, remote);
+      return check && !check.error ? 'unpublished' : 'unknown';
+    };
+    const reason = await this.releases.refusal(projectId);
+    return {
+      ...base,
+      isGitRepo: true,
+      checkedOut,
+      workingMismatch: stored !== null && checkedOut !== stored,
+      mainBehindWorking: Number.isSafeInteger(behind) ? behind : 0,
+      latestTag: await latestVersionTag(dir, `refs/heads/${main}`),
+      hasOrigin: origin !== null,
+      originUrl: origin ? remoteUrlForDisplay(origin).display : null,
+      working: await against(working, workingTip),
+      main: await against(main, mainTip),
+      forgeRelease:
+        origin !== null &&
+        parseForgeRemote(origin) !== null &&
+        credentialAccountForRemote(this.db, origin) !== null,
+      release: { ok: reason === null, reason },
+      backups: await listBackups(dir),
+    };
   }
 
   /** The stored release draft; one whose job is gone reads as failed. */

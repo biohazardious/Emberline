@@ -360,7 +360,7 @@ export class HealJobs {
 }
 
 /** Waits for `work`, at most `ms`. */
-async function within(work: Promise<unknown>, ms: number): Promise<void> {
+export async function within(work: Promise<unknown>, ms: number): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     work.then(
@@ -510,7 +510,7 @@ const conflictOutcome = (working: string, label: string, files: string[], detail
 };
 
 /** Whether the main workspace has changes to tracked files or an unfinished merge (Emberline's scratch files aside). */
-async function workspaceDirty(mainPath: string): Promise<boolean> {
+export async function workspaceDirty(mainPath: string): Promise<boolean> {
   await resetScratchFilesToHead(mainPath);
   const status = await execGitFile(['status', '--porcelain', '--untracked-files=no'], { cwd: mainPath });
   if (status.stdout.trim()) return true;

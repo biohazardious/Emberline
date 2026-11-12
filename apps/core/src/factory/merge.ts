@@ -323,6 +323,31 @@ export function withMainWorkspaceLock<T>(mainWorkspacePath: string, fn: () => Pr
   return mainWorkspaceLock.run(path.resolve(mainWorkspacePath), fn);
 }
 
+/** The runs whose merge into each main workspace is waiting for its lock or running, by path. */
+const mergesInFlight = new Map<string, Map<string, number>>();
+
+/**
+ * The runs merging into this main workspace right now (queued for its lock or merging): a release
+ * waits for them, since each one moves the working branch it is about to promote.
+ */
+export function runsMergingInto(mainWorkspacePath: string): string[] {
+  return [...(mergesInFlight.get(path.resolve(mainWorkspacePath))?.keys() ?? [])];
+}
+
+/** Counts a run's merge as in flight; the function returned ends it. */
+function mergeStarted(mainWorkspacePath: string, runId: string): () => void {
+  const key = path.resolve(mainWorkspacePath);
+  const runs = mergesInFlight.get(key) ?? new Map<string, number>();
+  mergesInFlight.set(key, runs);
+  runs.set(runId, (runs.get(runId) ?? 0) + 1);
+  return () => {
+    const left = (runs.get(runId) ?? 1) - 1;
+    if (left > 0) runs.set(runId, left);
+    else runs.delete(runId);
+    if (runs.size === 0 && mergesInFlight.get(key) === runs) mergesInFlight.delete(key);
+  };
+}
+
 function gitLines(stdout: string): string[] {
   return stdout
     .split('\n')
@@ -396,7 +421,19 @@ export async function runProducedChanges(worktreePath: string, mainWorkspacePath
  * by a parallel run is kept. A conflicting merge is aborted and reported with `ok: false`, leaving
  * the main workspace as it was.
  */
-export async function syncWorktreeToMainWorkspace(params: {
+export async function syncWorktreeToMainWorkspace(
+  params: Parameters<typeof mergeRunIntoMainWorkspace>[0],
+): Promise<SyncWorktreeResult> {
+  // Counted while it waits for the lock too: a release does not start meanwhile (runsMergingInto).
+  const ended = mergeStarted(params.mainWorkspacePath, params.runId);
+  try {
+    return await mergeRunIntoMainWorkspace(params);
+  } finally {
+    ended();
+  }
+}
+
+async function mergeRunIntoMainWorkspace(params: {
   worktreePath: string;
   mainWorkspacePath: string;
   ticketKey: string | null;

@@ -499,27 +499,36 @@ export class RepositoryService {
         if (branch === defaultBranch) await this.readOrigin(projectId, plan);
         return { outcome: result, branch, defaultBranch, onWorking };
       }
-      await withMainWorkspaceLock(plan.path, async () => {
-        if (!(await this.originStill(projectId, plan))) return; // origin changed meanwhile: its own read counts
-        await setRemoteTracking(plan.path, branch, plan.oid);
-        // main's upstream and the read of origin's main are the default branch's alone.
-        if (branch !== defaultBranch) return;
-        await setUpstream(plan.path, plan.defaultBranch);
-        const check: RemoteCheck = {
-          url: remoteUrlForDisplay(plan.origin).display,
-          originKey: originKey(plan.origin),
-          branch: plan.defaultBranch,
-          at: new Date().toISOString(),
-          published: true,
-          error: null,
-        };
-        try {
-          writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
-        } catch {
-          // the project was deleted meanwhile
-        }
-      });
+      await this.recordPush(projectId, plan, branch, plan.oid);
       return { outcome: result, branch, defaultBranch, onWorking };
+    });
+  }
+
+  /**
+   * After a push of `oid` to origin's `branch` (with `ws` as read for it): under the main-workspace
+   * lock, the tracking ref, and for the default branch its upstream and the read of origin's main,
+   * if origin is still the one pushed to.
+   */
+  async recordPush(projectId: string, ws: Snapshot, branch: string, oid: string): Promise<void> {
+    await withMainWorkspaceLock(ws.path, async () => {
+      if (!(await this.originStill(projectId, ws))) return; // origin changed meanwhile: its own read counts
+      await setRemoteTracking(ws.path, branch, oid);
+      // main's upstream and the read of origin's main are the default branch's alone.
+      if (branch !== ws.defaultBranch) return;
+      await setUpstream(ws.path, ws.defaultBranch);
+      const check: RemoteCheck = {
+        url: remoteUrlForDisplay(ws.origin).display,
+        originKey: originKey(ws.origin),
+        branch: ws.defaultBranch,
+        at: new Date().toISOString(),
+        published: true,
+        error: null,
+      };
+      try {
+        writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
+      } catch {
+        // the project was deleted meanwhile
+      }
     });
   }
 

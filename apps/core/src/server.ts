@@ -38,6 +38,7 @@ import { registerIssueRoutes } from './routes/issues.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { ReleaseJobs } from './git-page/release.js';
 import { GitPageService } from './git-page/service.js';
 import { GitSync } from './git-page/sync.js';
 import { registerGitRoutes } from './routes/git.js';
@@ -160,11 +161,18 @@ export async function buildServer(
       log: (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message)),
     });
   const repository = deps.repository ?? new RepositoryService(deps.db, forge.accounts, deps.runs.gitGateway);
+  const releases = new ReleaseJobs(deps.db, {
+    repository,
+    forge,
+    runs: deps.runs,
+    workspacesDir: deps.config.workspacesDir,
+  });
   const gitPage = new GitPageService(deps.db, repository, {
     runs: deps.runs,
     forge,
     tickets: deps.tickets,
     workspacesDir: deps.config.workspacesDir,
+    releases,
   });
   const mainPush =
     deps.mainPush ??
