@@ -95,6 +95,8 @@ export function useReviewCommentsController({
     setDraft(null);
     setFocusedId(null);
     setActiveLine(null);
+    // A jump to a comment is for the file it was made in, not the next one shown.
+    setRevealTarget(null);
   }, []);
 
   const reviewCall = useCallback(

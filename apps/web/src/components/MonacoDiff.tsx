@@ -27,6 +27,10 @@ interface Props {
   revealTarget?: { line: number; side: 'modified' | 'original'; nonce: number } | null;
   /** The line a comment is being written for, shown in the hint bar. */
   draftLine: { line: number; side: 'modified' | 'original' } | null;
+  /** The next file's diff is loading: this one stays on screen, covered, until it arrives. */
+  pending?: boolean;
+  /** Hidden but kept alive (the selected file is binary or failed to load), so it is not rebuilt. */
+  hidden?: boolean;
 }
 
 export function MonacoDiff({
@@ -42,6 +46,8 @@ export function MonacoDiff({
   onActiveLineChange,
   revealTarget,
   draftLine,
+  pending = false,
+  hidden = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const diffEditorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
@@ -259,7 +265,12 @@ export function MonacoDiff({
   }
 
   return (
-    <div className="monaco-diff-shell" data-diff-file={filePath} data-monaco-ready={ready ? 'true' : 'false'}>
+    <div
+      className="monaco-diff-shell"
+      data-diff-file={filePath}
+      data-monaco-ready={ready ? 'true' : 'false'}
+      hidden={hidden}
+    >
       <div className="monaco-diff-hint-bar">
         <span className="muted small">
           Click any line or press <kbd className="kbd">c</kbd> to comment · <kbd className="kbd">j</kbd>/
@@ -305,6 +316,12 @@ export function MonacoDiff({
         )}
 
         <div ref={containerRef} className="monaco-diff-canvas" />
+
+        {pending && (
+          <div className="monaco-diff-pending" role="status">
+            Loading file diff…
+          </div>
+        )}
       </div>
     </div>
   );

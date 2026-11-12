@@ -299,6 +299,24 @@
   width: 100%;
 }
 
+.monaco-diff-shell[hidden] {
+  display: none;
+}
+
+/* The previous file's diff stays under this while the next one loads. */
+.monaco-diff-pending {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
 .review-fast-diff-preview {
   position: absolute;
   inset: 0;

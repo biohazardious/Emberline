@@ -18,13 +18,17 @@ export function useReviewDiffLoader(params: {
   const { runId, scope, selectedFile, setSelectedFile, setError } = params;
   const queryClient = useQueryClient();
   const [summary, setSummary] = useState<RunDiffSummary | null>(null);
-  const [fileDiff, setFileDiff] = useState<RunFileDiff | null>(null);
+  const [loaded, setLoaded] = useState<{ key: string; diff: RunFileDiff } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
-  const [loadingFile, setLoadingFile] = useState(false);
 
   const fileDiffCacheRef = useRef<Map<string, RunFileDiff>>(new Map());
   const inFlightFileRef = useRef<Map<string, Promise<void>>>(new Map());
-  const fileReqSeqRef = useRef(0);
+  // A response reaches the pane only while its file is still the selected one, so a late answer
+  // for a file the reviewer has already moved past never replaces the current one.
+  const selectedKey = selectedFile ? `${scope}:${selectedFile}` : null;
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
   const clearDiffCache = useCallback(() => {
     fileDiffCacheRef.current.clear();
     inFlightFileRef.current.clear();
@@ -33,34 +37,41 @@ export function useReviewDiffLoader(params: {
   const loadFile = useCallback(
     async (path: string, targetScope: DiffScope) => {
       const cacheKey = `${targetScope}:${path}`;
+      const isSelected = () => selectedKeyRef.current === cacheKey;
       const cached = fileDiffCacheRef.current.get(cacheKey);
       if (cached) {
-        setFileDiff(cached);
-        setLoadingFile(false);
+        if (isSelected()) setLoaded({ key: cacheKey, diff: cached });
         return;
       }
       const existingFlight = inFlightFileRef.current.get(cacheKey);
-      if (existingFlight) {
-        return existingFlight;
-      }
-      const reqId = ++fileReqSeqRef.current;
-      setLoadingFile(true);
+      if (existingFlight) return existingFlight;
+      setFailedKey((prev) => (prev === cacheKey ? null : prev));
+      // A cleared cache (a refresh, a stage toggle) orphans this flight: its answer may predate the
+      // change, so it is not cached, and it is dropped once a newer flight or answer exists.
+      const isCurrentFlight = () => inFlightFileRef.current.get(cacheKey) === task;
+      const isSuperseded = () =>
+        !isCurrentFlight() &&
+        (inFlightFileRef.current.has(cacheKey) || fileDiffCacheRef.current.has(cacheKey));
       const task = (async () => {
         try {
           const res = await api<RunFileDiff>(
             `/api/runs/${runId}/diff/file?path=${encodeURIComponent(path)}&scope=${encodeURIComponent(targetScope)}`,
           );
-          if (fileDiffCacheRef.current.size >= MAX_DIFF_CACHE) {
-            const firstKey = fileDiffCacheRef.current.keys().next().value;
-            if (firstKey !== undefined) fileDiffCacheRef.current.delete(firstKey);
+          if (isSuperseded()) return;
+          if (isCurrentFlight()) {
+            if (fileDiffCacheRef.current.size >= MAX_DIFF_CACHE) {
+              const firstKey = fileDiffCacheRef.current.keys().next().value;
+              if (firstKey !== undefined) fileDiffCacheRef.current.delete(firstKey);
+            }
+            fileDiffCacheRef.current.set(cacheKey, res);
           }
-          fileDiffCacheRef.current.set(cacheKey, res);
-          if (reqId === fileReqSeqRef.current) setFileDiff(res);
+          if (isSelected()) setLoaded({ key: cacheKey, diff: res });
         } catch (e) {
-          if (reqId === fileReqSeqRef.current) setError(errorMessage(e));
+          if (isSuperseded()) return;
+          setFailedKey(cacheKey);
+          if (isSelected()) setError(errorMessage(e));
         } finally {
-          inFlightFileRef.current.delete(cacheKey);
-          if (reqId === fileReqSeqRef.current) setLoadingFile(false);
+          if (isCurrentFlight()) inFlightFileRef.current.delete(cacheKey);
         }
       })();
       inFlightFileRef.current.set(cacheKey, task);
@@ -111,12 +122,21 @@ export function useReviewDiffLoader(params: {
 
   useEffect(() => {
     if (selectedFile) void loadFile(selectedFile, scope);
-    else setFileDiff(null);
   }, [selectedFile, scope, loadFile]);
+
+  // A diff already fetched is served on the render that selects its file, not an effect later.
+  const fileDiff =
+    selectedKey === null
+      ? null
+      : loaded?.key === selectedKey
+        ? loaded.diff
+        : (fileDiffCacheRef.current.get(selectedKey) ?? null);
+  const loadingFile = selectedKey !== null && fileDiff === null && failedKey !== selectedKey;
 
   return {
     summary,
     setSummary,
+    /** The diff of the selected file, or null while it loads (or when its load failed). */
     fileDiff,
     loadingDiff,
     loadingFile,

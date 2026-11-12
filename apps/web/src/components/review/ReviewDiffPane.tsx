@@ -1,8 +1,11 @@
 import type { ReviewComment, RunFileDiff } from '@emberline/protocol';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { MonacoDiff } from '../MonacoDiff';
 import { CommentComposer, type CommentDraft } from './CommentComposer';
 import { detectLanguage } from './useReviewExtras';
+
+const NO_COMMENTS: ReviewComment[] = [];
+const noop = () => undefined;
 
 interface Props {
   selectedFile: string | null;
@@ -37,6 +40,15 @@ export function ReviewDiffPane({
   onActiveLineChange,
   revealTarget,
 }: Props) {
+  // One Monaco diff editor lives for the whole pane: a file switch swaps its models (pooled in
+  // MonacoDiff) instead of rebuilding it. While the next diff loads, or while the selected file is
+  // binary, the editor keeps the last text diff it showed, covered or hidden.
+  const textDiff = selectedFile && activeFileDiff && !activeFileDiff.binary ? activeFileDiff : null;
+  const [editorDiff, setEditorDiff] = useState<RunFileDiff | null>(textDiff);
+  if (textDiff && textDiff !== editorDiff) setEditorDiff(textDiff);
+  else if (!selectedFile && editorDiff) setEditorDiff(null);
+  const showsSelected = editorDiff !== null && editorDiff === textDiff;
+
   return (
     <div className="review-diff-pane">
       {!selectedFile ? (
@@ -72,35 +84,40 @@ export function ReviewDiffPane({
             />
           )}
           {fileChips.length > 0 && <div className="diff-file-annotations">{fileChips.map(renderChip)}</div>}
-          {loadingFile && !activeFileDiff ? (
-            <div className="empty review-empty">Loading file diff…</div>
-          ) : !activeFileDiff ? (
-            <div className="empty review-empty">
-              Select a changed file to inspect its diff and attach inline review comments.
-            </div>
-          ) : activeFileDiff.binary ? (
+          {editorDiff && (
+            <MonacoDiff
+              filePath={editorDiff.path}
+              language={detectLanguage(editorDiff.path)}
+              original={editorDiff.original}
+              modified={editorDiff.modified}
+              patch={editorDiff.patch}
+              renderSideBySide={renderSideBySide}
+              comments={showsSelected ? fileComments : NO_COMMENTS}
+              draftLine={showsSelected && draft && draft !== 'file' ? draft : null}
+              onLineClick={
+                showsSelected
+                  ? (line, side) => {
+                      onActiveLineChange({ line, side });
+                      onDraftChange({ line, side });
+                    }
+                  : noop
+              }
+              onFocusComment={showsSelected ? onFocusComment : noop}
+              onActiveLineChange={showsSelected ? onActiveLineChange : undefined}
+              revealTarget={showsSelected ? revealTarget : null}
+              pending={!showsSelected && loadingFile}
+              hidden={!showsSelected && !loadingFile}
+            />
+          )}
+          {activeFileDiff?.binary ? (
             <div className="empty review-empty">
               Binary file (`{activeFileDiff.path}`) — comment on the file above, or switch to the Artifacts
               tab to preview or download it.
             </div>
+          ) : activeFileDiff ? null : loadingFile ? (
+            !editorDiff && <div className="empty review-empty">Loading file diff…</div>
           ) : (
-            <MonacoDiff
-              filePath={activeFileDiff.path}
-              language={detectLanguage(activeFileDiff.path)}
-              original={activeFileDiff.original}
-              modified={activeFileDiff.modified}
-              patch={activeFileDiff.patch}
-              renderSideBySide={renderSideBySide}
-              comments={fileComments}
-              draftLine={draft && draft !== 'file' ? draft : null}
-              onLineClick={(line, side) => {
-                onActiveLineChange({ line, side });
-                onDraftChange({ line, side });
-              }}
-              onFocusComment={onFocusComment}
-              onActiveLineChange={onActiveLineChange}
-              revealTarget={revealTarget}
-            />
+            <div className="empty review-empty">This file&apos;s diff could not be loaded.</div>
           )}
         </>
       )}

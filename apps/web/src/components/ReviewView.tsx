@@ -189,8 +189,6 @@ export function ReviewView({
       ctrl.comments.filter((c) => c.filePath === selectedFile && (c.status !== 'resolved' || c.carriedTo)),
     [ctrl.comments, selectedFile],
   );
-  const activeFileDiff = diff.fileDiff && diff.fileDiff.path === selectedFile ? diff.fileDiff : null;
-
   return (
     <div className="review-workspace">
       <MergeGateBanner
@@ -327,7 +325,7 @@ export function ReviewView({
             />
             <ReviewDiffPane
               selectedFile={selectedFile}
-              activeFileDiff={activeFileDiff}
+              activeFileDiff={diff.fileDiff}
               loadingFile={diff.loadingFile}
               renderSideBySide={renderSideBySide}
               draft={ctrl.draft}
