@@ -45,17 +45,23 @@ export const RIVAL_REVIEW_JSON_SCHEMA = JSON.stringify({
   required: ['verdict', 'score', 'summary', 'issues'],
 });
 
-interface ReviewerCommand {
+export interface ReviewerCommand {
   file: string;
   args: string[];
 }
 
 /**
- * CLIs that can review non-interactively with a read-only mode and structured output. Both
- * print a JSON envelope whose `structured_output` holds the schema-checked answer.
+ * The non-interactive command of a CLI that answers with structured output under `schema`, read-only
+ * (plan mode: it may read files but never edit or run commands). Both CLIs print a JSON envelope
+ * whose `structured_output` holds the schema-checked answer.
  */
-const REVIEWERS: Partial<Record<AgentId, (prompt: string, model: AgentModelId) => ReviewerCommand>> = {
-  claude: (prompt, model) => {
+export function structuredCommand(
+  agent: AgentId,
+  prompt: string,
+  model: AgentModelId,
+  schema: string,
+): ReviewerCommand | null {
+  if (agent === 'claude') {
     const cliModel = resolveClaudeCliModelFlag(model);
     return {
       file: process.env.EMBERLINE_CLAUDE_COMMAND?.trim() || 'claude',
@@ -65,39 +71,41 @@ const REVIEWERS: Partial<Record<AgentId, (prompt: string, model: AgentModelId) =
         '--output-format',
         'json',
         '--json-schema',
-        RIVAL_REVIEW_JSON_SCHEMA,
-        // Plan mode: the reviewer may read files but never edit or run commands.
+        schema,
         '--permission-mode',
         'plan',
         '--no-session-persistence',
         ...(cliModel ? ['--model', cliModel] : []),
       ],
     };
-  },
-  antigravity: (prompt) => ({
-    // The raw binary: the runner's `agy` wrapper rewrites -p for interactive runs.
-    file:
-      process.env.EMBERLINE_AGY_COMMAND?.trim() ||
-      path.join(process.env.EMBERLINE_TOOLS_DIR ?? '/opt/ai-tools', 'bin', 'agy'),
-    args: [
-      '-p',
-      prompt,
-      '--mode',
-      'plan',
-      '--output-format',
-      'json',
-      '--json-schema',
-      RIVAL_REVIEW_JSON_SCHEMA,
-      '--effort',
-      'high',
-      '--print-timeout',
-      `${Math.floor(REVIEW_TIMEOUT_MS / 1000) - 20}s`,
-    ],
-  }),
-};
+  }
+  if (agent === 'antigravity') {
+    return {
+      // The raw binary: the runner's `agy` wrapper rewrites -p for interactive runs.
+      file:
+        process.env.EMBERLINE_AGY_COMMAND?.trim() ||
+        path.join(process.env.EMBERLINE_TOOLS_DIR ?? '/opt/ai-tools', 'bin', 'agy'),
+      args: [
+        '-p',
+        prompt,
+        '--mode',
+        'plan',
+        '--output-format',
+        'json',
+        '--json-schema',
+        schema,
+        '--effort',
+        'high',
+        '--print-timeout',
+        `${Math.floor(REVIEW_TIMEOUT_MS / 1000) - 20}s`,
+      ],
+    };
+  }
+  return null;
+}
 
 export function supportsRivalReview(agent: AgentId): boolean {
-  return agent in REVIEWERS;
+  return agent === 'claude' || agent === 'antigravity';
 }
 
 /** The run's changes against the branch it started from, plus untracked files, capped in size. */
@@ -155,41 +163,46 @@ export function buildRivalPrompt(params: {
 
 export type RivalReviewOutcome = { ok: true; review: RivalReview } | { ok: false; reason: string };
 
-/** Runs the reviewer CLI once in the runner (via ptyd exec) and validates its structured answer. */
+/**
+ * Runs a structured command once in the runner (via ptyd exec) and returns the envelope's
+ * `structured_output`, unchecked, or why there is none.
+ */
+export async function runStructuredCommand(
+  agent: AgentId,
+  command: ReviewerCommand,
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ ok: true; output: unknown } | { ok: false; reason: string }> {
+  let result;
+  try {
+    result = await execCommand({ target: 'runner', file: command.file, args: command.args, cwd, timeoutMs });
+  } catch (error) {
+    return { ok: false, reason: (error as Error).message };
+  }
+  if (result.timedOut) return { ok: false, reason: `${agent} review timed out` };
+  let envelope: { structured_output?: unknown; is_error?: boolean; status?: string };
+  try {
+    envelope = JSON.parse(result.stdout.trim()) as typeof envelope;
+  } catch {
+    const detail = (result.stderr || result.stdout).trim().split('\n').at(-1)?.slice(0, 200) ?? '';
+    return { ok: false, reason: `${agent} exited ${result.exitCode}${detail ? `: ${detail}` : ''}` };
+  }
+  if (envelope.is_error) return { ok: false, reason: `${agent} reported an error` };
+  return { ok: true, output: envelope.structured_output };
+}
+
+/** Runs the reviewer CLI once in the runner and validates its structured answer. */
 export async function runRivalReview(params: {
   reviewer: AgentId;
   model: AgentModelId;
   workspacePath: string;
   prompt: string;
 }): Promise<RivalReviewOutcome> {
-  const build = REVIEWERS[params.reviewer];
-  if (!build) return { ok: false, reason: `${params.reviewer} has no non-interactive review mode` };
-  const command = build(params.prompt, params.model);
-  let result;
-  try {
-    result = await execCommand({
-      target: 'runner',
-      file: command.file,
-      args: command.args,
-      cwd: params.workspacePath,
-      timeoutMs: REVIEW_TIMEOUT_MS,
-    });
-  } catch (error) {
-    return { ok: false, reason: (error as Error).message };
-  }
-  if (result.timedOut) return { ok: false, reason: `${params.reviewer} review timed out` };
-  let envelope: { structured_output?: unknown; is_error?: boolean; status?: string };
-  try {
-    envelope = JSON.parse(result.stdout.trim()) as typeof envelope;
-  } catch {
-    const detail = (result.stderr || result.stdout).trim().split('\n').at(-1)?.slice(0, 200) ?? '';
-    return {
-      ok: false,
-      reason: `${params.reviewer} exited ${result.exitCode}${detail ? `: ${detail}` : ''}`,
-    };
-  }
-  if (envelope.is_error) return { ok: false, reason: `${params.reviewer} reported an error` };
-  const parsed = RivalReview.safeParse(envelope.structured_output);
+  const command = structuredCommand(params.reviewer, params.prompt, params.model, RIVAL_REVIEW_JSON_SCHEMA);
+  if (!command) return { ok: false, reason: `${params.reviewer} has no non-interactive review mode` };
+  const run = await runStructuredCommand(params.reviewer, command, params.workspacePath, REVIEW_TIMEOUT_MS);
+  if (!run.ok) return run;
+  const parsed = RivalReview.safeParse(run.output);
   if (!parsed.success) return { ok: false, reason: `${params.reviewer} returned no valid structured review` };
   return { ok: true, review: { ...parsed.data, score: Math.round(parsed.data.score) } };
 }

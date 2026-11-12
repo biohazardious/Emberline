@@ -38,5 +38,6 @@ export function registerGitRoutes(app: FastifyInstance, git: GitPageService): vo
   app.post<P>('/api/projects/:id/git/fetch', async (r) => git.fetch(r.params.id));
   app.post<P>('/api/projects/:id/git/pull', async (r) => git.pull(r.params.id, { auto: false }));
   app.post<P>('/api/projects/:id/git/pull/ticket', async (r) => git.pullTicket(r.params.id));
+  app.post<P>('/api/projects/:id/git/release/draft', async (r) => git.draftRelease(r.params.id));
   app.post<P>('/api/projects/:id/git/match-origin', async (r) => git.matchOrigin(r.params.id, r.body));
 }

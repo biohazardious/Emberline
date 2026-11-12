@@ -6,6 +6,7 @@ import {
   type GitCompare,
   type GitFileDiff,
   type GitSync,
+  type ReleaseDraft,
   SetWorkingBranchBody,
   UpdateGitSettingsBody,
 } from '@emberline/protocol';
@@ -27,6 +28,7 @@ import {
   setWorkingBranch,
 } from './branches.js';
 import { commitDetail, commitFileDiff, compareFileDiff, compareRefs, listCommits } from './history.js';
+import { DraftJobs, draftReleaseNotes } from './release-notes.js';
 import { fetchOrigin, HealJobs, matchOrigin, pull, pullTicketText, type SyncDeps } from './sync.js';
 
 /** What the Git page needs from the rest of core; later actions add to this. */
@@ -48,6 +50,8 @@ export interface GitPageDeps {
 export class GitPageService {
   /** Pull heals that run in the background, one per project. */
   private readonly heals = new HealJobs();
+  /** Release-notes drafts that run in the background. */
+  private readonly drafts = new DraftJobs();
 
   constructor(
     private readonly db: Db,
@@ -131,14 +135,19 @@ export class GitPageService {
     return pull(this.syncDeps(), projectId, opts);
   }
 
-  /** Resolves once no pull's heal runs in the background. */
-  idle(): Promise<void> {
-    return this.heals.idle();
+  /** Resolves once no pull's heal and no release-notes draft runs in the background. */
+  async idle(): Promise<void> {
+    await Promise.all([this.heals.idle(), this.drafts.idle()]);
   }
 
-  /** Makes the pulls' background heals give up, and waits for them at most `timeoutMs`. */
-  stop(timeoutMs?: number): Promise<void> {
-    return this.heals.stop(timeoutMs);
+  /** Makes the background heals and drafts give up, and waits for them at most `timeoutMs`. */
+  async stop(timeoutMs?: number): Promise<void> {
+    await Promise.all([this.heals.stop(timeoutMs), this.drafts.stop(timeoutMs)]);
+  }
+
+  /** Has an agent draft the release notes and the version bump; the draft is stored for the release. */
+  draftRelease(projectId: string): Promise<ReleaseDraft> {
+    return draftReleaseNotes({ db: this.db, jobs: this.drafts }, this.project(projectId));
   }
 
   /** Reads origin only. */
