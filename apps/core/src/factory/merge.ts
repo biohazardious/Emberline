@@ -29,6 +29,7 @@ export const EMBERLINE_SCRATCH_PATHS = [
   '.emberline/tickets.json',
   '.emberline/brainstorm-suggestions.json',
   '.emberline/roadmap*.json',
+  '.emberline/*.rejected.json',
   '.emberline/cross-critic-*.json',
   '.emberline/attachments/**',
 ] as const;

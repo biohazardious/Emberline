@@ -11,12 +11,14 @@ import {
   type BrainstormRequestBody,
   type BrainstormResponse,
   type BrainstormSuggestion,
+  BrainstormSuggestionsFile,
   coerceModelForProvider,
   type CreateMilestoneBody,
   type CreateRoadmapItemBody,
   type DispatchRoadmapItemsBody,
   type DispatchRoadmapItemsResponse,
   type FactorySettings,
+  GeneratedRoadmapFile,
   type Project,
   type ProjectRoadmapState,
   type RoadmapCategory,
@@ -26,6 +28,7 @@ import {
   type UpdateRoadmapItemBody,
 } from '@emberline/protocol';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { keepRejected, parseAgentFile } from './agent-files.js';
 import type { TicketService } from '../tickets/service.js';
 import { listWorkspaceFilesFlat, readProjectBlueprint } from './service.js';
 
@@ -927,46 +930,42 @@ async function readOrInitRoadmapFile(
   // Check if an AI Architect agent wrote `.emberline/roadmap-generated.json`
   const agentRoadmapGenPath = path.join(project.path, ROADMAP_GEN_OUT_REL_PATH);
   if (existsSync(agentRoadmapGenPath)) {
-    try {
-      const raw = await readFile(agentRoadmapGenPath, 'utf8');
-      const parsed = JSON.parse(raw) as {
-        visionSummary?: string;
-        milestones?: Array<{
-          code?: string;
-          title?: string;
-          description?: string;
-          items?: Array<Partial<RoadmapItem>>;
-        }>;
-      };
-      if (parsed.visionSummary?.trim()) {
-        stored.visionSummary = parsed.visionSummary.trim();
+    const read = parseAgentFile(await readFile(agentRoadmapGenPath, 'utf8'), GeneratedRoadmapFile);
+    if (!read.ok) {
+      ticketService.noticeProject(
+        project.id,
+        await keepRejected(project.path, ROADMAP_GEN_OUT_REL_PATH, read.issue),
+      );
+    } else {
+      const parsed = read.data;
+      if (parsed.visionSummary) {
+        stored.visionSummary = parsed.visionSummary;
         dirty = true;
       }
-      if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
+      if (parsed.milestones.length > 0) {
         const existingTitles = new Set(
           stored.milestones.flatMap((m) => m.items.map((i) => i.title.trim().toLowerCase())),
         );
         for (let idx = 0; idx < parsed.milestones.length; idx++) {
           const genMs = parsed.milestones[idx]!;
-          const code = genMs.code?.trim() || `M${idx + 1}`;
+          const code = genMs.code || `M${idx + 1}`;
           let targetMs = stored.milestones.find((m) => m.code === code);
           if (!targetMs) {
             targetMs = {
               id: `ms-${randomUUID().slice(0, 8)}`,
               code,
-              title: genMs.title?.trim() || `Milestone ${code}`,
-              description: genMs.description?.trim() ?? '',
+              title: genMs.title || `Milestone ${code}`,
+              description: genMs.description ?? '',
               status: 'planned',
               items: [],
             };
             stored.milestones.push(targetMs);
           } else {
-            if (genMs.title?.trim()) targetMs.title = genMs.title.trim();
-            if (genMs.description?.trim()) targetMs.description = genMs.description.trim();
+            if (genMs.title) targetMs.title = genMs.title;
+            if (genMs.description) targetMs.description = genMs.description;
           }
-          for (const rawItem of genMs.items ?? []) {
-            if (!rawItem.title?.trim()) continue;
-            const normTitle = rawItem.title.trim().toLowerCase();
+          for (const rawItem of genMs.items) {
+            const normTitle = rawItem.title.toLowerCase();
             if (existingTitles.has(normTitle)) continue;
             existingTitles.add(normTitle);
             const inferred = inferPersonaAndCategoryFromText(`${rawItem.title} ${rawItem.description ?? ''}`);
@@ -975,8 +974,8 @@ async function readOrInitRoadmapFile(
             targetMs.items.push({
               id: `item-${randomUUID().slice(0, 8)}`,
               milestoneId: targetMs.id,
-              title: rawItem.title.trim(),
-              description: rawItem.description?.trim() || rawItem.title.trim(),
+              title: rawItem.title,
+              description: rawItem.description || rawItem.title,
               category: rawItem.category ?? inferred.category,
               persona,
               preferredAgent: routing.preferredAgent,
@@ -992,8 +991,6 @@ async function readOrInitRoadmapFile(
         dirty = true;
       }
       await rm(agentRoadmapGenPath, { force: true });
-    } catch {
-      // Ignore malformed agent output
     }
   }
 
@@ -1034,44 +1031,44 @@ async function readOrInitRoadmapFile(
   // Check if an AI agent wrote `.emberline/brainstorm-suggestions.json`
   const agentBrainstormPath = path.join(project.path, BRAINSTORM_OUT_REL_PATH);
   if (existsSync(agentBrainstormPath)) {
-    try {
-      const raw = await readFile(agentBrainstormPath, 'utf8');
-      const parsed = JSON.parse(raw) as { suggestions?: Array<Partial<BrainstormSuggestion>> };
-      if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
-        const existingSuggestionTitles = new Set(stored.suggestions.map((s) => s.title.toLowerCase()));
-        for (const s of parsed.suggestions) {
-          if (!s.title || existingSuggestionTitles.has(s.title.toLowerCase())) continue;
-          const persona: AgentPersona = s.persona ?? 'coder';
-          const routing = defaultRoutingForPersona(persona, fSettings);
-          const requestedAgent = s.preferredAgent ?? routing.preferredAgent;
-          const validAgent = enabledProviders.includes(requestedAgent)
-            ? requestedAgent
-            : routing.preferredAgent;
-          const validModel = coerceModelForProvider(
-            validAgent,
-            s.preferredModel ?? routing.preferredModel,
-            persona,
-          );
-          stored.suggestions.unshift({
-            id: `sug-${randomUUID().slice(0, 8)}`,
-            title: s.title,
-            rationale: s.rationale ?? 'Suggested by AI Brainstorming Agent.',
-            implementationPrompt: s.implementationPrompt ?? s.rationale ?? s.title,
-            category: s.category ?? categoryForPersona(persona),
-            impact: s.impact ?? 'high',
-            effort: s.effort ?? 'medium',
-            persona,
-            preferredAgent: validAgent,
-            preferredModel: validModel,
-            suggestedMilestoneCode: s.suggestedMilestoneCode ?? 'M2',
-          });
-          existingSuggestionTitles.add(s.title.toLowerCase());
-          dirty = true;
-        }
+    const read = parseAgentFile(await readFile(agentBrainstormPath, 'utf8'), BrainstormSuggestionsFile);
+    if (!read.ok) {
+      ticketService.noticeProject(
+        project.id,
+        await keepRejected(project.path, BRAINSTORM_OUT_REL_PATH, read.issue),
+      );
+    } else {
+      const existingSuggestionTitles = new Set(stored.suggestions.map((s) => s.title.toLowerCase()));
+      for (const s of read.data.suggestions) {
+        if (existingSuggestionTitles.has(s.title.toLowerCase())) continue;
+        const persona: AgentPersona = s.persona ?? 'coder';
+        const routing = defaultRoutingForPersona(persona, fSettings);
+        const requestedAgent = s.preferredAgent ?? routing.preferredAgent;
+        const validAgent = enabledProviders.includes(requestedAgent)
+          ? requestedAgent
+          : routing.preferredAgent;
+        const validModel = coerceModelForProvider(
+          validAgent,
+          s.preferredModel ?? routing.preferredModel,
+          persona,
+        );
+        stored.suggestions.unshift({
+          id: `sug-${randomUUID().slice(0, 8)}`,
+          title: s.title,
+          rationale: s.rationale || 'Suggested by AI Brainstorming Agent.',
+          implementationPrompt: s.implementationPrompt || s.rationale || s.title,
+          category: s.category ?? categoryForPersona(persona),
+          impact: s.impact ?? 'high',
+          effort: s.effort ?? 'medium',
+          persona,
+          preferredAgent: validAgent,
+          preferredModel: validModel,
+          suggestedMilestoneCode: s.suggestedMilestoneCode ?? 'M2',
+        });
+        existingSuggestionTitles.add(s.title.toLowerCase());
+        dirty = true;
       }
       await rm(agentBrainstormPath, { force: true });
-    } catch {
-      // Ignore malformed agent output
     }
   }
 

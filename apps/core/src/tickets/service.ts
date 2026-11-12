@@ -18,6 +18,7 @@ import {
   type FactorySettings,
   type ForgeIssue,
   type ForgeProvider,
+  type ProjectNotice,
   normalizeTicketRef,
   type Run,
   RUN_PROMPT_MAX,
@@ -33,6 +34,7 @@ import {
 } from '@emberline/protocol';
 import { and, asc, desc, eq, gt, inArray, max, min } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
+import type { AgentFileRejection } from '../factory/agent-files.js';
 import { readProjectSettings, readWizardTickets, writeProjectSettings } from '../db/project-settings.js';
 import {
   issueTombstones,
@@ -102,6 +104,8 @@ interface TicketServiceEvents {
   /** The ticket changed column (a person, the pipeline or a run); after its `ticket` event. */
   moved: [ticket: Ticket, from: TicketStatus];
   removed: [ticket: { id: string; projectId: string }];
+  /** Something about a project the user should hear, e.g. an agent file core ignored. */
+  notice: [notice: ProjectNotice];
 }
 
 /** Gap between neighbours so most moves need a single row update. */
@@ -855,6 +859,16 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     }
   }
 
+  /** Tells the project's viewers that an agent file was ignored, and why. */
+  noticeProject(projectId: string, rejection: AgentFileRejection): void {
+    this.emit('notice', {
+      kind: 'agent_file_rejected',
+      projectId,
+      ...rejection,
+      at: new Date().toISOString(),
+    });
+  }
+
   factorySettings(): FactorySettings {
     return getFactorySettings(this.db);
   }
@@ -1435,7 +1449,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const inherited: string[] = [];
     let duplicate = false;
     const hooksFor = (baseRef: () => Promise<string>, where: string): TicketsFileHooks => ({
-      onRejected: (message) => this.runs.note(run.id, 'tickets_file_rejected', { message }),
+      onRejected: (rejection) => {
+        this.runs.note(run.id, 'tickets_file_rejected', {
+          message: `${rejection.file}: ${rejection.issue}`.slice(0, 500),
+          rejectedAs: rejection.rejectedAs,
+        });
+        this.noticeProject(projectId, rejection);
+      },
       isInherited: async (relPath, raw) => committedWithContent(where, await baseRef(), relPath, raw),
       claim: (sha256) => this.claimTicketsFile(projectId, sha256),
       onSkipped: (reason, file, sha256) => {

@@ -1,8 +1,11 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Run, RunDetail, Ticket } from '@emberline/protocol';
+import type { ProjectNotice, Run, RunDetail, Ticket } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readProjectSettings, writeWizardTickets } from './db/project-settings.js';
+import type { AgentFileRejection } from './factory/agent-files.js';
+import { ingestAgentTicketsFiles } from './factory/orchestration.js';
 import { type AgentHarness, startAgentHarness, wgit } from './test-agent-harness.js';
 import type { TestApp } from './test-utils.js';
 
@@ -342,5 +345,103 @@ describe('same-title drafts are skipped', { timeout: 30_000 }, () => {
     const run = await runWith(project.id, [{ title: 'core: store' }]);
     await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('ticket_draft_duplicate');
     expect(await eventTypes(run)).not.toContain('tickets_imported');
+  });
+});
+
+describe('a tickets file is validated against NewTicketsFile', () => {
+  const REJECTED = '.emberline/new-tickets.rejected.json';
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'emberline-ingest-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function ingest(content: string) {
+    writeTickets(dir, content);
+    const rejections: AgentFileRejection[] = [];
+    const batches = await ingestAgentTicketsFiles(dir, { onRejected: (r) => rejections.push(r) });
+    return { batches, rejections };
+  }
+
+  it('a valid batch is imported and consumed', async () => {
+    const { batches, rejections } = await ingest(
+      JSON.stringify({
+        autoDispatch: false,
+        tickets: [{ title: 'Core: store', persona: 'dba', body: 'Schema.' }],
+      }),
+    );
+    expect(rejections).toEqual([]);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      autoDispatch: false,
+      tickets: [{ title: 'Core: store', persona: 'dba', body: 'Schema.', priority: 2 }],
+    });
+    expect(existsSync(path.join(dir, TICKETS))).toBe(false);
+    expect(existsSync(path.join(dir, REJECTED))).toBe(false);
+  });
+
+  it('a bare array of drafts is a batch that dispatches', async () => {
+    const { batches } = await ingest(JSON.stringify([{ title: 'UI: page' }]));
+    expect(batches[0]).toMatchObject({
+      autoDispatch: true,
+      tickets: [{ title: 'UI: page', persona: 'coder' }],
+    });
+  });
+
+  it('malformed JSON is kept as new-tickets.rejected.json', async () => {
+    const content = '{"tickets": [ {"title": "half';
+    const { batches, rejections } = await ingest(content);
+    expect(batches).toEqual([]);
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]).toMatchObject({ file: TICKETS, rejectedAs: REJECTED });
+    expect(rejections[0]!.issue).toMatch(/^invalid JSON: /);
+    expect(existsSync(path.join(dir, TICKETS))).toBe(false);
+    expect(readFileSync(path.join(dir, REJECTED), 'utf8')).toBe(content);
+  });
+
+  it('an unknown persona is rejected with the path of the draft', async () => {
+    const { batches, rejections } = await ingest(
+      JSON.stringify({ tickets: [{ title: 'Ok' }, { title: 'Design', persona: 'designer' }] }),
+    );
+    expect(batches).toEqual([]);
+    expect(rejections.map((r) => r.issue)).toEqual([expect.stringMatching(/^tickets\.1\.persona: /)]);
+    expect(existsSync(path.join(dir, REJECTED))).toBe(true);
+  });
+
+  it('an oversize description is rejected', async () => {
+    const { batches, rejections } = await ingest(
+      JSON.stringify({ tickets: [{ title: 'Huge', body: 'x'.repeat(20_001) }] }),
+    );
+    expect(batches).toEqual([]);
+    expect(rejections.map((r) => r.issue)).toEqual([expect.stringMatching(/^tickets\.0\.body: /)]);
+  });
+
+  it('a rejected run file is announced to the project', { timeout: 30_000 }, async () => {
+    const project = await createProject();
+    const notices: ProjectNotice[] = [];
+    t.tickets.on('notice', (n) => notices.push(n));
+    const run = await startTicket(project.id, 'Plan it');
+    writeTickets(run.worktreePath, JSON.stringify({ tickets: [{ title: 'Design', persona: 'designer' }] }));
+    writeFileSync(path.join(run.worktreePath, 'a.txt'), 'a\n');
+    await finishTurn(run);
+
+    await expect.poll(() => eventTypes(run), { timeout: 10_000 }).toContain('tickets_file_rejected');
+    expect(notices).toEqual([
+      expect.objectContaining({
+        kind: 'agent_file_rejected',
+        projectId: project.id,
+        file: TICKETS,
+        rejectedAs: REJECTED,
+        issue: expect.stringMatching(/^tickets\.0\.persona: /),
+      }),
+    ]);
+    expect((await eventsOf(run)).find((e) => e.type === 'tickets_file_rejected')?.payload).toMatchObject({
+      rejectedAs: REJECTED,
+    });
+    expect(await titles(project.id)).toEqual(['Plan it']);
+    expect(existsSync(path.join(run.worktreePath, REJECTED))).toBe(true);
   });
 });

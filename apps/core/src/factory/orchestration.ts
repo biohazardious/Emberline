@@ -3,12 +3,9 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import {
-  AgentCreateTicketsPayload,
-  type AgentTicketDraft,
-  type FactoryAttachmentInput,
-} from '@emberline/protocol';
+import { type AgentTicketDraft, type FactoryAttachmentInput, NewTicketsFile } from '@emberline/protocol';
 import { execGitFile } from '../git-exec.js';
+import { type AgentFileRejection, keepRejected, parseAgentFile } from './agent-files.js';
 
 /** Safe characters only (`[A-Za-z0-9._-]`), runs of others become one `-`, no leading/trailing `-`. */
 export function sanitizeAttachmentName(name: string, fallback: string): string {
@@ -150,8 +147,8 @@ ${attachmentSection}
 export type TicketsFileSkip = 'inherited' | 'duplicate';
 
 export interface TicketsFileHooks {
-  /** A file that is not valid JSON or not a valid batch: why. */
-  onRejected?: (message: string) => void;
+  /** A file that is not valid JSON or not a valid batch: where it was kept, and why. */
+  onRejected?: (rejection: AgentFileRejection) => void;
   /**
    * Whether the file is the one the run's branch started with (`relPath` is relative to the
    * workspace): such a file came from main, not from this run, and creates no tickets.
@@ -176,8 +173,9 @@ export interface TicketsFileBatch {
 
 /**
  * Reads and consumes the drafts files an agent wrote: `new-tickets.json`, then `tickets.json`, so one
- * pass imports both. A file that is not valid JSON or not a valid batch is still removed;
- * `onRejected` hears why, so the run can say so instead of failing silently. A file the hooks skip
+ * pass imports both. A file that is not valid JSON or not a valid batch is moved to
+ * `*.rejected.json` so it is not read again; `onRejected` hears the first issue, so the run can say
+ * so instead of failing silently. A file the hooks skip
  * (inherited from main, or already imported) is removed too. Once `proceed` says no, no file is
  * consumed: the ones left wait for a later pass, which reads them all.
  */
@@ -191,29 +189,34 @@ export async function ingestAgentTicketsFiles(
     const relPath = `.emberline/${name}`;
     const filePath = path.join(workspacePath, '.emberline', name);
     if (!existsSync(filePath)) continue;
+    let raw: Buffer;
     try {
-      const raw = await readFile(filePath);
-      const sha256 = createHash('sha256').update(raw).digest('hex');
-      const inherited = isInherited ? await isInherited(relPath, raw).catch(() => false) : false;
-      if (proceed && !proceed()) break;
-      await rm(filePath, { force: true });
-      if (inherited) {
-        onSkipped?.('inherited', name, sha256);
-        continue;
-      }
-      const json = JSON.parse(raw.toString('utf-8')) as unknown;
-      const parsed = AgentCreateTicketsPayload.parse(
-        Array.isArray(json) ? { autoDispatch: true, tickets: json } : json,
-      );
-      if (claim && !claim(sha256)) {
-        onSkipped?.('duplicate', name, sha256);
-        continue;
-      }
-      batches.push({ ...parsed, sha256 });
+      raw = await readFile(filePath);
     } catch (error) {
-      await rm(filePath, { force: true }).catch(() => undefined);
-      onRejected?.(`${name}: ${(error as Error).message}`.slice(0, 500));
+      if (proceed && !proceed()) break;
+      const issue = `unreadable: ${error instanceof Error ? error.message : String(error)}`;
+      onRejected?.(await keepRejected(workspacePath, relPath, issue));
+      continue;
     }
+    const sha256 = createHash('sha256').update(raw).digest('hex');
+    const inherited = isInherited ? await isInherited(relPath, raw).catch(() => false) : false;
+    if (proceed && !proceed()) break;
+    if (inherited) {
+      await rm(filePath, { force: true });
+      onSkipped?.('inherited', name, sha256);
+      continue;
+    }
+    const read = parseAgentFile(raw.toString('utf-8'), NewTicketsFile);
+    if (!read.ok) {
+      onRejected?.(await keepRejected(workspacePath, relPath, read.issue));
+      continue;
+    }
+    await rm(filePath, { force: true });
+    if (claim && !claim(sha256)) {
+      onSkipped?.('duplicate', name, sha256);
+      continue;
+    }
+    batches.push({ ...read.data, sha256 });
   }
   return batches;
 }

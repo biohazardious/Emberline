@@ -54,7 +54,10 @@ describe('GET /api/projects/:projectId/tickets/export', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
     expect(res.headers['content-disposition']).toMatch(/\.csv"/);
-    const lines = res.body.replace(/^\uFEFF/, '').trimEnd().split('\r\n');
+    const lines = res.body
+      .replace(/^\uFEFF/, '')
+      .trimEnd()
+      .split('\r\n');
     expect(lines).toHaveLength(3);
     expect(lines[0]).toMatch(/^key,title,status,/);
     expect(lines[1]).toMatch(/^ED-1,'=cmd\|calc,backlog,/);
