@@ -198,9 +198,11 @@ export function AutopilotSection({
             </>
           }
         >
-          Automatically scan every completed worktree diff for untyped casts, compiler or linter suppression
-          directives, unfinished placeholder stubs, skipped tests, leftover debug statements, and generic AI
-          gradient clichés. If blocked, auto-resume the agent once to clean its own code.
+          Automatically scan every completed worktree diff for type evasion (<code>: any</code>,{' '}
+          <code>as any</code>, <code>@ts-ignore</code>), unfinished <code>TODO</code>/<code>FIXME</code>{' '}
+          stubs, skipped tests, leftover <code>console.log</code>/<code>debugger</code>, and generic AI
+          gradient clichés. Text inside strings, template literals and JSX (like this copy) is not scanned;
+          comments are. If blocked, auto-resume the agent once to clean its own code.
         </GateToggle>
 
         <GateToggle
