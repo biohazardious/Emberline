@@ -614,6 +614,39 @@ describe('container addresses', () => {
     }
   });
 
+  it("confirms a container's address before a cookie is refused: a gone container's address is free again", async () => {
+    let now = 1_000_000;
+    let lookups = 0;
+    const answers: Record<string, string[] | Error> = { runner: ['172.18.0.5'], docker: ['172.18.0.9'] };
+    const c = new ContainerAddresses(['runner', 'docker'], {
+      lookup: async (host) => {
+        lookups += 1;
+        return lookupFrom(answers)(host);
+      },
+      refreshMs: 0,
+      localNetworks: () => ['172.18.0.0/16'],
+      now: () => now,
+    });
+    await c.refresh();
+    expect(lookups).toBe(2);
+    // The container named docker is removed; Docker gives its address to the next container.
+    answers.docker = Object.assign(new Error('getaddrinfo ENOTFOUND docker'), { code: 'ENOTFOUND' });
+    expect(await c.hasConfirmed('172.18.0.9')).toBe(true); // within 5 s of the last resolution
+    expect(lookups).toBe(2);
+    now += MISS_REFRESH_MS;
+    expect(await c.hasConfirmed('172.18.0.9')).toBe(false);
+    expect(lookups).toBe(4);
+    // A container that is still there stays refused; a browser's address costs no lookup.
+    now += MISS_REFRESH_MS;
+    expect(await c.hasConfirmed('172.18.0.5')).toBe(true);
+    expect(lookups).toBe(6);
+    expect(await c.hasConfirmed('172.18.0.99')).toBe(false);
+    now += MISS_REFRESH_MS;
+    expect(await c.hasConfirmed('172.18.0.99')).toBe(false);
+    expect(lookups).toBe(6);
+    c.stop();
+  });
+
   it('drops a host that no longer resolves (ENOTFOUND) and keeps one on a temporary failure', async () => {
     const answers: Record<string, string[] | Error> = { runner: ['172.18.0.5'], docker: ['172.18.0.9'] };
     const c = new ContainerAddresses(['runner', 'docker'], {

@@ -163,6 +163,19 @@ export class ContainerAddresses {
     return this.has(ip);
   }
 
+  /**
+   * The cookie check. A hit is confirmed before a session is refused: the address the last resolution
+   * gave a container that has gone since (Docker's DNS no longer answers for it) may now belong to
+   * another client on the network. At most one lookup per {@link MISS_REFRESH_MS}, and only for an
+   * address that is a container's; a miss, any browser's request, never costs one.
+   */
+  async hasConfirmed(ip: string | undefined): Promise<boolean> {
+    if (!(await this.has(ip))) return false;
+    if (this.now() - this.lastRefreshAt >= MISS_REFRESH_MS) await this.refresh();
+    else if (this.inFlight) await this.inFlight;
+    return this.has(ip);
+  }
+
   /** Whether `ip` is one of the containers' addresses (after the first resolution, bounded). */
   async has(ip: string | undefined): Promise<boolean> {
     if (this.hosts.length === 0 || !ip) return false;

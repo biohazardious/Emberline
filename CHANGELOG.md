@@ -53,6 +53,7 @@ The first release Emberline largely built on itself: its own factory planned and
 - The board and dispatch no longer load every run with its telemetry for overlap checks, slot counts and the daily budget.
 - Review page: scrolling the file list no longer jumps back to the selected file; moving between files keeps the diff editor instead of rebuilding it, and shows the previous diff under a loading cover instead of "Select a changed file"; going back to a file before a slower one's diff arrives no longer leaves the pane blank; `j`/`k` right after typing a filter only moves through the files it shows; a diff that fails to load says so.
 - Project settings → Repository: the hint for a project whose shared SSH key does not exist yet keeps its **Settings → SSH key** link inside the sentence instead of breaking it over three lines.
+- A session cookie from an address that belonged to one of Emberline's containers until it was removed is no longer refused for up to a minute: core confirms the address before it refuses (at most one lookup per 5 seconds, and none for a browser's address).
 - A Codex run that fails to sign in (401, not logged in) shows that error instead of pausing the Codex lane as a usage limit. A usage limit is read only from the run's own recent session rollout with a reset still ahead, never from another run's rollout or an old one.
 
 ### Security

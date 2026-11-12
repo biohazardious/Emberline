@@ -130,7 +130,7 @@ export function registerAuth(
   const sessionState = async (request: FastifyRequest, key?: string | null): Promise<SessionState> => {
     const token = sessionToken(request);
     if (!token) return 'none';
-    if (await containers.has(request.raw.socket.remoteAddress)) return 'from_container';
+    if (await containers.hasConfirmed(request.raw.socket.remoteAddress)) return 'from_container';
     return store.check(token, request.ip, { bindIp, key });
   };
 
