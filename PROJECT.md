@@ -85,7 +85,8 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 
 - Strict TypeScript (`noUncheckedIndexedAccess`, `verbatimModuleSyntax`). No `any`, no `@ts-ignore`.
 - Type-aware ESLint rules ban floating and misused promises. Prettier formats everything.
-- Schema changes go in `apps/core/src/db/schema.ts`, then `make db-generate` writes a Drizzle migration. Migrations are append-only.
+- Schema changes go in `apps/core/src/db/schema.ts`, then `make db-generate` writes a Drizzle migration. Migrations are append-only,
+  and `apps/core/src/db-schema.test.ts` fails the test gate when the schema and the migrations drift apart.
 - Tests are hermetic. `apps/core/src/test-setup.ts` strips the host runner's Docker, run and provider variables
   and points the runner home and tools at absent paths, so the suite gives the same result inside an Emberline runner and in CI.
 
@@ -133,6 +134,9 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
 
 - [x] **M1 — Foundation & Architecture:** Core repository skeleton, build pipeline, and domain contracts.
       The pnpm workspace and the layering in §3.2 are enforced by lint. The gate (format, lint, typecheck, build, test) passes, and the test suite is hermetic. The contracts are in `packages/protocol` and `packages/adapter-sdk`.
-- [ ] **M2 — Core Domain & Data Layer:** Primary models, persistence, and core service logic.
+- [x] **M2 — Core Domain & Data Layer:** Primary models, persistence, and core service logic.
+      Every table is declared in `apps/core/src/db/schema.ts` (DESIGN §3.7) and opened through `openDb` (WAL, foreign keys,
+      a backup before pending migrations). Services in `apps/core/src/{tickets,runs,scheduler,review,repository}` own the domain
+      logic. `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
 - [ ] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
 - [ ] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
