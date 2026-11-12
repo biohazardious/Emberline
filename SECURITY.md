@@ -27,7 +27,7 @@ Run the gate locally after an install with `pnpm supply-chain` (Node 24), or wit
 
 Each pushed image digest is signed with [cosign](https://docs.sigstore.dev/) keyless signing: the certificate comes from the CI run's GitHub OIDC identity and is logged in Sigstore's public Rekor transparency log. No signing key exists to leak. The image also has a signed SPDX SBOM attestation. Each GitHub release attaches the same SBOMs (`emberline-core.spdx.json`, `emberline-runner.spdx.json`).
 
-You need cosign 2.x or later. Use a digest, since a tag can move. To check that an image was built by this repository's CI workflow from a version tag:
+You need cosign 2.x or later. A tag can move, so verify it once and then use the digest the output names. To check that an image was built by this repository's CI workflow from a version tag:
 
 ```sh
 IMAGE=ghcr.io/biohazardious/emberline-core:0.8.0
