@@ -358,6 +358,68 @@ describe('pull from origin', () => {
     expect(worktrees()).toHaveLength(1);
   });
 
+  it('a Match origin queued behind the pull that starts a heal sees the heal', async () => {
+    const { mine } = additiveConflict();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const svc = service({
+      buildWorkspaceDemo: async () => {
+        await gate;
+        return okBuild();
+      },
+    });
+    // Origin's queue is held, so the pull is queued first and the match right behind it (main has
+    // diverged, so the match would otherwise reset main under the heal).
+    let unblock!: () => void;
+    const held = t.repository.remoteAction(projectId, () => new Promise<void>((r) => (unblock = r)));
+    const pulling = svc.pull(projectId, { auto: false });
+    await sleep(300);
+    const matching = svc.matchOrigin(projectId, { branch: 'main' }).catch((e: { code?: string }) => e.code);
+    unblock();
+    await held;
+    const [pulled, matched] = await Promise.all([pulling, matching]);
+    expect(pulled.state).toBe('idle');
+    expect(matched).toBe('pull_running');
+    expect(await listBackups(projectPath)).toEqual([]);
+    expect(head()).toBe(mine);
+    release();
+    await svc.idle();
+    expect(storedSync()).toMatchObject({ state: 'pulled' });
+  });
+
+  it('stopping core gives up a heal blocked in its checks, and nothing is applied afterwards', async () => {
+    const { mine } = additiveConflict();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const svc = service({
+      buildWorkspaceDemo: async () => {
+        calls += 1;
+        await gate;
+        return okBuild();
+      },
+    });
+    const timer = new GitSync(t.db, svc, { log: () => undefined, stopTimeoutMs: 300 });
+    await timer.tick();
+    await waitFor(() => calls === 1);
+    const healing = storedSync();
+    const started = Date.now();
+    await timer.stop();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // The checks finish later (they pass): the heal has given up, so none of it lands.
+    release();
+    await svc.idle();
+    expect(head()).toBe(mine);
+    expect(readFileSync(path.join(projectPath, 'CHANGELOG.md'), 'utf8')).toBe(
+      '# Changelog\n\n## [Unreleased]\n- mine\n',
+    );
+    expect(storedSync()).toEqual(healing);
+    expect(worktrees()).toHaveLength(1);
+    // A stopped service starts no heal.
+    expect((await svc.pull(projectId, { auto: false })).state).toBe('idle');
+    expect(calls).toBe(1);
+  });
+
   it('a failed read of origin never hides a conflict that waits for the person', async () => {
     const elsewhere = cloneOf(bare);
     commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');

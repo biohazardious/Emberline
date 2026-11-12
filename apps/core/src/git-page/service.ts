@@ -136,6 +136,11 @@ export class GitPageService {
     return this.heals.idle();
   }
 
+  /** Makes the pulls' background heals give up, and waits for them at most `timeoutMs`. */
+  stop(timeoutMs?: number): Promise<void> {
+    return this.heals.stop(timeoutMs);
+  }
+
   /** Reads origin only. */
   fetch(projectId: string): Promise<GitSync> {
     this.project(projectId);

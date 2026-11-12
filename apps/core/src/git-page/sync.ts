@@ -190,7 +190,7 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
     mode === 'read' ? toSync(outcome) : record(deps.db, projectId, outcome);
   // A heal of this project's pull is still checking its merge: that pull is not started twice.
   const healing = mode === 'read' ? null : deps.heals.running(projectId);
-  if (healing) return { ...(readRepositorySettings(deps.db, projectId).sync ?? IDLE), message: healing };
+  if (healing) return healingSync(deps.db, projectId, healing);
   try {
     // No origin: nothing to read, and no network call.
     if (!(await originUrls(project.path)).fetch)
@@ -199,14 +199,7 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
         branch: null,
         message: 'This project has no origin. Connect a repository in Project settings → Repository first.',
       });
-    const step = await deps.repository.remoteAction(projectId, (ws) => pullIn(deps, projectId, ws, mode));
-    if ('sync' in step) return step.sync;
-    // The heal and its checks (minutes) run in the background, with origin's queue free: Refresh,
-    // pushes and the other projects' pulls go on meanwhile. Its outcome is recorded when it ends.
-    const message = `Emberline is trying to resolve the conflicts of merging ${step.heal.label} into ${step.ctx.working} (only purely additive ones) and checking the result; the pull finishes when that does.`;
-    if (!deps.heals.start(projectId, message, () => healInBackground(step.ctx, step.heal)))
-      return { ...(readRepositorySettings(deps.db, projectId).sync ?? IDLE), message };
-    return record(deps.db, projectId, { state: 'idle', branch: step.ctx.working, message });
+    return await deps.repository.remoteAction(projectId, (ws) => pullIn(deps, projectId, ws, mode));
   } catch (error) {
     // A runner that did not answer decided nothing: the next tick or Pull tries again.
     if (isRunnerUnavailable(error))
@@ -216,19 +209,25 @@ async function syncProject(deps: SyncDeps, projectId: string, mode: Mode): Promi
   }
 }
 
-/** In origin's queue: the read of origin, and the pull as far as it goes without a heal. */
-async function pullIn(
-  deps: SyncDeps,
-  projectId: string,
-  ws: Snapshot,
-  mode: Mode,
-): Promise<{ sync: SyncRecord } | { ctx: PullContext; heal: HealRequest }> {
+/** The stored sync, answered with what the project's running heal is doing. */
+const healingSync = (db: Db, projectId: string, message: string): SyncRecord => ({
+  ...(readRepositorySettings(db, projectId).sync ?? IDLE),
+  message,
+});
+
+/**
+ * In origin's queue: the read of origin, and the pull as far as it goes without a heal. A heal is
+ * reserved here, in the queue, so a Pull or Match origin queued behind this one sees it; it then
+ * runs in the background, with the queue free.
+ */
+async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mode): Promise<SyncRecord> {
   const { db } = deps;
+  // A pull queued behind the one that started a heal.
+  const healing = mode === 'read' ? null : deps.heals.running(projectId);
+  if (healing) return healingSync(db, projectId, healing);
   const read = await deps.repository.readOrigin(projectId, ws);
-  const current = () => ({ sync: readRepositorySettings(db, projectId).sync ?? IDLE });
-  const stopped = (outcome: Outcome) => ({
-    sync: mode === 'read' ? toSync(outcome) : record(db, projectId, outcome),
-  });
+  const current = () => readRepositorySettings(db, projectId).sync ?? IDLE;
+  const stopped = (outcome: Outcome) => (mode === 'read' ? toSync(outcome) : record(db, projectId, outcome));
   if (read.stale) return stopped({ state: 'error', branch: null, message: ORIGIN_CHANGED });
   if (read.error)
     return stopped({ state: 'error', branch: null, message: `Couldn't read origin: ${read.error}` });
@@ -253,8 +252,14 @@ async function pullIn(
     made: new Set(),
   };
   const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, null));
-  if ('heal' in step) return { ctx, heal: step.heal };
-  return { sync: await finishPull(ctx, step.outcome) };
+  if ('outcome' in step) return finishPull(ctx, step.outcome);
+  // The heal and its checks (minutes) run in the background: Refresh, pushes and the other
+  // projects' pulls go on meanwhile. Its outcome is recorded when it ends.
+  const { heal } = step;
+  const message = `Emberline is trying to resolve the conflicts of merging ${heal.label} into ${ctx.working} (only purely additive ones) and checking the result; the pull finishes when that does.`;
+  if (!deps.heals.start(projectId, message, () => healInBackground(ctx, heal)))
+    return healingSync(db, projectId, deps.heals.running(projectId) ?? message);
+  return record(db, projectId, { state: 'idle', branch: ctx.working, message });
 }
 
 /** Records how the pull ended, with the commits it brought in. */
@@ -265,9 +270,11 @@ async function finishPull(ctx: PullContext, outcome: Outcome): Promise<SyncRecor
 /**
  * The rest of a pull whose merge conflicted, with no lock and outside origin's queue: the heal, then
  * (under the main-workspace lock) its result applied only while the working branch is where the heal
- * began, and the pull goes on from there. Every failure ends as a recorded outcome.
+ * began, and the pull goes on from there. Every failure ends as a recorded outcome; once core is
+ * stopping, nothing more is applied or recorded.
  */
 async function healInBackground(ctx: PullContext, first: HealRequest): Promise<void> {
+  const { heals } = ctx.deps;
   let outcome: Outcome = {
     state: 'error',
     branch: ctx.working,
@@ -275,18 +282,26 @@ async function healInBackground(ctx: PullContext, first: HealRequest): Promise<v
   };
   try {
     let req: HealRequest | null = first;
-    for (let heals = 0; req && heals < MAX_HEALS; heals++) {
+    for (let n = 0; req && n < MAX_HEALS; n++) {
+      if (heals.stopped) return;
       const result = await healPull(ctx, req);
       req = null;
+      // Core is stopping: the heal gave up, and nothing is applied or recorded. Its worktree is
+      // swept before the next heal, and the next pull starts over.
+      if (heals.stopped) return;
       if ('outcome' in result) {
         outcome = result.outcome;
         break;
       }
-      const step = await withMainWorkspaceLock(ctx.ws.path, () => advance(ctx, result));
+      const step = await withMainWorkspaceLock(ctx.ws.path, () =>
+        heals.stopped ? Promise.resolve(null) : advance(ctx, result),
+      );
+      if (step === null) return;
       if ('outcome' in step) outcome = step.outcome;
       else req = step.heal;
     }
   } catch (error) {
+    if (heals.stopped) return;
     outcome = {
       state: 'error',
       branch: ctx.working,
@@ -297,12 +312,22 @@ async function healInBackground(ctx: PullContext, first: HealRequest): Promise<v
           : gitMessage(error),
     };
   }
+  if (heals.stopped) return;
   await finishPull(ctx, outcome).catch(() => record(ctx.deps.db, ctx.projectId, outcome));
 }
 
-/** A pull's heals running in the background, at most one per project, so stop() can wait for them. */
+/** How long stop() waits for a heal to give up (as PostMergeJobs waits for its jobs). */
+export const HEAL_STOP_TIMEOUT_MS = 5_000;
+
+/** A pull's heals running in the background, at most one per project. */
 export class HealJobs {
   private readonly jobs = new Map<string, { message: string; done: Promise<void> }>();
+  private stopping = false;
+
+  /** Core is stopping: a running heal gives up at its next check, and none starts. */
+  get stopped(): boolean {
+    return this.stopping;
+  }
 
   /** What the project's heal is doing, or null when none runs. */
   running(projectId: string): string | null {
@@ -311,7 +336,7 @@ export class HealJobs {
 
   /** Starts `fn` unless a heal of this project runs already (false then). */
   start(projectId: string, message: string, fn: () => Promise<void>): boolean {
-    if (this.jobs.has(projectId)) return false;
+    if (this.stopping || this.jobs.has(projectId)) return false;
     const done = fn()
       .catch(() => undefined)
       .finally(() => this.jobs.delete(projectId));
@@ -323,6 +348,31 @@ export class HealJobs {
   async idle(): Promise<void> {
     while (this.jobs.size > 0) await Promise.all([...this.jobs.values()].map((j) => j.done));
   }
+
+  /**
+   * Makes running heals give up and waits for them at most `timeoutMs`: a check already running in
+   * the runner is not killed, but what the heal made of it is never applied.
+   */
+  async stop(timeoutMs = HEAL_STOP_TIMEOUT_MS): Promise<void> {
+    this.stopping = true;
+    await within(this.idle(), timeoutMs);
+  }
+}
+
+/** Waits for `work`, at most `ms`. */
+async function within(work: Promise<unknown>, ms: number): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, ms);
+      timeout.unref();
+    }),
+  ]);
+  clearTimeout(timeout);
 }
 
 /**
@@ -608,7 +658,8 @@ async function healPull(
       branch: working,
       label: req.label,
       mainTip: req.source,
-      stale: () => false,
+      // Core is stopping: the heal gives up at its next check and leaves nothing applied.
+      stale: () => deps.heals.stopped,
       verify: () =>
         verifyBuildIn({
           db: deps.db,
@@ -702,6 +753,9 @@ const STATE_TEXT: Record<BranchRemoteState, string> = {
   unknown: "could not be compared with origin's",
 };
 
+const pullRunning = () =>
+  conflict('A pull is checking a merge right now; match origin once it has finished.', 'pull_running');
+
 /**
  * Match origin: the branch (the working branch or main) takes origin's history, on the person's
  * confirmation, only when its own no longer fits origin's (rewritten or diverged). Its old tip is
@@ -714,12 +768,10 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
   if (!branch || branch.startsWith('-') || !isPlainRefName(branch))
     throw badRequest('Name the branch to match with origin.');
   const { db } = deps;
-  if (deps.heals.running(projectId))
-    throw conflict(
-      'A pull is checking a merge right now; match origin once it has finished.',
-      'pull_running',
-    );
+  if (deps.heals.running(projectId)) throw pullRunning();
   const done = await deps.repository.remoteAction(projectId, async (ws) => {
+    // Queued behind the pull that started a heal.
+    if (deps.heals.running(projectId)) throw pullRunning();
     const read = await deps.repository.readOrigin(projectId, ws);
     if (read.stale) throw conflict(ORIGIN_CHANGED, 'origin_changed');
     if (read.error) throw conflict(`Couldn't read origin: ${read.error}`, 'remote_unreachable');
@@ -837,8 +889,8 @@ export function pullTicketText(
 /** What GitSync needs: one pull per project. */
 export interface GitSyncTarget {
   pull(projectId: string, opts: { auto: boolean }): Promise<SyncRecord>;
-  /** Resolves once no pull's heal runs in the background. */
-  idle(): Promise<void>;
+  /** Makes the pulls' background heals give up, and waits for them at most `timeoutMs`. */
+  stop(timeoutMs?: number): Promise<void>;
 }
 
 /**
@@ -856,7 +908,13 @@ export class GitSync {
   constructor(
     private readonly db: Db,
     private readonly git: GitSyncTarget,
-    private readonly opts: { intervalMs?: number; log: (message: string) => void; ready?: () => boolean },
+    private readonly opts: {
+      intervalMs?: number;
+      log: (message: string) => void;
+      ready?: () => boolean;
+      /** How long stop() waits for a running tick and the heals (default HEAL_STOP_TIMEOUT_MS). */
+      stopTimeoutMs?: number;
+    },
   ) {
     this.intervalMs = opts.intervalMs ?? AUTO_PULL_INTERVAL_MS;
     this.ready = opts.ready ?? (() => true);
@@ -868,12 +926,16 @@ export class GitSync {
     this.timer.unref();
   }
 
+  /**
+   * Stops the timer; running heals give up (none starts), and the running tick and the heals are
+   * waited for at most the stop timeout, so stopping core never waits for a heal's checks.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    await this.running;
-    await this.git.idle();
+    const ms = this.opts.stopTimeoutMs ?? HEAL_STOP_TIMEOUT_MS;
+    await Promise.all([this.git.stop(ms), within(this.running ?? Promise.resolve(), ms)]);
   }
 
   /** One pass over the projects; while a pass runs, this is that pass. */
