@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { Project, Run, Ticket } from '@emberline/protocol';
+import type { Project, ProjectStatusSummary, Run, Ticket } from '@emberline/protocol';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
@@ -173,7 +173,16 @@ describe('Dashboard interactive stat cards and run search', () => {
         'GET /api/runs': () => runs,
         'GET /api/factory/claude-usage': () => ({ authenticated: false }),
         'GET /api/factory/settings': () => ({ enabledProviders: ['claude'] }),
-        'GET /api/projects/p1/status': () => ({ projectId: 'p1', targets: [] }),
+        'GET /api/projects/p1/status': (): ProjectStatusSummary => ({
+          projectId: 'p1',
+          workspaceRoot: '/workspaces/emberline',
+          hostBindHint: './workspaces/emberline',
+          ticketCounts: { total: 0, backlog: 0, ready: 0, in_progress: 0, review: 0, done: 0 },
+          completionPercent: 0,
+          activeRunCount: 1,
+          autoChainActive: false,
+          targets: [],
+        }),
         'GET /api/projects/p1/tickets': () => [],
         'GET /api/projects/p1/checkpoints': () => [],
         'GET /api/projects/p1/recommendations': () => [],
