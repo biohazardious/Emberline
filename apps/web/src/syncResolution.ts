@@ -1,4 +1,4 @@
-import type { Run, RunDetail, SyncWorktreeResponse } from '@emberline/protocol';
+import type { SyncWorktreeResponse } from '@emberline/protocol';
 
 export interface SyncResolvingNotice {
   ticketId: string;
@@ -34,10 +34,7 @@ function conflictCountPhrase(count: number): string {
 }
 
 /** Maps a `POST /api/projects/:id/sync-worktree` response to its UI outcome (toast, resolving info, Hold Recovery, or error). */
-export function syncWorktreeOutcome(
-  sync: SyncWorktreeResponse,
-  opts?: { resolverRunId?: string | null },
-): SyncWorktreeOutcome {
+export function syncWorktreeOutcome(sync: SyncWorktreeResponse): SyncWorktreeOutcome {
   if (sync.ok) {
     if (sync.resolution === 'auto_resolved') {
       const toast =
@@ -63,14 +60,17 @@ export function syncWorktreeOutcome(
 
   if (sync.resolution === 'resolver_started') {
     const conflicts = conflictCountPhrase(sync.conflicts.length);
-    const runId = opts?.resolverRunId?.trim() ? opts.resolverRunId.trim() : sync.runId;
+    // Core names the resolver run it started; a core without the field gets the held run's link,
+    // labelled as what it is.
+    const resolver = sync.resolverRunId;
+    const runId = resolver ?? sync.runId;
     return {
       kind: 'resolving',
       resolution: 'resolver_started',
       text: `The agent is merging main and resolving ${conflicts}; the ticket merges when it finishes`,
       runId,
       href: `/runs/${runId}/review`,
-      linkLabel: 'Open resolver run →',
+      linkLabel: resolver ? 'Open resolver run →' : 'Open run →',
     };
   }
 
@@ -83,26 +83,4 @@ export function syncWorktreeOutcome(
   }
 
   return { kind: 'error', text: sync.summary };
-}
-
-/** Finds the newly started resolver run id from cached runs or the held run's detail events. */
-export function findResolverRunId(
-  runs: readonly Pick<Run, 'id' | 'handedOffTo' | 'predecessorRunId'>[] | undefined,
-  detail: Pick<RunDetail, 'handedOffTo' | 'events'> | null | undefined,
-  sourceRunId: string,
-): string | null {
-  const fromHandedOff = runs?.find((r) => r.id === sourceRunId)?.handedOffTo;
-  if (fromHandedOff) return fromHandedOff;
-  const fromSuccessor = runs?.find((r) => r.predecessorRunId === sourceRunId)?.id;
-  if (fromSuccessor) return fromSuccessor;
-  if (detail?.handedOffTo) return detail.handedOffTo;
-  if (detail?.events) {
-    for (let i = detail.events.length - 1; i >= 0; i--) {
-      const ev = detail.events[i];
-      if (ev?.type !== 'conflict_resolver_started') continue;
-      const runId = (ev.payload as { runId?: unknown } | null)?.runId;
-      if (typeof runId === 'string' && runId.trim()) return runId.trim();
-    }
-  }
-  return null;
 }

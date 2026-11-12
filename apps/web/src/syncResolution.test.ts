@@ -1,6 +1,6 @@
 import type { SyncWorktreeResponse } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
-import { findResolverRunId, syncWorktreeOutcome } from './syncResolution';
+import { syncWorktreeOutcome } from './syncResolution';
 
 const baseSync = (overrides: Partial<SyncWorktreeResponse>): SyncWorktreeResponse => ({
   ok: false,
@@ -11,6 +11,7 @@ const baseSync = (overrides: Partial<SyncWorktreeResponse>): SyncWorktreeRespons
   summary: 'Could not merge EMB-36 into the main workspace',
   conflicts: [],
   resolution: null,
+  resolverRunId: null,
   autoResolved: [],
   ...overrides,
 });
@@ -81,15 +82,15 @@ describe('syncWorktreeOutcome', () => {
     });
   });
 
-  it('maps resolver_started to the resolving notice linking the new resolver run', () => {
+  it('maps resolver_started to the resolving notice linking the resolver run core named', () => {
     const out = syncWorktreeOutcome(
       baseSync({
         ok: false,
         runId: 'run-old',
         resolution: 'resolver_started',
+        resolverRunId: 'run-resolver-99',
         conflicts: ['Makefile', 'ci.yml', 'package.json'],
       }),
-      { resolverRunId: 'run-resolver-99' },
     );
     expect(out).toEqual({
       kind: 'resolving',
@@ -98,6 +99,18 @@ describe('syncWorktreeOutcome', () => {
       runId: 'run-resolver-99',
       href: '/runs/run-resolver-99/review',
       linkLabel: 'Open resolver run →',
+    });
+  });
+
+  it('never labels the held source run as the resolver run when core did not name one', () => {
+    const out = syncWorktreeOutcome(
+      baseSync({ ok: false, runId: 'run-old', resolution: 'resolver_started', conflicts: ['Makefile'] }),
+    );
+    expect(out).toMatchObject({
+      kind: 'resolving',
+      runId: 'run-old',
+      href: '/runs/run-old/review',
+      linkLabel: 'Open run →',
     });
   });
 
@@ -147,40 +160,5 @@ describe('syncWorktreeOutcome', () => {
       kind: 'error',
       text: 'Main workspace has uncommitted changes.',
     });
-  });
-});
-
-describe('findResolverRunId', () => {
-  it('prefers handedOffTo or successor run from live runs, falling back to detail events', () => {
-    expect(
-      findResolverRunId([{ id: 'run-1', handedOffTo: 'run-2', predecessorRunId: null }], null, 'run-1'),
-    ).toBe('run-2');
-
-    expect(
-      findResolverRunId([{ id: 'run-3', handedOffTo: null, predecessorRunId: 'run-1' }], null, 'run-1'),
-    ).toBe('run-3');
-
-    expect(
-      findResolverRunId(
-        [],
-        {
-          handedOffTo: null,
-          events: [
-            {
-              id: 1,
-              runId: 'run-1',
-              ts: '2026-11-12T00:00:00.000Z',
-              source: 'system',
-              type: 'conflict_resolver_started',
-              state: null,
-              payload: { runId: 'run-4', conflicts: ['Makefile'], mainHead: 'abc1234' },
-            },
-          ],
-        },
-        'run-1',
-      ),
-    ).toBe('run-4');
-
-    expect(findResolverRunId([], null, 'run-1')).toBeNull();
   });
 });

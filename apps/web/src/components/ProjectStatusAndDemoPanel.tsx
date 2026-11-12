@@ -6,7 +6,6 @@ import type {
   Project,
   ProjectCheckpoint,
   ProjectStatusSummary,
-  RunDetail,
   SyncWorktreeResponse,
   SystemStatus,
   Ticket,
@@ -43,7 +42,7 @@ import { api, errorMessage } from '../api';
 import { builtLine, shouldAutoBuild, staleBadge } from '../demoFreshness';
 import { blockingMessage, reviewBlockedCount, worktreeMissing } from '../reviewComments';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
-import { findResolverRunId, syncWorktreeOutcome } from '../syncResolution';
+import { syncWorktreeOutcome } from '../syncResolution';
 import { toastInfo } from '../toast';
 import { useApi } from '../hooks/useApi';
 import { startableCount } from '../ticketDeps';
@@ -460,12 +459,7 @@ export function ProjectStatusAndDemoPanel({ project }: { project: Project }) {
       );
       await statusPoll.refresh();
       await checkpointsPoll.refresh();
-      let resolverRunId: string | null = null;
-      if (!res.ok && res.resolution === 'resolver_started') {
-        const detail = await api<RunDetail>(`/api/runs/${res.runId}`).catch(() => null);
-        resolverRunId = findResolverRunId(undefined, detail, res.runId);
-      }
-      const outcome = syncWorktreeOutcome(res, { resolverRunId });
+      const outcome = syncWorktreeOutcome(res);
       if (outcome.kind === 'merged') {
         setSelectedTargetId('main');
         if (res.resolution === 'auto_resolved') toastInfo(outcome.toast);

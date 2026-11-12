@@ -1,11 +1,4 @@
-import type {
-  BulkTicketResult,
-  Run,
-  RunDetail,
-  SyncWorktreeResponse,
-  Ticket,
-  TicketStatus,
-} from '@emberline/protocol';
+import type { BulkTicketResult, Run, SyncWorktreeResponse, Ticket, TicketStatus } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api';
@@ -38,12 +31,7 @@ import {
   reviewBlockedCount,
   worktreeMissing,
 } from '../reviewComments';
-import {
-  findResolverRunId,
-  type ManualConflictState,
-  type SyncResolvingNotice,
-  syncWorktreeOutcome,
-} from '../syncResolution';
+import { type ManualConflictState, type SyncResolvingNotice, syncWorktreeOutcome } from '../syncResolution';
 import { dropIntoInProgress } from '../ticketDeps';
 import { toastError, toastInfo } from '../toast';
 
@@ -216,19 +204,11 @@ export function BoardPage({ projectId }: { projectId: string }) {
         return;
       }
 
-      let resolverRunId: string | null = null;
-      if (!sync.ok && sync.resolution === 'resolver_started') {
-        resolverRunId = findResolverRunId(runs, null, sync.runId);
-        if (!resolverRunId) {
-          const detail = await api<RunDetail>(`/api/runs/${sync.runId}`).catch(() => null);
-          resolverRunId = findResolverRunId(runs, detail, sync.runId);
-        }
-        void refreshRuns();
-      } else if (!sync.ok && sync.resolution === 'agent_resolving') {
+      if (!sync.ok && (sync.resolution === 'resolver_started' || sync.resolution === 'agent_resolving')) {
         void refreshRuns();
       }
 
-      const outcome = syncWorktreeOutcome(sync, { resolverRunId });
+      const outcome = syncWorktreeOutcome(sync);
       if (outcome.kind === 'resolving') {
         void queryClient.invalidateQueries({ queryKey: ['run-recovery', currentRun.id] });
         setResolvingNotice({
