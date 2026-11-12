@@ -11,7 +11,16 @@ Emberline is a self-hosted platform that runs the official AI coding CLIs (Claud
 Antigravity, GitHub Copilot CLI, Aider) against a ticket board. It tracks work as tickets, gives each run its
 own git worktree, waits out subscription usage limits and resumes after the reset, and puts every change
 through per-file, per-line review before it merges. It is managed from any browser, including a phone.
-One installation is one user with that user's own subscriptions.
+
+Three principles shape every decision (DESIGN §2):
+
+- **One installation = one user.** Self-hosted, with that user's own subscriptions. Account sharing, rotation
+  and quota pooling are non-goals.
+- **Real CLIs, your own logins.** Agents are the official CLIs running in a PTY. Emberline does not reimplement
+  an agent or call model APIs for the user. Each CLI is logged in once inside the runner, and its credentials
+  stay in the runner's home volume.
+- **Agents outlive the app.** The PTY daemon runs in its own container. Restarting or upgrading core never
+  kills an agent: core reconnects to ptyd and reconciles the live sessions with the database.
 
 The design rationale (principles, topology, scheduler, review, data model, auth, risks) is in
 [`docs/DESIGN.md`](docs/DESIGN.md). Installation and use are in the [README](README.md).
@@ -36,14 +45,29 @@ The design rationale (principles, topology, scheduler, review, data model, auth,
 
 ### 3.1 Components and how they communicate
 
-| Component                  | Container       | Talks to                                                                                           |
-| -------------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `apps/web` (browser UI)    | served by core  | core over HTTP (`/api/*`) and one WebSocket, both typed by `@emberline/protocol`                   |
-| `apps/core` (API + engine) | `core`          | SQLite (sole owner), ptyd and ops over Unix-socket RPC (`ptyd-bridge.ts`), forges over HTTPS       |
-| `apps/ptyd` (PTY host)     | `runner`, `ops` | serves length-prefixed JSON RPC (`spawn`, `list`, `attach`, `write`, `resize`, `snapshot`, `kill`) |
-| agent CLIs                 | `runner`        | run inside ptyd sessions; report through `emberline-hook`                                          |
-| `packages/hook`            | `runner`        | core over HTTP (`/api/internal/hooks`, per-run token), plus the Emberline MCP server for agents    |
-| `docker` (rootless dind)   | `docker`        | agents and previews reach it over mutual-TLS tcp 2376; the host socket is never mounted            |
+| Component                  | Container       | Talks to                                                                                                |
+| -------------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `apps/web` (browser UI)    | served by core  | core over HTTP (`/api/*`) and WebSockets (`/api/events`, `/api/terminals/:id/ws`), typed by protocol    |
+| `apps/core` (API + engine) | `core`          | SQLite (sole owner); runner and ops ptyd over Unix-socket RPC (`ptyd-bridge.ts`); forges over HTTPS     |
+| `apps/ptyd` (PTY host)     | `runner`, `ops` | serves length-prefixed JSON RPC (`spawn`, `list`, `attach`, `write`, `resize`, `snapshot`, `kill`)      |
+| agent CLIs                 | `runner`        | run inside runner ptyd sessions; report through `emberline-hook`                                        |
+| `packages/hook`            | `runner`        | core over HTTP (`/api/internal/hooks`, per-run token), plus the Emberline MCP server for agents         |
+| runner git                 | `runner`        | core's git gateway (`/api/internal/git/<capability>/…`, `apps/core/src/git-gateway/`) over smart HTTP   |
+| ops (runner image)         | `ops`           | core's own commands (git for imports/merges/pushes, the Docker CLI for previews) on its own ptyd socket |
+| `docker` (rootless dind)   | `docker`        | agents and previews reach it over mutual-TLS tcp 2376; the host socket is never mounted                 |
+
+Data flow:
+
+- **Browser ↔ core:** REST for commands and reads. `/api/events` streams board, run and notice events, and
+  `/api/terminals/:id/ws` carries one terminal's I/O. Mutating calls send the per-login key as the CSRF header, and WebSockets send it as a subprotocol.
+- **Core ↔ ptyd:** each container's ptyd listens on a Unix socket in a shared volume. The runner's socket is `ptyd-socket`, and
+  `ops-socket` is mounted only in core and ops. Frames are length-prefixed JSON parsed with the ptyd schemas in
+  `packages/protocol`. `snapshot` returns the `@xterm/headless` screen, so a reconnecting client redraws at once.
+- **Agent → core:** the CLI's hooks call `emberline-hook`, which POSTs a zod-validated event to `/api/internal/hooks` with the run's
+  token. Core drives the run state machine from hooks first, then transcripts, then the screen.
+- **Runner git → forge:** the runner holds no forge credentials. For each git command core issues a one-time capability URL,
+  bound to one repository, service and (for a push) ref, and accepted only from the runner's address. Core adds the
+  credentials (an HTTPS token or Emberline's SSH key) and streams the traffic to the upstream server.
 
 Invariants (DESIGN §2):
 
@@ -158,20 +182,21 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`, `pnpm 
 
 ## 6. Milestones & Delivery Checklist
 
-- [x] **M1 — Foundation & Architecture:** Core repository skeleton, build pipeline, and domain contracts.
+- [x] **M1 — Workspace, layering and wire contracts:**
       The pnpm workspace and the layering in §3.2 are enforced by lint. The gate (format, lint, typecheck, build, test) passes, and the test suite is hermetic. The contracts are in `packages/protocol` and `packages/adapter-sdk`.
-- [x] **M2 — Core Domain & Data Layer:** Primary models, persistence, and core service logic.
+- [x] **M2 — Domain model, persistence and the run engine:**
       Every table is declared in `apps/core/src/db/schema.ts` (DESIGN §3.7) and opened through `openDb` (WAL, foreign keys,
       a backup before pending migrations). Services in `apps/core/src/{tickets,runs,scheduler,review,repository}` own the domain
-      logic. `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
+      logic, and the scheduler keeps its queue and quota pauses in SQLite (§3.3). `apps/core/src/db-schema.test.ts` guards the schema against drift from the append-only migrations.
       Event retention (`runs/event-retention.ts`, `EMBERLINE_EVENT_RETENTION_DAYS`, default 90, `0` off) compacts old `done`
       runs to their state changes, summary, handoff note and usage totals (`run_event_compactions`); `event-indexes.test.ts`
       holds the inbox and board under 50 ms on a seeded 100k-event database and pins the hot query plans.
-- [x] **M3 — User Interface / API Surface:** Primary user workflows, endpoints, and interactive views.
+- [x] **M3 — Board, runs and review in the browser:**
       The board (create, drag between columns, dependencies, start/prompt runs, review, accept/merge, export) and its bulk actions
       (`ticket-bulk-route.test.ts`, `boardBulkBar.test.ts`, `boardSelection.test.ts`) are covered end to end through the REST API
       and the React views.
-- [x] **M4 — QA, Security & Polish:** End-to-end test suite, security hardening, and UX polish.
+- [x] **M4 — Hardening: auth coverage, isolation and the end-to-end gate:**
       Gate verified (lint, typecheck, build, 3400+ tests). `apps/core/src/auth-coverage.test.ts` sweeps every registered `/api` route:
       anonymous callers get 401 outside the public, internal and demo-token routes, writes without the CSRF header get 403, and
       internal hook routes stay closed without a run token. A new route that forgets authentication fails that test.
+      `make e2e` runs `e2e/smoke.mjs` against an isolated core + runner + ops stack seeded with 0.6.x volumes.
