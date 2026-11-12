@@ -7,7 +7,13 @@ import { readRepositorySettings } from '../db/project-settings.js';
 import { tickets } from '../db/schema.js';
 import { authHeaders, createTestApp, setupAndLogin, startGitGateway, type TestApp } from '../test-utils.js';
 import { GitPageService } from './service.js';
-import { buildReleaseNotesPrompt, MAX_PROMPT_CHARS, releaseRange, suggestVersion } from './release-notes.js';
+import {
+  buildReleaseNotesPrompt,
+  MAX_PROMPT_BYTES,
+  releaseRange,
+  suggestVersion,
+  truncateBytes,
+} from './release-notes.js';
 
 let t: TestApp;
 let cookie: string;
@@ -219,10 +225,34 @@ describe('buildReleaseNotesPrompt', () => {
       { baseTag: 'v1.0.0', head: 'h', commits, omittedCommits: 12, diffstat: 'd'.repeat(20_000) },
       [{ key: 'EMB-1', title: 'two\nlines' }],
     );
-    expect(prompt.length).toBeLessThan(MAX_PROMPT_CHARS);
+    expect(Buffer.byteLength(prompt)).toBeLessThan(MAX_PROMPT_BYTES);
     expect(prompt).toContain('older commits omitted');
     expect(prompt).toContain('bodies were left out');
     expect(prompt).toContain('EMB-1: two lines');
     expect(prompt).toContain('feat: change 0 second line');
+  });
+
+  it('counts bytes, not characters: subjects and a diffstat in a wide script stay within one argument', () => {
+    // Three bytes a character: 100 000 characters of these would be 300 000 bytes.
+    const wide = '変'.repeat(290);
+    const commits = Array.from({ length: 300 }, (_, i) => ({
+      sha: String(i),
+      subject: `feat: ${wide} ${i}`,
+      body: '',
+    }));
+    const prompt = buildReleaseNotesPrompt(
+      { baseTag: 'v1.0.0', head: 'h', commits, diffstat: '変'.repeat(60_000) },
+      [],
+    );
+    expect(Buffer.byteLength(prompt)).toBeLessThan(MAX_PROMPT_BYTES);
+    expect(prompt).toContain('older commits omitted');
+    expect(prompt).not.toContain('\uFFFD');
+  });
+
+  it('truncateBytes never cuts a character in two', () => {
+    expect(truncateBytes('ab', 5)).toBe('ab');
+    expect(truncateBytes('a変b', 3)).toBe('a');
+    expect(truncateBytes('a変b', 4)).toBe('a変');
+    expect(truncateBytes('😀x', 3)).toBe('');
   });
 });

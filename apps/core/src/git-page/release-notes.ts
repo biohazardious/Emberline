@@ -109,11 +109,30 @@ export async function releaseRange(mainPath: string, main: string, working: stri
   };
 }
 
-/** The whole prompt is one argv string; Linux refuses one argument over 128 KiB, so stay well below. */
-export const MAX_PROMPT_CHARS = 100_000;
-const COMMIT_BUDGET_CHARS = 80_000;
+/**
+ * The whole prompt is one argv string, and Linux refuses one argument over 128 KiB (131072 bytes, not
+ * characters: a commit subject in another script takes two to four bytes a character), so stay well
+ * below.
+ */
+export const MAX_PROMPT_BYTES = 100_000;
+const COMMIT_BUDGET_BYTES = 80_000;
 const MAX_TICKET_LINES = 100;
 const oneLine = (text: string, max = 300) => text.replace(/\s+/g, ' ').trim().slice(0, max);
+const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
+
+/** `text` cut to at most `max` UTF-8 bytes, never inside a character. */
+export function truncateBytes(text: string, max: number): string {
+  if (bytes(text) <= max) return text;
+  let used = 0;
+  let end = 0;
+  for (const ch of text) {
+    const n = bytes(ch);
+    if (used + n > max) break;
+    used += n;
+    end += ch.length;
+  }
+  return text.slice(0, end);
+}
 
 export function buildReleaseNotesPrompt(
   range: ReleaseRange,
@@ -121,17 +140,17 @@ export function buildReleaseNotesPrompt(
 ): string {
   const withBodies = (c: ReleaseRange['commits'][number]) =>
     `- ${oneLine(c.subject)}${c.body ? `\n${indent(c.body)}` : ''}`;
-  const size = (lines: string[]) => lines.reduce((n, l) => n + l.length + 1, 0);
+  const size = (lines: string[]) => lines.reduce((n, l) => n + bytes(l) + 1, 0);
   // Bodies go first, then the oldest commits (the list is newest first).
   let lines = range.commits.map(withBodies);
   let bodiesDropped = false;
-  if (size(lines) > COMMIT_BUDGET_CHARS) {
+  if (size(lines) > COMMIT_BUDGET_BYTES) {
     bodiesDropped = true;
     lines = range.commits.map((c) => `- ${oneLine(c.subject)}`);
   }
   let kept = lines.length;
   let used = size(lines);
-  while (kept > 0 && used > COMMIT_BUDGET_CHARS) used -= (lines[--kept] as string).length + 1;
+  while (kept > 0 && used > COMMIT_BUDGET_BYTES) used -= bytes(lines[--kept] as string) + 1;
   const omitted = (range.omittedCommits ?? 0) + (lines.length - kept);
   const notes = [
     ...(bodiesDropped ? ['(Commit bodies were left out to keep this short.)'] : []),
@@ -156,8 +175,8 @@ export function buildReleaseNotesPrompt(
     '',
     'Files changed:',
   ];
-  const fixed = size(head) + '```\n\n```'.length + 40;
-  const stat = (range.diffstat || '(no changes)').slice(0, Math.max(0, MAX_PROMPT_CHARS - fixed));
+  const fixed = size(head) + bytes('```\n\n```') + 40;
+  const stat = truncateBytes(range.diffstat || '(no changes)', Math.max(0, MAX_PROMPT_BYTES - fixed));
   return [...head, '```', stat, '```'].join('\n');
 }
 
