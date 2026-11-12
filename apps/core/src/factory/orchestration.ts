@@ -125,6 +125,9 @@ ${attachmentSection}
    - Work that is truly independent gets no \`dependsOn\`, so it can run in parallel.
    - Keep chains short; do not chain tickets that do not need each other's output.
    - A ticket's priority (0–3) only breaks ties between tickets that are ready at the same time; dependencies, not priority, decide the order.
+   - **Every ticket body has a \`## Target Files\` section** listing, one per line, the repo-relative paths (globs allowed, e.g. \`apps/web/src/board/**\`) the ticket will create or edit. Emberline does not run two tickets at once whose target files overlap.
+   - Two tickets of this batch that edit the same code file must not run in parallel: add a \`dependsOn\` between them (the one whose output the other builds on comes first).
+   - Leave \`PROJECT.md\` edits to the ticket that owns that milestone; other tickets do not list or edit \`PROJECT.md\`.
    *(If the user attached images, screenshots, schemas, logs, or reference files above, ALWAYS copy their exact Absolute Paths into the \`body\` of the relevant delegated tickets so those specialists can inspect or use them!)*
 4. **Write Delegated Tickets to \`.emberline/new-tickets.json\`:**
    Create the directory \`.emberline\` if needed and write \`.emberline/new-tickets.json\` with the exact JSON structure below (include only the tickets relevant to this request; this example builds an Android APK):
@@ -133,7 +136,7 @@ ${attachmentSection}
      "autoDispatch": ${autoDispatch ? 'true' : 'false'},
      "tickets": [
        { "ref": "brand-assets", "title": "UI/UX: app icon, splash and store graphics", "persona": "ui_ux", "priority": 2, "body": "## Objective\\n...\\n\\n## Target Files\\n...\\n\\n## Acceptance Criteria\\n- ..." },
-       { "ref": "android-shell", "title": "Core / Build: Capacitor Android shell", "persona": "coder", "priority": 2, "body": "## Objective\\n..." },
+       { "ref": "android-shell", "title": "Core / Build: Capacitor Android shell", "persona": "coder", "priority": 2, "body": "## Objective\\n...\\n\\n## Target Files\\n- android/**\\n- capacitor.config.ts" },
        { "ref": "apk-build", "title": "Core / Build: wire the branding into android/ and build the signed APK", "persona": "coder", "priority": 2, "dependsOn": ["brand-assets", "android-shell"], "body": "## Objective\\n..." },
        { "ref": "qa", "title": "QA & Build Verification: install and smoke-test the APK", "persona": "qa", "priority": 1, "dependsOn": ["apk-build"], "body": "## Objective\\n..." }
      ]
