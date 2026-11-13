@@ -485,16 +485,25 @@ export async function runProducedChanges(worktreePath: string, mainWorkspacePath
  * the main workspace as it was.
  */
 export async function syncWorktreeToMainWorkspace(
-  params: Parameters<typeof mergeRunIntoMainWorkspace>[0],
+  params: Parameters<typeof mergeRunIntoMainWorkspace>[0] & {
+    /**
+     * A person's merge (the Board's drag to Done): refused at once while a release holds main, so
+     * their request does not stay open for the whole release. The factory's merges wait instead.
+     */
+    refuseWhileHeld?: boolean;
+  },
 ): Promise<SyncWorktreeResult> {
+  const { refuseWhileHeld, ...merge } = params;
   // Counted while it waits for the lock (or a release) too: a release does not start meanwhile
   // (runsMergingInto).
-  const ended = mergeStarted(params.mainWorkspacePath, params.runId);
+  const ended = mergeStarted(merge.mainWorkspacePath, merge.runId);
   try {
     // A release running on main itself: the merge lands once it has finished, never under its checks.
-    const held = mergeHoldsOf(params.mainWorkspacePath);
+    if (refuseWhileHeld && mergeHolds.get(path.resolve(merge.mainWorkspacePath))?.size)
+      throw new HttpError(409, 'release_running', 'A release is running on main; merge once it finishes.');
+    const held = mergeHoldsOf(merge.mainWorkspacePath);
     if (held) await held;
-    return await mergeRunIntoMainWorkspace(params);
+    return await mergeRunIntoMainWorkspace(merge);
   } finally {
     ended();
   }

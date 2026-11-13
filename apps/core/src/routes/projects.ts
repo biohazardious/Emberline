@@ -967,6 +967,8 @@ export function registerProjectRoutes(
           branch: run.branch,
           ...commit,
           workingBranch: () => factoryWorkingBranch(db, project.id, row.defaultBranch),
+          // A person's request is answered now, not after a release on main has finished.
+          refuseWhileHeld: true,
           // Only work that is not in main yet is held back: a no-op merge needs no override.
           beforeMerge: () => {
             if (blocking > 0 && !body.force) {

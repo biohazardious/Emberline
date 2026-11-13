@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
 import type { HttpError } from '../errors.js';
-import { withMainWorkspaceLock } from '../factory/merge.js';
+import { holdMergesInto, withMainWorkspaceLock } from '../factory/merge.js';
 import type { RepositoryService } from '../repository/service.js';
 import { prepareWorkspace } from '../runs/git.js';
 import { doneStarting, startingWorktrees } from '../runs/starting.js';
@@ -312,6 +312,32 @@ describe('a working branch the factory merges into', () => {
     expect(await pipelineMerge('m1')).toMatchObject({ ok: true });
     expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
     expect(git(projectPath, 'rev-parse', 'develop')).not.toBe(mainBefore);
+  });
+
+  it("while a release holds main, a person's merge is refused at once and the pipeline's waits", async () => {
+    finishedRun('m3');
+    const mainBefore = git(projectPath, 'rev-parse', 'main');
+    // What a release on main itself (the working branch is the default branch) holds while it runs.
+    const hold = holdMergesInto(projectPath);
+    let landed = false;
+    const pipeline = pipelineMerge('m3').then((r) => {
+      landed = true;
+      return r;
+    });
+
+    const person = await send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: 'm3' });
+    expect(person.statusCode).toBe(409);
+    expect(person.json()).toMatchObject({
+      error: 'release_running',
+      message: 'A release is running on main; merge once it finishes.',
+    });
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+    // The pipeline's merge is still waiting for the release.
+    expect(landed).toBe(false);
+
+    hold.end();
+    expect(await pipeline).toMatchObject({ ok: true });
+    expect(git(projectPath, 'rev-parse', 'main')).not.toBe(mainBefore);
   });
 
   it('with no working branch stored, a merge goes into what is checked out, as before', async () => {
