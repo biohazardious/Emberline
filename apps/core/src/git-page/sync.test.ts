@@ -481,6 +481,33 @@ describe('pull from origin', () => {
     expect(calls).toBe(1);
   });
 
+  it('a heal that core stopped during reads as an interrupted pull, not as one still being checked', async () => {
+    additiveConflict();
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => (release = r));
+    const svc = service({
+      buildWorkspaceDemo: async () => {
+        await blocked;
+        return okBuild();
+      },
+    });
+    expect((await svc.pull(projectId, { auto: false })).state).toBe('idle');
+    // While the heal runs, the page says so.
+    const running = (await svc.status(projectId)).sync;
+    expect(running).toMatchObject({ state: 'idle', message: expect.stringContaining('trying to resolve') });
+    await svc.stop(50);
+    release();
+    await svc.idle();
+    // Stopped mid-heal: nothing recorded its end. Another core (after a restart) reads it.
+    expect(storedSync()).toMatchObject({
+      state: 'idle',
+      message: expect.stringContaining('trying to resolve'),
+    });
+    const after = (await service().status(projectId)).sync;
+    expect(after.state).toBe('error');
+    expect(after.message).toContain('the pull did not finish. Pull again.');
+  });
+
   it('a failed read of origin never hides a conflict that waits for the person', async () => {
     const elsewhere = cloneOf(bare);
     commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');

@@ -262,7 +262,7 @@ export class GitPageService {
       mainCounts: null,
       checkedAt: settings.lastRemoteCheck?.at ?? null,
       autoPull: settings.autoPull,
-      sync: settings.sync ?? IDLE_SYNC,
+      sync: this.currentSync(projectId, settings.sync),
       forgeRelease: false,
       release: { ok: false, reason: 'The project folder is not a git repository.' },
       releaseJob: this.releases.current(projectId),
@@ -357,6 +357,22 @@ export class GitPageService {
       commits: Number.isSafeInteger(commits) ? commits : 0,
       tickets: keys.size,
       checks,
+    };
+  }
+
+  /**
+   * The stored pull as the page shows it: an idle one that still says a heal is checking its merge,
+   * while no heal of the project runs (core stopped or restarted during it), will never finish, so
+   * it reads as interrupted.
+   */
+  private currentSync(projectId: string, sync: GitSync | null): GitSync {
+    if (!sync) return IDLE_SYNC;
+    if (sync.state !== 'idle' || !sync.message || this.heals.running(projectId)) return sync;
+    return {
+      ...sync,
+      state: 'error',
+      message:
+        'Emberline stopped while it was checking a merge for this pull, so the pull did not finish. Pull again.',
     };
   }
 
