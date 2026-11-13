@@ -259,7 +259,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
 
   return (
     <div className="git-release">
-      {problem && <GitProblemBanner problem={problem} />}
+      {problem && <GitProblemBanner projectId={projectId} problem={problem} />}
       {jobPanel}
       {!jobOpen && (
         <>

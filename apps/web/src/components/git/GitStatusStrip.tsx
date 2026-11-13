@@ -1,4 +1,4 @@
-import type { GitBranch, GitPageStatus } from '@emberline/protocol';
+import type { GitBlockingRun, GitBranch, GitPageStatus } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { GitBranch as BranchIcon, RefreshCw, Rocket, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -19,30 +19,62 @@ type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
 
 export interface Problem {
   text: string;
-  runs: { id: string; title: string }[];
+  runs: GitBlockingRun[];
 }
 
 /** A failed request as the strip shows it; `runs_live` also lists the runs that block the change. */
 export function problemOf(error: unknown): Problem {
   const runs =
     error instanceof ApiRequestError && error.code === 'runs_live' && Array.isArray(error.data.runs)
-      ? (error.data.runs as { id: string; title: string }[])
+      ? (error.data.runs as Partial<GitBlockingRun>[]).map(
+          // A core from before the ticket fields (a page left open across an upgrade) sends id and title.
+          (r): GitBlockingRun => ({
+            id: String(r.id),
+            ticketId: r.ticketId ?? null,
+            ticketKey: r.ticketKey ?? null,
+            title: r.title ?? null,
+            status: r.status === 'waiting' ? 'waiting' : 'live',
+          }),
+        )
       : [];
   return { text: errorMessage(error), runs };
 }
 
+/**
+ * The runs that block a change, each with its ticket's key as a link to the ticket on the board
+ * (the run's title starts with that key) and whether it runs or waits to merge.
+ */
+export function BlockingRuns({ projectId, runs }: { projectId: string; runs: GitBlockingRun[] }) {
+  return (
+    <ul className="git-runs">
+      {runs.map((r) => {
+        const title = r.title ?? r.id;
+        const rest =
+          r.ticketKey && title.startsWith(`${r.ticketKey} `) ? title.slice(r.ticketKey.length) : ` ${title}`;
+        return (
+          <li key={r.id}>
+            {r.ticketId && r.ticketKey ? (
+              <>
+                <Link href={`/projects/${projectId}/board?ticket=${r.ticketId}`}>{r.ticketKey}</Link>
+                {rest}
+              </>
+            ) : (
+              title
+            )}
+            <span className="muted"> ({r.status === 'live' ? 'running' : 'waiting to merge'})</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** The error banner of a failed Git action, with the runs that block it when there are some. */
-export function GitProblemBanner({ problem }: { problem: Problem }) {
+export function GitProblemBanner({ projectId, problem }: { projectId: string; problem: Problem }) {
   return (
     <div className="banner banner-error" role="alert">
       <span>{problem.text}</span>
-      {problem.runs.length > 0 && (
-        <ul className="git-runs">
-          {problem.runs.map((r) => (
-            <li key={r.id}>{r.title}</li>
-          ))}
-        </ul>
-      )}
+      {problem.runs.length > 0 && <BlockingRuns projectId={projectId} runs={problem.runs} />}
     </div>
   );
 }
@@ -52,15 +84,22 @@ export function GitProblemBanner({ problem }: { problem: Problem }) {
  * starts on Cancel; Escape closes it.
  */
 function MatchOriginDialog({
+  projectId,
   branch,
   notOnOrigin,
+  blocked,
+  busy,
   onConfirm,
   onClose,
 }: {
+  projectId: string;
   branch: string;
   /** The branch's commits origin has in no form (only the backup keeps them); null when not known. */
   notOnOrigin: number | null;
-  onConfirm: () => void;
+  /** Match origin's refusal because of runs: the dialog lists them and offers to set them aside. */
+  blocked: Problem | null;
+  busy: boolean;
+  onConfirm: (setAside: boolean) => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
@@ -114,10 +153,30 @@ function MatchOriginDialog({
               : `${notOnOrigin} commits of ${branch} are not on origin; Match origin keeps them only in the backup.`}
           </p>
         )}
+        {blocked && (
+          <div className="banner banner-warn" role="status">
+            <span>{blocked.text}</span>
+            <BlockingRuns projectId={projectId} runs={blocked.runs} />
+            <p className="small git-runs-note">
+              Their branches stay as they are; their tickets go back to Backlog.
+            </p>
+          </div>
+        )}
         <div className="request-dialog-actions">
-          <button type="button" className="btn btn-primary" onClick={onConfirm}>
-            Match origin
-          </button>
+          {blocked ? (
+            <button type="button" className="btn danger" disabled={busy} onClick={() => onConfirm(true)}>
+              Set them aside and match origin
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => onConfirm(false)}
+            >
+              Match origin
+            </button>
+          )}
           <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
@@ -143,6 +202,7 @@ export function GitStatusStrip({
   const [problem, setProblem] = useState<Problem | null>(null);
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [confirmMatch, setConfirmMatch] = useState(false);
+  const [matchBlocked, setMatchBlocked] = useState<Problem | null>(null);
   const [allFiles, setAllFiles] = useState(false);
 
   const branches = useQuery({
@@ -164,6 +224,30 @@ export function GitStatusStrip({
       await refresh();
     } catch (e) {
       setProblem(problemOf(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const closeMatch = () => {
+    setConfirmMatch(false);
+    setMatchBlocked(null);
+  };
+  // Runs in the way keep the dialog open, listing them, so the person can set them aside from there.
+  const match = async (setAside: boolean) => {
+    setBusy('match');
+    setProblem(null);
+    try {
+      await api(`${base}/match-origin`, 'POST', { branch: matchBranch, ...(setAside ? { setAside } : {}) });
+      closeMatch();
+      await refresh();
+    } catch (e) {
+      const p = problemOf(e);
+      if (p.runs.length > 0) setMatchBlocked(p);
+      else {
+        closeMatch();
+        setProblem(p);
+      }
     } finally {
       setBusy(null);
     }
@@ -376,11 +460,14 @@ export function GitStatusStrip({
         </div>
       )}
 
-      {problem && <GitProblemBanner problem={problem} />}
+      {problem && <GitProblemBanner projectId={projectId} problem={problem} />}
 
       {confirmMatch && (
         <MatchOriginDialog
+          projectId={projectId}
           branch={matchBranch}
+          blocked={matchBlocked}
+          busy={busy === 'match'}
           notOnOrigin={
             (matchBranch === status.workingBranch
               ? status.notOnOrigin?.working
@@ -388,11 +475,8 @@ export function GitStatusStrip({
                 ? status.notOnOrigin?.main
                 : null) ?? null
           }
-          onClose={() => setConfirmMatch(false)}
-          onConfirm={() => {
-            setConfirmMatch(false);
-            void run('match', () => api(`${base}/match-origin`, 'POST', { branch: matchBranch }));
-          }}
+          onClose={closeMatch}
+          onConfirm={(setAside) => void match(setAside)}
         />
       )}
     </section>

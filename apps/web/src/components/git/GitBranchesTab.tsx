@@ -36,11 +36,13 @@ interface Pair {
 
 /** The delete confirmation: stays open on a failure, with the server's message and the blocking runs. */
 function DeleteDialog({
+  projectId,
   branch,
   hasOrigin,
   onConfirm,
   onClose,
 }: {
+  projectId: string;
   branch: GitBranch;
   hasOrigin: boolean;
   onConfirm: (alsoOnOrigin: boolean) => Promise<void>;
@@ -119,7 +121,7 @@ function DeleteDialog({
             {onlyOnOrigin ? 'Delete it on origin' : 'Also delete on origin'}
           </label>
         )}
-        {problem && <GitProblemBanner problem={problem} />}
+        {problem && <GitProblemBanner projectId={projectId} problem={problem} />}
         <div className="request-dialog-actions">
           <button
             type="button"
@@ -351,7 +353,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
         </button>
       </form>
 
-      {problem && <GitProblemBanner problem={problem} />}
+      {problem && <GitProblemBanner projectId={projectId} problem={problem} />}
 
       <table className="git-branch-table">
         <thead>
@@ -414,6 +416,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
 
       {deleting && (
         <DeleteDialog
+          projectId={projectId}
           branch={deleting}
           hasOrigin={status.hasOrigin}
           onClose={() => setDeleting(null)}

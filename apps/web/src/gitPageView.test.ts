@@ -177,11 +177,14 @@ describe('Git page', () => {
     await waitFor(() => expect(calls).toEqual(['pull null', 'fetch null', 'PATCH {"autoPull":false}']));
   });
 
-  it('switching the working branch posts it, and a 409 lists the live runs', async () => {
+  it('switching the working branch posts it, and a 409 lists the live runs with their tickets', async () => {
     serve(status(), {
       'POST /api/projects/p1/git/working-branch': () => {
         throw new ApiRequestError(409, 'runs_live', 'Runs are live.', {
-          runs: [{ id: 'r1', title: 'Fix login' }],
+          runs: [
+            { id: 'r1', ticketId: 't1', ticketKey: 'EMB-1', title: 'EMB-1 Fix login', status: 'live' },
+            { id: 'r2', ticketId: null, ticketKey: null, title: 'Tidy up', status: 'waiting' },
+          ],
         });
       },
     });
@@ -190,9 +193,13 @@ describe('Git page', () => {
     const select = view.container.querySelector('select') as HTMLSelectElement;
     select.value = 'main';
     await act(async () => select.dispatchEvent(new Event('change', { bubbles: true })));
-    await waitFor(() =>
-      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain('Fix login'),
-    );
+    await waitFor(() => expect(view.container.querySelector('.git-strip > [role="alert"]')).not.toBeNull());
+    const alert = view.container.querySelector('.git-strip > [role="alert"]')!;
+    const items = [...alert.querySelectorAll('li')].map((li) => li.textContent);
+    expect(items).toEqual(['EMB-1 Fix login (running)', 'Tidy up (waiting to merge)']);
+    expect(alert.querySelector('a[href="/projects/p1/board?ticket=t1"]')?.textContent).toBe('EMB-1');
+    // Nothing is set aside from here.
+    expect(queryButton('Set them aside and match origin')).toBeNull();
   });
 
   it.each([
@@ -277,6 +284,56 @@ describe('Git page', () => {
     await waitFor(() =>
       expect(view.container.querySelector('a[href="/projects/p1/board?ticket=t9"]')).not.toBeNull(),
     );
+  });
+});
+
+describe('Match origin blocked by runs', () => {
+  const blocking = [
+    {
+      id: 'r38',
+      ticketId: 't38',
+      ticketKey: 'EMB-38',
+      title: 'EMB-38 Merge origin/main into main',
+      status: 'waiting',
+    },
+    { id: 'r40', ticketId: 't40', ticketKey: 'EMB-40', title: 'EMB-40 Add a page', status: 'live' },
+  ];
+  it('keeps the dialog open, lists the runs with their tickets, and sets them aside on request', async () => {
+    serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }), {
+      'POST /api/projects/p1/git/match-origin': (body) => {
+        if ((body as { setAside?: boolean }).setAside) return sync({ state: 'pulled' });
+        throw new ApiRequestError(409, 'runs_live', 'develop stays as it is while runs are live.', {
+          runs: blocking,
+        });
+      },
+    });
+    const view = await open();
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Set them aside'),
+    );
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect([...dialog.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'EMB-38 Merge origin/main into main (waiting to merge)',
+      'EMB-40 Add a page (running)',
+    ]);
+    expect(dialog.querySelector('a[href="/projects/p1/board?ticket=t38"]')?.textContent).toBe('EMB-38');
+    expect(dialog.querySelector('a[href="/projects/p1/board?ticket=t40"]')?.textContent).toBe('EMB-40');
+    expect(dialog.textContent).toContain('develop stays as it is while runs are live.');
+    expect(dialog.textContent).toContain(
+      'Their branches stay as they are; their tickets go back to Backlog.',
+    );
+    // The refusal is the dialog's to show, not the strip's.
+    expect(view.container.querySelector('.git-strip > [role="alert"]')).toBeNull();
+    const setAside = getButton('Set them aside and match origin', dialog);
+    expect(setAside.className).toContain('danger');
+    await click(setAside);
+    await waitFor(() =>
+      expect(calls).toContain('POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":true}'),
+    );
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   });
 });
 
