@@ -933,3 +933,23 @@ describe('a pull that cannot merge, and Match origin', () => {
     expect(again.json().error).toBe('nothing_to_match');
   });
 });
+
+describe('a conflict in many files', () => {
+  it('names the first ten in the message, and keeps every one in files', async () => {
+    const names = Array.from({ length: 15 }, (_, i) => `f${String(i + 1).padStart(2, '0')}.txt`);
+    const elsewhere = cloneOf(bare);
+    for (const name of names) writeFileSync(path.join(elsewhere, name), 'theirs\n');
+    git(elsewhere, 'add', '.');
+    git(elsewhere, 'commit', '-q', '-m', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    for (const name of names) writeFileSync(path.join(projectPath, name), 'mine\n');
+    git(projectPath, 'add', '.');
+    git(projectPath, 'commit', '-q', '-m', 'feat: mine');
+    await pullNow();
+    const sync = await settled();
+    expect(sync.state).toBe('conflict');
+    expect(sync.files).toEqual(names);
+    expect(sync.message).toContain(`${names.slice(0, 10).join(', ')} and 5 more files`);
+    expect(sync.message).not.toContain('f11.txt');
+  });
+});

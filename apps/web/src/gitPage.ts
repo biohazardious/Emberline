@@ -35,6 +35,16 @@ export function remoteStateText(
   }
 }
 
+/** The files a banner names, at most this many; the strip can show them all. */
+export const FILES_NAMED = 10;
+
+/** The first {@link FILES_NAMED} files, then how many more. */
+export function fileList(files: readonly string[]): string {
+  const more = files.length - FILES_NAMED;
+  const shown = files.slice(0, FILES_NAMED).join(', ');
+  return more > 0 ? `${shown} and ${more} more ${more === 1 ? 'file' : 'files'}` : shown;
+}
+
 /**
  * The banner for the last pull, or null when there is nothing to say. A pull's background heal is
  * stored as `idle` with a message, so an idle sync with a message is shown too. `pulledCount` is
@@ -43,7 +53,8 @@ export function remoteStateText(
 export function syncText(sync: GitSync, pulledCount?: number): string | null {
   switch (sync.state) {
     case 'conflict':
-      return `Pull stopped: ${sync.files.join(', ') || 'files'} conflict`;
+      // Core's message says what to do (Resolve with a ticket, Match origin), naming ten files at most.
+      return sync.message ?? `Pull stopped: ${fileList(sync.files) || 'files'} conflict`;
     case 'workspace_dirty':
       return 'Pull waits: the main workspace has uncommitted changes';
     case 'main_unpushed':

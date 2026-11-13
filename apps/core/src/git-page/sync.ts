@@ -671,6 +671,16 @@ const dirtyOutcome = (working: string, what: string, why?: string): Outcome => (
   message: `The main workspace has uncommitted changes, so Emberline did not bring ${what} into ${working}. Commit or discard them, then pull again.${why ? ` (${why})` : ''}`,
 });
 
+/** The files a message names, at most this many; `sync.files` keeps them all. */
+const FILES_NAMED = 10;
+
+/** The first {@link FILES_NAMED} files, then how many more: a message stays readable with ninety. */
+function fileList(files: readonly string[]): string {
+  const more = files.length - FILES_NAMED;
+  const shown = files.slice(0, FILES_NAMED).join(', ');
+  return more > 0 ? `${shown} and ${more} more ${more === 1 ? 'file' : 'files'}` : shown;
+}
+
 const conflictOutcome = (
   working: string,
   label: string,
@@ -678,7 +688,7 @@ const conflictOutcome = (
   files: string[],
   detail?: string,
 ): Outcome => {
-  const shown = files.slice(0, 10).join(', ') + (files.length > 10 ? ', …' : '');
+  const shown = fileList(files);
   return {
     state: 'conflict',
     branch: working,
@@ -868,7 +878,12 @@ async function healPull(
     });
     if (!healed.healed) {
       const files = healed.conflicts.length > 0 ? healed.conflicts : req.conflicts;
-      const detail = [healed.message, req.note].filter(Boolean).join(' ');
+      // The heal's own message lists every path it could not resolve; the conflict names them already.
+      const why =
+        healed.reason === 'unresolved'
+          ? `Emberline could not resolve ${healed.unresolved.length === 1 ? 'it' : 'them'} by itself: ${healed.unresolved.length === 1 ? 'the change is' : 'the changes are'} more than purely additive.`
+          : healed.message;
+      const detail = [why, req.note].filter(Boolean).join(' ');
       return { outcome: conflictOutcome(working, req.label, req.source, files, detail) };
     }
     return { before: req.before, commit: healed.commitOid };

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
-import { remoteStateText, splitBranches, syncText, tagsDifferText } from '../../gitPage';
+import { FILES_NAMED, remoteStateText, splitBranches, syncText, tagsDifferText } from '../../gitPage';
 import { timeAgo } from '../../time';
 
 type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
@@ -126,6 +126,7 @@ export function GitStatusStrip({
   const [problem, setProblem] = useState<Problem | null>(null);
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [confirmMatch, setConfirmMatch] = useState(false);
+  const [allFiles, setAllFiles] = useState(false);
 
   const branches = useQuery({
     queryKey: ['git', projectId, 'branches'],
@@ -298,6 +299,26 @@ export function GitStatusStrip({
           role="status"
         >
           <span>{banner}</span>
+          {status.sync.state === 'conflict' && status.sync.files.length > FILES_NAMED && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link-btn"
+                aria-expanded={allFiles}
+                onClick={() => setAllFiles((v) => !v)}
+              >
+                {allFiles ? 'Hide the files' : `Show all ${status.sync.files.length} files`}
+              </button>
+              {allFiles && (
+                <ul className="git-conflict-files mono small">
+                  {status.sync.files.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
           <div className="git-banner-actions">
             {offerMatch && (
               <button

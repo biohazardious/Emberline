@@ -45,6 +45,15 @@ describe('remoteStateText', () => {
 describe('syncText', () => {
   it.each([
     [sync({ state: 'conflict', files: ['a.ts', 'b.ts'] }), 'Pull stopped: a.ts, b.ts conflict'],
+    [
+      sync({ state: 'conflict', files: Array.from({ length: 12 }, (_, i) => `f${i + 1}`) }),
+      'Pull stopped: f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 and 2 more files conflict',
+    ],
+    // Core's message says what to do (Resolve with a ticket, Match origin), with the files capped.
+    [
+      sync({ state: 'conflict', files: ['a.ts'], message: 'origin/main and main changed a.ts.' }),
+      'origin/main and main changed a.ts.',
+    ],
     [sync({ state: 'workspace_dirty' }), 'Pull waits: the main workspace has uncommitted changes'],
     [sync({ state: 'main_unpushed' }), 'Main has commits origin lacks; push or promote first'],
     [

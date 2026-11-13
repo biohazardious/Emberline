@@ -199,6 +199,18 @@ describe('Git page', () => {
       expect(queryButton(b) !== null).toBe((buttons as readonly string[]).includes(b));
   });
 
+  it('a conflict in many files names ten in the banner and shows them all on request', async () => {
+    const files = Array.from({ length: 90 }, (_, i) => `src/f${i + 1}.ts`);
+    serve(status({ sync: sync({ state: 'conflict', files }) }));
+    const view = await open();
+    await waitFor(() => expect(view.container.textContent).toContain('and 80 more files conflict'));
+    expect(view.container.textContent).not.toContain('src/f11.ts');
+    await click(getButton('Show all 90 files'));
+    expect(view.container.querySelectorAll('.git-conflict-files li')).toHaveLength(90);
+    await click(getButton('Hide the files'));
+    expect(view.container.querySelector('.git-conflict-files')).toBeNull();
+  });
+
   it('Match origin… asks first, names the branch and the backup; Resolve with a ticket links to the ticket', async () => {
     serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }));
     await open();

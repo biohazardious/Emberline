@@ -47,6 +47,14 @@
   margin: 6px 0 0;
   padding-left: 18px;
 }
+/* A conflict's full file list (ninety paths, say): its own scroll, never the page's. */
+.git-conflict-files {
+  max-height: 240px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
 
 .git-tab-panel {
   min-width: 0;
