@@ -8,7 +8,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 - A finished run no longer holds back **Match origin…**, a working-branch switch or a branch deletion when its ticket is done or a newer run of the same ticket took over: only a run that can still merge waits to merge.
 - **Match origin…** can set aside the runs that would merge the old history back: live ones are stopped, finished ones are marked stopped so they never merge, and their tickets go back to Backlog with a note saying why. Their branches and worktrees stay as they are.
-- When runs keep **Match origin…** from going ahead, its dialog stays open and lists them, each with a link to its ticket and whether it is running or waiting to merge, and offers **Set them aside and match origin**. A refused working-branch switch or branch deletion links the tickets of its runs too.
+- When runs keep **Match origin…** from going ahead, its dialog stays open and lists them, each with a link to its ticket and whether it is running or waiting to merge, and offers **Set them aside and match origin**. A refused working-branch switch links the tickets of its runs too.
 - The ticket **Resolve with a ticket** makes names at most ten conflicting files, then how many more, instead of listing every one.
 
 ## [0.9.1] - 2026-11-13

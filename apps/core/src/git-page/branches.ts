@@ -66,8 +66,8 @@ export const blockingRuns = (list: LiveRun[]): GitBlockingRun[] =>
 
 /** The newest run of each of `ticketIds` (by creation; a later run supersedes the ones before it). */
 function latestRunOfTickets(db: Db, projectId: string, ticketIds: string[]): Map<string, string> {
-  const latest = new Map<string, { id: string; at: number }>();
   if (ticketIds.length === 0) return new Map();
+  const latest = new Map<string, { id: string; at: number }>();
   const all = db
     .select({ id: runs.id, ticketId: runs.ticketId, createdAt: runs.createdAt })
     .from(runs)
@@ -94,7 +94,6 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       ticketId: runs.ticketId,
       ticketKey: tickets.key,
       ticketStatus: tickets.status,
-      createdAt: runs.createdAt,
     })
     .from(runs)
     .leftJoin(tickets, eq(tickets.id, runs.ticketId))

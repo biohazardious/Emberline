@@ -1046,8 +1046,11 @@ describe('a pull that cannot merge, and Match origin', () => {
   const samePatch = (dir: string, file: string) =>
     commit(dir, file, `${file}\n`, `feat: ${file} (rewritten)`);
 
-  it("origin rewritten with the old history kept (the TrueNAS case): classified rewritten, nothing merged, and Match origin takes origin's", async () => {
-    // origin keeps the old base; its history after it is a rewrite of the commits here, plus more.
+  /**
+   * The TrueNAS case: origin keeps the old base; its history after it is a rewrite of the commits
+   * here, plus more. One commit of the project's own is not in the rewrite and conflicts with it.
+   */
+  const rewriteKeepingBase = () => {
     const elsewhere = cloneOf(bare);
     for (let i = 1; i <= 9; i++) commit(projectPath, `f${i}.txt`);
     git(projectPath, 'switch', '-q', '-c', 'side');
@@ -1055,7 +1058,6 @@ describe('a pull that cannot merge, and Match origin', () => {
     git(projectPath, 'switch', '-q', 'main');
     git(projectPath, 'merge', '-q', '--no-ff', '-m', 'Merge side into main', 'side');
     git(projectPath, 'branch', '-D', 'side');
-    // One commit of the project's own that origin's rewrite does not have, which conflicts with origin.
     commit(projectPath, 'own.txt', 'mine\n', 'feat: own');
     const oldTip = head();
     for (let i = 1; i <= 9; i++) samePatch(elsewhere, `f${i}.txt`);
@@ -1063,6 +1065,11 @@ describe('a pull that cannot merge, and Match origin', () => {
     commit(elsewhere, 'own.txt', 'theirs\n', 'feat: own, rewritten differently');
     const originTip = commit(elsewhere, 'after.txt', 'after\n', 'feat: after the rewrite');
     git(elsewhere, 'push', '-q', '-f', 'origin', 'main');
+    return { oldTip, originTip };
+  };
+
+  it("origin rewritten with the old history kept (the TrueNAS case): classified rewritten, nothing merged, and Match origin takes origin's", async () => {
+    const { oldTip, originTip } = rewriteKeepingBase();
 
     const sync = await pullNow();
     expect(sync).toMatchObject({ state: 'rewritten', branch: 'main', files: [] });
@@ -1087,6 +1094,70 @@ describe('a pull that cannot merge, and Match origin', () => {
     expect(backups).toHaveLength(1);
     expect(backups[0]).toMatch(/^main-\d{8}-\d{6}$/);
     expect(git(projectPath, 'rev-parse', `refs/emberline/backup/${backups[0]}`)).toBe(oldTip);
+  });
+
+  it('the TrueNAS case with runs: only the one that can still merge blocks, and setting it aside lets Match origin through', async () => {
+    const { oldTip, originTip } = rewriteKeepingBase();
+    expect((await pullNow()).state).toBe('rewritten');
+    /** A finished run of `ticketId` whose session ended, in its own worktree off main's old history. */
+    const finished = (id: string, ticketId: string, at: number, work: (dir: string) => void) => {
+      const dir = path.join(t.dir, `wt-${id}`);
+      git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir, 'main');
+      work(dir);
+      seedRun(id, 'done', {
+        ticketId,
+        worktreePath: dir,
+        createdAt: new Date(Date.UTC(2026, 10, 13) + at),
+        endedAt: new Date(),
+      });
+    };
+    // EMB-9: done, completed by its second run; its first run's superseded attempt never merged.
+    const split = t.tickets.create(projectId, { title: 'Split runs/service.ts', status: 'review' });
+    finished('emb9-1', split.id, 0, (dir) => commit(dir, 'attempt.txt'));
+    finished('emb9-2', split.id, 1000, () => undefined);
+    t.tickets.update(split.id, { status: 'done' });
+    // EMB-38: the pull's resolution ticket; its finished run merged the rewritten origin into the old
+    // history, and waits in Review to merge that back.
+    const resolve = t.tickets.create(projectId, { title: 'Merge origin/main into main', status: 'review' });
+    finished('emb38', resolve.id, 2000, (dir) => {
+      git(dir, 'fetch', '-q', bare, 'main');
+      git(dir, 'merge', '-q', '--no-edit', '-X', 'ours', 'FETCH_HEAD');
+    });
+
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({
+      error: 'runs_live',
+      runs: [
+        { id: 'emb38', ticketId: resolve.id, ticketKey: resolve.key, title: 'Run emb38', status: 'waiting' },
+      ],
+    });
+    expect(refused.json().runs).toHaveLength(1);
+    expect(head()).toBe(oldTip);
+
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+    expect(matched.statusCode).toBe(200);
+    expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
+    expect(head()).toBe(originTip);
+    expect(git(projectPath, 'status', '--porcelain')).toBe('');
+    const backups = await listBackups(projectPath);
+    expect(backups).toHaveLength(1);
+    expect(git(projectPath, 'rev-parse', `refs/emberline/backup/${backups[0]}`)).toBe(oldTip);
+    // The resolution's run is set aside and no longer listed; EMB-9's runs were never touched.
+    expect(t.runs.getRun('emb38')).toMatchObject({ cancelled: true, state: 'done' });
+    expect(t.runs.getRun('emb9-1').cancelled).toBe(false);
+    const listed = (await send('GET', gitUrl('/branches'))).json() as { name: string; liveRuns: string[] }[];
+    expect(listed.find((b) => b.name === 'emberline/emb38')?.liveRuns).toEqual([]);
+    const ticket = t.tickets.get(resolve.id);
+    expect(ticket.status).toBe('backlog');
+    expect(ticket.body).toMatch(
+      /^Set aside by Match origin on \d{4}-\d{2}-\d{2}: main took origin's history, and this ticket's work \(on emberline\/emb38\) was based on its old history, so it was not merged\./,
+    );
+    expect(t.tickets.get(split.id).status).toBe('done');
+    // Nothing left to match.
+    const again = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('nothing_to_match');
   });
 
   it('commits mostly on origin under new hashes, but not nearly all, are a conflict that says so', async () => {
