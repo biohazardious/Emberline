@@ -28,7 +28,6 @@ import { remoteCompareKey } from '../forge/hosts.js';
 import { secretDigest } from '../secrets/box.js';
 import { parseForgeRemote } from '../forge/service.js';
 import { describeGitError, type GitGateway, type KnownSecrets } from '../git-gateway/gateway.js';
-import { execGitFile } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { gatewayRemoteFor } from '../ssh-keys/remote.js';
 import {
@@ -36,16 +35,16 @@ import {
   aheadBehind,
   branchTip,
   DIVERGED_MESSAGE,
-  fetchBranchObjects,
   integrationDivergedMessage,
   isAncestorCommit,
+  listOriginRefs,
   listRemoteBranches,
   MAIN_MOVED_MESSAGE,
   mainBranchState,
   originUrls,
+  type OriginRefs,
   pushBranch,
   type RemoteAccess,
-  remoteBranchHead,
   remoteUrlForDisplay,
   RUNNER_WAITING_MESSAGE,
   setOrigin,
@@ -53,11 +52,11 @@ import {
   setUpstream,
   shortGitError,
   sshSetupError,
-  unlessRunnerUnavailable,
   validateRepositoryUrl,
   workingDivergedMessage,
   workingMovedMessage,
 } from './git.js';
+import { bringOriginObjects, type OriginObjects, writeOriginRefs } from './origin-refs.js';
 
 const isGitRepo = (dir: string) =>
   lstat(path.join(dir, '.git')).then(
@@ -568,17 +567,19 @@ export class RepositoryService {
   }
 
   /**
-   * ls-remote of origin's default branch and, when the working branch is another one, of that
-   * branch too, then their objects (no ref written), outside the main-workspace lock; then, under
-   * it, each refs/remotes/origin/<branch> set to the commit ls-remote reported (the working branch's
-   * removed when origin has none) and the read of the default branch (or why it failed) kept. A
-   * failed read is recorded and returned, not thrown. Nothing is recorded when origin changed
-   * meanwhile (`stale`).
+   * All of origin in one ls-remote (every branch and tag), then the objects that are missing in one
+   * fetch (no ref written), outside the main-workspace lock; then, under it, each
+   * refs/remotes/origin/<branch> set to the commit ls-remote reported, those of branches origin no
+   * longer has removed, origin's tags this project lacks created (a local tag is never moved: one
+   * that differs from origin's is kept, and listed for the Git page), and the read of the default
+   * branch (or why it failed) kept. A failed read is recorded and returned, not thrown. Nothing is
+   * recorded when origin changed meanwhile (`stale`).
    */
   async readOrigin(projectId: string, ws: Snapshot): Promise<OriginRead> {
     const branch = ws.defaultBranch;
     const workingBranch = workingBranchOf(readRepositorySettings(this.db, projectId), branch);
     const separate = workingBranch !== branch;
+    const needed = separate ? [branch, workingBranch] : [branch];
     const at = new Date().toISOString();
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
     const key = originKey(ws.origin);
@@ -587,21 +588,20 @@ export class RepositoryService {
     let check: RemoteCheck;
     let remoteOid: string | null = null;
     let workingOid: string | null = null;
+    let read: { refs: OriginRefs; objects: OriginObjects } | null = null;
     // A host key to trust or one that changed: recorded as the read's failure, and also the answer.
     let setup: HttpError | null = null;
     try {
-      remoteOid = await remoteBranchHead(ws.path, ws.access, branch);
-      if (remoteOid) await fetchBranchObjects(ws.path, ws.access, branch, remoteOid);
-      workingOid = remoteOid;
-      if (separate) {
-        workingOid = await remoteBranchHead(ws.path, ws.access, workingBranch);
-        if (workingOid) await fetchBranchObjects(ws.path, ws.access, workingBranch, workingOid);
-      }
+      const refs = await listOriginRefs(ws.path, ws.access);
+      remoteOid = refs.branches.get(branch) ?? null;
+      workingOid = separate ? (refs.branches.get(workingBranch) ?? null) : remoteOid;
+      read = { refs, objects: await bringOriginObjects(ws.path, ws.access, refs, needed) };
       check = { url: checkedUrl, originKey: key, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
       remoteOid = null;
       workingOid = null;
+      read = null;
       setup = sshSetupError(error);
       const reason = error instanceof HttpError ? error.message : describeGitError(error, known);
       check = { url: checkedUrl, originKey: key, branch, at, published: false, error: reason };
@@ -612,22 +612,18 @@ export class RepositoryService {
         stale = true; // origin changed meanwhile: its own read counts
         return;
       }
+      let tagsDiffer: string[] | null = null;
       try {
-        if (remoteOid) await setRemoteTracking(ws.path, branch, remoteOid);
-        // What Emberline last read of origin's working branch: its commit, or no such branch.
-        if (separate && !check.error) {
-          if (workingOid) await setRemoteTracking(ws.path, workingBranch, workingOid);
-          else
-            await execGitFile(['update-ref', '-d', `refs/remotes/origin/${workingBranch}`], {
-              cwd: ws.path,
-            }).catch(unlessRunnerUnavailable(undefined));
-        }
+        if (read) tagsDiffer = (await writeOriginRefs(ws.path, read.refs, read.objects, needed)).tagsDiffer;
       } catch (error) {
         if (isRunnerUnavailable(error)) throw error;
         check = { ...check, published: false, error: describeGitError(error, known) };
       }
       try {
-        writeRepositorySettings(this.db, projectId, { lastRemoteCheck: check });
+        writeRepositorySettings(this.db, projectId, {
+          lastRemoteCheck: check,
+          ...(tagsDiffer ? { tagsDifferFromOrigin: tagsDiffer } : {}),
+        });
       } catch {
         // the project was deleted meanwhile
       }
@@ -665,7 +661,8 @@ export class RepositoryService {
       await setOrigin(mainPath, url, current);
       this.db.update(projects).set({ repoUrl: url }).where(eq(projects.id, projectId)).run();
       // A read of the origin before is no read of this one, whatever both look like.
-      if (current !== url) writeRepositorySettings(this.db, projectId, { lastRemoteCheck: null });
+      if (current !== url)
+        writeRepositorySettings(this.db, projectId, { lastRemoteCheck: null, tagsDifferFromOrigin: [] });
     });
   }
 }

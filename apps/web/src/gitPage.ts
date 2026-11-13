@@ -67,6 +67,19 @@ export function syncText(sync: GitSync, pulledCount?: number): string | null {
   }
 }
 
+/**
+ * The note about tags here that differ from origin's tags of the same name (origin was rewritten,
+ * or a tag was made twice): Emberline never moves a local tag. Null when none differ.
+ */
+export function tagsDifferText(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  if (names.length === 1)
+    return `The tag ${names[0]} here is not the same as origin's ${names[0]}. Emberline never moves a local tag, so it stays as it is.`;
+  const shown = names.slice(0, 5).join(', ');
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : '';
+  return `${names.length} tags here are not the same as origin's tags of the same name: ${shown}${more}. Emberline never moves a local tag, so they stay as they are.`;
+}
+
 /** Why a release cannot start right now, or null when it can. */
 export function releaseBlockedText(status: GitPageStatus): string | null {
   if (!status.isGitRepo) return 'This project folder is not a git repository.';

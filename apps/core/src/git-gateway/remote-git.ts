@@ -22,6 +22,7 @@ import { oldValueRefusal, type PushPlan } from './receive-pack.js';
 import { GitGatewayError } from './upstream.js';
 
 const MINUTE = 60_000;
+const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /** A remote core's git reaches through the gateway: with a forge account (http) or an SSH key (ssh). */
 export interface GatewayRemote {
@@ -166,9 +167,42 @@ export async function gatewayRemoteRef(
   // and adds an annotated tag's peeled `^{}` line: only the exact ref counts.
   for (const line of out.split('\n')) {
     const [oid, name] = line.split('\t');
-    if (name?.trim() === ref && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid?.trim() ?? '')) return oid!.trim();
+    if (name?.trim() === ref && FULL_OID.test(oid?.trim() ?? '')) return oid!.trim();
   }
   return null;
+}
+
+/**
+ * `ls-remote` output as a list of the branches and tags it names, each with exactly what it names
+ * (an annotated tag's own object; its peeled `^{}` line is left out). A ref whose name git would
+ * refuse or a git argument could misread ({@link refKind}) is dropped: Emberline never writes one.
+ */
+export function parseRemoteRefs(out: string): { ref: string; oid: string }[] {
+  const refs: { ref: string; oid: string }[] = [];
+  for (const line of out.split('\n')) {
+    const [oid, name] = line.split('\t').map((part) => part.trim());
+    if (oid && name && FULL_OID.test(oid) && refKind(name)) refs.push({ ref: name, oid });
+  }
+  return refs;
+}
+
+/** Every branch and tag of the remote, in one `ls-remote --heads --tags`. */
+export async function gatewayRemoteRefs(
+  r: GatewayRemote,
+  cwd: string,
+): Promise<{ ref: string; oid: string }[]> {
+  const out = await r.gateway.run(
+    grant(r),
+    async (url) =>
+      (
+        await execGitFile([...gatewayGitArgs(r.gateway), 'ls-remote', '--heads', '--tags', '--', url], {
+          cwd,
+          timeout: MINUTE,
+          remote: 'gateway',
+        })
+      ).stdout,
+  );
+  return parseRemoteRefs(out);
 }
 
 /**
@@ -202,6 +236,20 @@ export async function gatewayFetchBranchObjects(
   repoPath: string,
   branch: string,
 ): Promise<void> {
+  await gatewayFetchRefObjects(r, repoPath, [`refs/heads/${branch}`]);
+}
+
+/**
+ * The objects of several branches and tags (`refs/heads/<b>`, `refs/tags/<t>`) in one fetch, without
+ * updating any ref, as {@link gatewayFetchBranchObjects} does for one branch.
+ */
+export async function gatewayFetchRefObjects(
+  r: GatewayRemote,
+  repoPath: string,
+  refs: readonly string[],
+): Promise<void> {
+  for (const ref of refs) if (!refKind(ref)) throw refRefused(ref);
+  if (refs.length === 0) return;
   await r.gateway.run(grant(r), (url) =>
     execGitFile(
       [
@@ -217,7 +265,7 @@ export async function gatewayFetchBranchObjects(
         '--refmap=',
         '--',
         url,
-        `refs/heads/${branch}`,
+        ...refs,
       ],
       { cwd: repoPath, timeout: 10 * MINUTE, env: PLAN_ENV, remote: 'gateway' },
     ),

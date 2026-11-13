@@ -4,7 +4,7 @@ import { GitBranch as BranchIcon, RefreshCw, Rocket } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../../api';
-import { remoteStateText, splitBranches, syncText } from '../../gitPage';
+import { remoteStateText, splitBranches, syncText, tagsDifferText } from '../../gitPage';
 import { timeAgo } from '../../time';
 
 type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
@@ -86,6 +86,8 @@ export function GitStatusStrip({
   const detached = status.checkedOut === null;
   const mismatch = !detached && status.workingMismatch;
   const banner = syncText(status.sync);
+  // A status read from a core before this field (a page left open across an upgrade) has none.
+  const tagsNote = tagsDifferText(status.tagsDifferFromOrigin ?? []);
   const matchBranch = status.sync.branch ?? status.workingBranch;
   const anyBusy = busy !== null;
 
@@ -171,6 +173,8 @@ export function GitStatusStrip({
           <Link href={`/projects/${projectId}/settings`}>Project settings → Repository</Link>.
         </p>
       )}
+
+      {tagsNote && <p className="muted small">{tagsNote}</p>}
 
       {detached && (
         <div className="banner banner-warn" role="status">

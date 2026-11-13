@@ -9,10 +9,13 @@ import {
   type GatewayRemote,
   gatewayHttpCredential,
   gatewayFetchBranchObjects,
+  gatewayFetchRefObjects,
   gatewayPushBranch,
   gatewayPushRef,
   gatewayRemoteBranches,
   gatewayRemoteRef,
+  gatewayRemoteRefs,
+  parseRemoteRefs,
   refKind,
 } from '../git-gateway/remote-git.js';
 
@@ -333,7 +336,27 @@ export async function remoteRefHead(
   return null;
 }
 
-const hasRealCommit = (cwd: string, oid: string) =>
+/**
+ * A fetch of objects alone: only the real objects, as on the gateway path (no replace refs, grafts or
+ * commit-graph), no tags beyond those named, no ref, no FETCH_HEAD, no submodules, no maintenance.
+ */
+const OBJECTS_ONLY_FETCH = [
+  '-c',
+  'core.commitGraph=false',
+  '-c',
+  'core.useReplaceRefs=false',
+  '-c',
+  'fetch.writeCommitGraph=false',
+  '-c',
+  'maintenance.auto=false',
+  'fetch',
+  '--no-tags',
+  '--no-write-fetch-head',
+  '--no-recurse-submodules',
+  '--refmap=',
+];
+
+export const hasRealCommit = (cwd: string, oid: string) =>
   realGit(['cat-file', '-e', `${oid}^{commit}`], cwd).then(() => true, unlessRunnerUnavailable(false));
 
 /**
@@ -350,29 +373,12 @@ export async function fetchBranchObjects(
   if (access.remote) await gatewayFetchBranchObjects(access.remote, mainPath, branch);
   else {
     assertSupportedRemote(access.url);
-    // Only the real objects, as on the gateway path: no replace refs, grafts or commit-graph.
-    await execGitFile(
-      [
-        ...NO_SUBMODULES,
-        '-c',
-        'core.commitGraph=false',
-        '-c',
-        'core.useReplaceRefs=false',
-        '-c',
-        'fetch.writeCommitGraph=false',
-        '-c',
-        'maintenance.auto=false',
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--no-recurse-submodules',
-        '--refmap=',
-        '--',
-        access.url,
-        `refs/heads/${branch}`,
-      ],
-      { cwd: mainPath, timeout: 30_000, env: REAL_OBJECTS_ENV, remote: true },
-    );
+    await execGitFile([...NO_SUBMODULES, ...OBJECTS_ONLY_FETCH, '--', access.url, `refs/heads/${branch}`], {
+      cwd: mainPath,
+      timeout: 30_000,
+      env: REAL_OBJECTS_ENV,
+      remote: true,
+    });
   }
   // The remote moved on between ls-remote and the fetch.
   if (!(await hasRealCommit(mainPath, oid)))
@@ -381,6 +387,62 @@ export async function fetchBranchObjects(
       'remote_moved',
       "origin's main changed while Emberline read it. Press Refresh again.",
     );
+}
+
+/** What origin names: each branch's commit and each tag's object (an annotated tag's own), by name. */
+export interface OriginRefs {
+  branches: Map<string, string>;
+  tags: Map<string, string>;
+}
+
+/**
+ * Every branch and tag of the remote in one `ls-remote --heads --tags`, through the gateway or
+ * straight to the URL as the other remote reads go. `HEAD` as a branch name is left out (it would
+ * read as origin's HEAD), as is any name {@link refKind} refuses.
+ */
+export async function listOriginRefs(mainPath: string, access: RemoteAccess): Promise<OriginRefs> {
+  let refs: { ref: string; oid: string }[];
+  if (access.remote) refs = await gatewayRemoteRefs(access.remote, mainPath);
+  else {
+    assertSupportedRemote(access.url);
+    const out = await execGitFile([...NO_SUBMODULES, 'ls-remote', '--heads', '--tags', '--', access.url], {
+      cwd: mainPath,
+      timeout: 20_000,
+      remote: true,
+    });
+    refs = parseRemoteRefs(out.stdout);
+  }
+  const branches = new Map<string, string>();
+  const tags = new Map<string, string>();
+  for (const { ref, oid } of refs) {
+    if (ref.startsWith('refs/heads/')) {
+      const name = ref.slice('refs/heads/'.length);
+      if (name !== 'HEAD') branches.set(name, oid);
+    } else tags.set(ref.slice('refs/tags/'.length), oid);
+  }
+  return { branches, tags };
+}
+
+/**
+ * The objects of several of the remote's branches and tags in one fetch, as
+ * {@link fetchBranchObjects} does for one branch: no ref and no FETCH_HEAD is written, and nothing is
+ * checked; the caller looks for the objects it needs afterwards.
+ */
+export async function fetchRefObjects(
+  mainPath: string,
+  access: RemoteAccess,
+  refs: readonly string[],
+): Promise<void> {
+  for (const ref of refs) if (!refKind(ref)) throw refNotPushable(ref);
+  if (refs.length === 0) return;
+  if (access.remote) return gatewayFetchRefObjects(access.remote, mainPath, refs);
+  assertSupportedRemote(access.url);
+  await execGitFile([...NO_SUBMODULES, ...OBJECTS_ONLY_FETCH, '--', access.url, ...refs], {
+    cwd: mainPath,
+    timeout: 120_000,
+    env: REAL_OBJECTS_ENV,
+    remote: true,
+  });
 }
 
 /** Points `refs/remotes/origin/<branch>` at `oid`. Local only; the caller holds the main-workspace lock. */

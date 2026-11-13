@@ -318,6 +318,7 @@ export class GitPageService {
       releaseDraft: this.releaseDraft(projectId),
       releaseSummary: { head: null, commits: 0, tickets: 0, checks: [], hasChangelog: false },
       backups: [],
+      tagsDifferFromOrigin: settings.tagsDifferFromOrigin,
     };
     const dir = project.path;
     if (!(await isGitRepo(dir))) return base;

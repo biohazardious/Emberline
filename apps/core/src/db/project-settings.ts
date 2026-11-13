@@ -170,6 +170,11 @@ export interface RepositorySettings {
    * past these or the person acts; null when no such stop stands.
    */
   syncStop: SyncStop | null;
+  /**
+   * Tags here that name something other than origin's tag of the same name, as the last read of
+   * origin found them. Emberline never moves a local tag; the Git page says which ones differ.
+   */
+  tagsDifferFromOrigin: string[];
   releaseDraft: ReleaseDraft | null;
   releaseJob: ReleaseJob | null;
 }
@@ -208,6 +213,7 @@ const RepositorySettingsSchema = z.object({
   sync: GitSync.nullable().catch(null).default(null),
   pulledOids: z.array(z.string()).max(500).catch([]).default([]),
   syncStop: SyncStopSchema.nullable().catch(null).default(null),
+  tagsDifferFromOrigin: z.array(z.string()).max(100).catch([]).default([]),
   releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
   releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });

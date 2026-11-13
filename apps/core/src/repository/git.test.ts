@@ -14,6 +14,8 @@ import { GitGateway } from '../git-gateway/gateway.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   fetchBranchObjects,
+  fetchRefObjects,
+  listOriginRefs,
   passwordGitWouldShow,
   pushBranch,
   pushRef,
@@ -591,10 +593,11 @@ describe('a `\\` in an http password, as git sends it', () => {
 });
 
 /**
- * The push paths of the Git page (a new tag, a planned delete) against a real forge: through core's
- * git gateway with the forge account, and with the runner's git straight to a public http URL.
+ * The Git page's remote paths (a new tag, a planned delete, the read of all of origin) against a
+ * real forge: through core's git gateway with the forge account, and with the runner's git straight
+ * to a public http URL.
  */
-describe.each(['gateway', 'direct'] as const)('pushRef (%s)', (mode) => {
+describe.each(['gateway', 'direct'] as const)('pushRef and reading origin (%s)', (mode) => {
   const TOKEN = 'push-ref-secret-token';
   let forge: FakeForge | null = null;
   let app: FastifyInstance | null = null;
@@ -756,5 +759,65 @@ describe.each(['gateway', 'direct'] as const)('pushRef (%s)', (mode) => {
       expect((error as HttpError).statusCode, ref).toBe(400);
     }
     expect(git(origin, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/main');
+  });
+
+  it('lists every branch and tag of origin in one ls-remote, an annotated tag by its own object', async () => {
+    const one = git(projectPath, 'rev-parse', 'HEAD');
+    git(projectPath, 'tag', '-a', 'v1.0.0', '-m', 'v1.0.0');
+    git(projectPath, 'tag', 'light');
+    git(projectPath, 'commit', '-q', '--allow-empty', '-m', 'two');
+    const two = git(projectPath, 'rev-parse', 'HEAD');
+    git(
+      projectPath,
+      'push',
+      '-q',
+      origin,
+      `${two}:refs/heads/feature/x`,
+      'refs/tags/v1.0.0',
+      'refs/tags/light',
+    );
+    const calls: string[][] = [];
+    setCommandExecutor(async (request) => {
+      calls.push(request.args);
+      return localCommandExecutor(request);
+    });
+    const refs = await listOriginRefs(projectPath, access);
+    expect(calls.filter((args) => args.includes('ls-remote'))).toHaveLength(1);
+    expect(Object.fromEntries(refs.branches)).toEqual({ main: one, 'feature/x': two });
+    expect(Object.fromEntries(refs.tags)).toEqual({
+      'v1.0.0': git(projectPath, 'rev-parse', 'refs/tags/v1.0.0'),
+      light: one,
+    });
+  });
+
+  it('fetches the objects of several refs in one fetch, writing no ref and no FETCH_HEAD', async () => {
+    const elsewhere = path.join(dir, 'elsewhere');
+    execFileSync('git', ['clone', '-q', origin, elsewhere]);
+    git(elsewhere, 'switch', '-q', '-c', 'a');
+    git(elsewhere, 'commit', '-q', '--allow-empty', '-m', 'on a');
+    git(elsewhere, 'switch', '-q', '-c', 'b', 'main');
+    git(elsewhere, 'commit', '-q', '--allow-empty', '-m', 'on b');
+    git(elsewhere, 'tag', '-a', 'v2.0.0', '-m', 'v2.0.0');
+    git(elsewhere, 'push', '-q', 'origin', 'a', 'b', 'refs/tags/v2.0.0');
+    const fresh = path.join(dir, 'fresh');
+    execFileSync('git', ['init', '-q', '-b', 'main', fresh]);
+    const fetches: string[][] = [];
+    setCommandExecutor(async (request) => {
+      if (request.args.includes('fetch')) fetches.push(request.args);
+      return localCommandExecutor(request);
+    });
+    await fetchRefObjects(fresh, access, ['refs/heads/a', 'refs/heads/b', 'refs/tags/v2.0.0']);
+    expect(fetches).toHaveLength(1);
+    expect(git(fresh, 'cat-file', '-t', git(elsewhere, 'rev-parse', 'a'))).toBe('commit');
+    expect(git(fresh, 'cat-file', '-t', git(elsewhere, 'rev-parse', 'b'))).toBe('commit');
+    expect(git(fresh, 'cat-file', '-t', git(elsewhere, 'rev-parse', 'refs/tags/v2.0.0'))).toBe('tag');
+    expect(git(fresh, 'for-each-ref')).toBe('');
+    expect(existsSync(path.join(fresh, '.git', 'FETCH_HEAD'))).toBe(false);
+    // Only branches and tags, by names no git argument could misread.
+    for (const ref of ['refs/notes/commits', 'refs/heads/a:refs/heads/main', 'refs/heads/-x']) {
+      const error = await fetchRefObjects(fresh, access, [ref]).catch((e: unknown) => e);
+      expect(error, ref).toBeInstanceOf(HttpError);
+      expect((error as HttpError).statusCode, ref).toBe(400);
+    }
   });
 });

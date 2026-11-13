@@ -763,3 +763,87 @@ describe('pull from origin', () => {
     expect(forge.seen.length).toBe(seen);
   });
 });
+
+describe('reading all of origin', () => {
+  const refsCalls = () =>
+    forge.seen.filter((r) => r.method === 'GET' && r.path.endsWith('/info/refs')).length;
+  const refresh = async () => {
+    const res = await send('POST', gitUrl('/fetch'));
+    expect(res.statusCode).toBe(200);
+  };
+
+  it('reads every branch and tag of origin; a local tag is never moved, and one that differs is said so', async () => {
+    const shared = head();
+    git(projectPath, 'tag', 'v0.7.0');
+    const elsewhere = cloneOf(bare);
+    git(elsewhere, 'switch', '-q', '-c', '12112026_backup');
+    const backupTip = commit(elsewhere, 'backup.txt');
+    git(elsewhere, 'switch', '-q', '-c', 'emberline/run-on-origin', 'main');
+    const runTip = commit(elsewhere, 'run.txt');
+    git(elsewhere, 'tag', '-a', '-m', 'v0.8.0', 'v0.8.0', shared);
+    git(elsewhere, 'tag', 'v0.9.0', runTip);
+    // origin's v0.7.0 names another commit than the one here.
+    git(elsewhere, 'tag', 'v0.7.0', backupTip);
+    git(elsewhere, 'push', '-q', 'origin', '12112026_backup', 'emberline/run-on-origin', '--tags');
+
+    await refresh();
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/12112026_backup')).toBe(backupTip);
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/emberline/run-on-origin')).toBe(runTip);
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/main')).toBe(shared);
+    // The tags origin has and this project lacks come in as origin has them; v0.7.0 stays.
+    expect(git(projectPath, 'rev-parse', 'refs/tags/v0.8.0')).toBe(
+      git(elsewhere, 'rev-parse', 'refs/tags/v0.8.0'),
+    );
+    expect(git(projectPath, 'cat-file', '-t', 'refs/tags/v0.8.0')).toBe('tag');
+    expect(git(projectPath, 'rev-parse', 'refs/tags/v0.9.0')).toBe(runTip);
+    expect(git(projectPath, 'rev-parse', 'refs/tags/v0.7.0')).toBe(shared);
+    const status = (await send('GET', gitUrl())).json();
+    expect(status.latestTag).toBe('v0.8.0');
+    expect(status.tagsDifferFromOrigin).toEqual(['v0.7.0']);
+    // Nothing reached the local branches.
+    expect(git(projectPath, 'for-each-ref', '--format=%(refname)', 'refs/heads/')).toBe('refs/heads/main');
+
+    // A read with nothing new on origin is one ls-remote: no fetch.
+    const before = refsCalls();
+    await refresh();
+    expect(refsCalls() - before).toBe(1);
+
+    // A branch gone from origin loses its tracking ref; a tag gone from origin stays here.
+    git(elsewhere, 'push', '-q', 'origin', '--delete', '12112026_backup', 'v0.9.0');
+    await refresh();
+    expect(has(projectPath, 'refs/remotes/origin/12112026_backup')).toBe('');
+    expect(git(projectPath, 'rev-parse', 'refs/tags/v0.9.0')).toBe(runTip);
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/emberline/run-on-origin')).toBe(runTip);
+  });
+
+  it('a branch origin drops between the listing and the fetch fails no read; the others come in the next one', async () => {
+    const elsewhere = cloneOf(bare);
+    git(elsewhere, 'switch', '-q', '-c', 'gone-soon');
+    commit(elsewhere, 'gone.txt');
+    git(elsewhere, 'switch', '-q', '-c', 'stays', 'main');
+    const stays = commit(elsewhere, 'stays.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'gone-soon', 'stays');
+    // Right after origin was listed, gone-soon is deleted there.
+    const { localCommandExecutor, setCommandExecutor } = await import('../command-exec.js');
+    let dropped = false;
+    setCommandExecutor(async (request) => {
+      const out = await localCommandExecutor(request);
+      if (!dropped && request.args.includes('ls-remote')) {
+        dropped = true;
+        git(bare, 'update-ref', '-d', 'refs/heads/gone-soon');
+      }
+      return out;
+    });
+    try {
+      await refresh();
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    // main came in alone; what the failed fetch would have brought waits for the next read.
+    expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.error).toBeNull();
+    expect(has(projectPath, 'refs/remotes/origin/gone-soon')).toBe('');
+    await refresh();
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/stays')).toBe(stays);
+    expect(has(projectPath, 'refs/remotes/origin/gone-soon')).toBe('');
+  });
+});

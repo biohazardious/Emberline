@@ -48,6 +48,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     releaseDraft: null,
     releaseSummary: { head: null, commits: 0, tickets: 0, checks: [], hasChangelog: false },
     backups: [],
+    tagsDifferFromOrigin: [],
     ...over,
   }) as GitPageStatus;
 const branch = (name: string, kind: GitBranch['kind']) =>
@@ -98,6 +99,14 @@ describe('Git page', () => {
     // Run branches stay out of the picker.
     await waitFor(() =>
       expect([...view.container.querySelectorAll('option')].map((o) => o.value)).toEqual(['develop', 'main']),
+    );
+  });
+
+  it("says which tags here differ from origin's", async () => {
+    serve(status({ tagsDifferFromOrigin: ['v0.7.0'] }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("The tag v0.7.0 here is not the same as origin's v0.7.0."),
     );
   });
 

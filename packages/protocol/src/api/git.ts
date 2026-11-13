@@ -211,6 +211,8 @@ export const GitPageStatus = z.object({
     hasChangelog: z.boolean(),
   }),
   backups: z.array(z.string()),
+  /** Tags here that name something other than origin's tag of that name (never moved by Emberline). */
+  tagsDifferFromOrigin: z.array(z.string()),
 });
 export type GitPageStatus = z.infer<typeof GitPageStatus>;
 

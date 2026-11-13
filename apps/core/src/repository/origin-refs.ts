@@ -1,0 +1,181 @@
+/**
+ * A read of all of origin: every branch's commit, kept as `refs/remotes/origin/<branch>`, and the
+ * tags this project lacks, created as origin has them. The network part (one ls-remote, then one
+ * fetch of the objects that are missing) runs outside the main-workspace lock; the ref writes run
+ * under it, compare-and-set, and only for what changed. A local tag is never moved or deleted.
+ */
+import { isRunnerUnavailable } from '../command-exec.js';
+import { HttpError } from '../errors.js';
+import { execGitFile } from '../git-exec.js';
+import {
+  fetchBranchObjects,
+  fetchRefObjects,
+  hasRealCommit,
+  type OriginRefs,
+  realGit,
+  type RemoteAccess,
+  unlessRunnerUnavailable,
+} from './git.js';
+
+/**
+ * Branches and tags fetched in one read beyond the ones the read needs (main and the working
+ * branch). The writes run under the main-workspace lock, one git call each, so a first read of a
+ * repository with hundreds of them takes them over a few reads instead of holding the lock long.
+ */
+export const MAX_NEW_REFS_PER_READ = 100;
+/** Refspecs per fetch: a long list stays well within a command line. */
+const FETCH_CHUNK = 100;
+/** The tags that differ from origin's kept for the Git page, at most. */
+const DIFFERING_KEPT = 100;
+
+/** What one read brought in, ready to be written under the lock. */
+export interface OriginObjects {
+  /** origin's branches whose commits are here now, by name. */
+  branches: Map<string, string>;
+  /** origin's tags this project lacked, whose objects are here now. */
+  newTags: Map<string, string>;
+}
+
+/** The refs under `prefix` (`refs/remotes/origin/`, `refs/tags/`) with what each names, by the rest of the name. */
+async function refsUnder(mainPath: string, prefix: string): Promise<Map<string, string>> {
+  const out = (await realGit(['for-each-ref', '--format=%(refname)%00%(objectname)', prefix], mainPath))
+    .stdout;
+  const refs = new Map<string, string>();
+  for (const line of out.split('\n')) {
+    const [ref, oid] = line.split('\0');
+    if (!ref?.startsWith(prefix) || !oid) continue;
+    const name = ref.slice(prefix.length);
+    // origin's HEAD (a clone's symbolic ref) is no branch of origin's.
+    if (name && !(prefix === 'refs/remotes/origin/' && name === 'HEAD')) refs.set(name, oid);
+  }
+  return refs;
+}
+
+const hasRealObject = (mainPath: string, oid: string) =>
+  realGit(['cat-file', '-e', oid], mainPath).then(() => true, unlessRunnerUnavailable(false));
+
+/** Version-like names newest first (v0.10.0 before v0.9.0), so a capped read takes the latest tags. */
+const newestFirst = (a: string, b: string) => b.localeCompare(a, 'en', { numeric: true });
+
+/**
+ * Outside the lock: the objects of origin's branches and new tags that are not here yet, in one
+ * fetch (no ref written). `needed` (main and the working branch) always come; others up to
+ * {@link MAX_NEW_REFS_PER_READ}, the rest in the next reads. A branch or tag that origin moved or
+ * dropped since it was listed is left out of this read; one that `needed` names is the read's
+ * failure (`remote_moved`), as before.
+ */
+export async function bringOriginObjects(
+  mainPath: string,
+  access: RemoteAccess,
+  refs: OriginRefs,
+  needed: readonly string[],
+): Promise<OriginObjects> {
+  const [tracked, localTags] = await Promise.all([
+    refsUnder(mainPath, 'refs/remotes/origin/'),
+    refsUnder(mainPath, 'refs/tags/'),
+  ]);
+  const branches = new Map<string, string>();
+  const newTags = new Map<string, string>();
+  const missing: { ref: string; name: string; oid: string; tag: boolean }[] = [];
+  let budget = MAX_NEW_REFS_PER_READ;
+  const order = [
+    ...needed.filter((name) => refs.branches.has(name)),
+    ...[...refs.branches.keys()].filter((name) => !needed.includes(name)),
+  ];
+  for (const name of order) {
+    const oid = refs.branches.get(name)!;
+    // Unchanged since the last read: its commit is here already.
+    if (tracked.get(name) === oid) {
+      branches.set(name, oid);
+      continue;
+    }
+    if (!needed.includes(name) && budget-- <= 0) continue;
+    if (await hasRealCommit(mainPath, oid)) branches.set(name, oid);
+    else missing.push({ ref: `refs/heads/${name}`, name, oid, tag: false });
+  }
+  for (const name of [...refs.tags.keys()].sort(newestFirst)) {
+    if (localTags.has(name) || budget-- <= 0) continue;
+    const oid = refs.tags.get(name)!;
+    if (await hasRealObject(mainPath, oid)) newTags.set(name, oid);
+    else missing.push({ ref: `refs/tags/${name}`, name, oid, tag: true });
+  }
+  if (missing.length === 0) return { branches, newTags };
+
+  try {
+    for (let i = 0; i < missing.length; i += FETCH_CHUNK)
+      await fetchRefObjects(
+        mainPath,
+        access,
+        missing.slice(i, i + FETCH_CHUNK).map((m) => m.ref),
+      );
+  } catch (error) {
+    if (isRunnerUnavailable(error)) throw error;
+    // A ref origin dropped since the listing fails the whole fetch: the branches the read needs are
+    // fetched alone then (their own failure is the read's), and the rest wait for the next read.
+    for (const m of missing)
+      if (!m.tag && needed.includes(m.name)) await fetchBranchObjects(mainPath, access, m.name, m.oid);
+  }
+  for (const m of missing) {
+    const here = m.tag ? await hasRealObject(mainPath, m.oid) : await hasRealCommit(mainPath, m.oid);
+    if (here) (m.tag ? newTags : branches).set(m.name, m.oid);
+    else if (!m.tag && needed.includes(m.name))
+      throw new HttpError(
+        409,
+        'remote_moved',
+        `origin's ${m.name} changed while Emberline read it. Press Refresh again.`,
+      );
+  }
+  return { branches, newTags };
+}
+
+/**
+ * Under the main-workspace lock: each `refs/remotes/origin/<branch>` that changed set to what origin
+ * named, the tracking refs of branches origin no longer has removed, and the new tags created
+ * (compare-and-set: one that appeared meanwhile is left as it is). A write of `needed` that fails is
+ * the read's failure; any other is skipped (a name that clashes with another ref, say). Returns the
+ * tags here that name something other than origin's tag of the same name.
+ */
+export async function writeOriginRefs(
+  mainPath: string,
+  refs: OriginRefs,
+  objects: OriginObjects,
+  needed: readonly string[],
+): Promise<{ tagsDiffer: string[] }> {
+  const inMain = { cwd: mainPath };
+  const tracked = await refsUnder(mainPath, 'refs/remotes/origin/');
+  for (const [name, oid] of objects.branches) {
+    const old = tracked.get(name);
+    if (old === oid) continue;
+    try {
+      await execGitFile(
+        ['update-ref', '-m', 'emberline: origin read', `refs/remotes/origin/${name}`, oid, old ?? ''],
+        inMain,
+      );
+    } catch (error) {
+      if (isRunnerUnavailable(error) || needed.includes(name)) throw error;
+    }
+  }
+  for (const [name, old] of tracked) {
+    if (refs.branches.has(name)) continue;
+    await execGitFile(
+      ['update-ref', '-m', 'emberline: gone from origin', '-d', `refs/remotes/origin/${name}`, old],
+      inMain,
+    ).catch(unlessRunnerUnavailable(undefined));
+  }
+  const localTags = await refsUnder(mainPath, 'refs/tags/');
+  for (const [name, oid] of objects.newTags) {
+    if (localTags.has(name)) continue;
+    // The empty old value makes this a create: a tag made here meanwhile is never moved.
+    const made = await execGitFile(
+      ['update-ref', '-m', 'emberline: tag from origin', `refs/tags/${name}`, oid, ''],
+      inMain,
+    ).then(() => true, unlessRunnerUnavailable(false));
+    if (made) localTags.set(name, oid);
+  }
+  const tagsDiffer = [...refs.tags]
+    .filter(([name, oid]) => localTags.has(name) && localTags.get(name) !== oid)
+    .map(([name]) => name)
+    .sort(newestFirst)
+    .slice(0, DIFFERING_KEPT);
+  return { tagsDiffer };
+}

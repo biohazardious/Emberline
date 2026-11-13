@@ -7,6 +7,7 @@ import {
   splitBranches,
   syncText,
   tabFromHash,
+  tagsDifferText,
 } from './gitPage';
 
 const sync = (over: Partial<GitSync>): GitSync => ({
@@ -108,5 +109,17 @@ describe('tabFromHash and gitRefetchMs', () => {
     expect(gitRefetchMs(status())).toBe(60_000);
     expect(gitRefetchMs(status({ releaseJob: { state: 'running' } }))).toBe(5_000);
     expect(gitRefetchMs(status({ releaseDraft: { status: 'drafting' } }))).toBe(5_000);
+  });
+});
+
+describe('tagsDifferText', () => {
+  it('names the tags that differ from origin, at most five', () => {
+    expect(tagsDifferText([])).toBeNull();
+    expect(tagsDifferText(['v0.7.0'])).toBe(
+      "The tag v0.7.0 here is not the same as origin's v0.7.0. Emberline never moves a local tag, so it stays as it is.",
+    );
+    expect(tagsDifferText(['v7', 'v6', 'v5', 'v4', 'v3', 'v2', 'v1'])).toBe(
+      "7 tags here are not the same as origin's tags of the same name: v7, v6, v5, v4, v3 and 2 more. Emberline never moves a local tag, so they stay as they are.",
+    );
   });
 });
