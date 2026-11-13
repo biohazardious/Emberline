@@ -1,6 +1,6 @@
 import type { GitBranch, GitCompare, GitFileDiff, GitPageStatus } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { trapTab } from '../../focusTrap';
@@ -337,10 +337,15 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
               <td colSpan={5}>
                 <button
                   type="button"
-                  className="btn btn-sm btn-ghost"
+                  className="link-btn git-run-toggle"
                   aria-expanded={showRuns}
                   onClick={() => setShowRuns((v) => !v)}
                 >
+                  {showRuns ? (
+                    <ChevronDown className="icon" aria-hidden />
+                  ) : (
+                    <ChevronRight className="icon" aria-hidden />
+                  )}
                   {runBranches.length} run {runBranches.length === 1 ? 'branch' : 'branches'}
                 </button>
               </td>

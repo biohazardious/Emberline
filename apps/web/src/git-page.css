@@ -273,3 +273,11 @@
   padding-left: 20px;
   font-size: 0.82rem;
 }
+
+/* The run branches' count opens them: a link-styled toggle, not plain text. */
+.git-run-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}

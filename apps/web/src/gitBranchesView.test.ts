@@ -97,7 +97,12 @@ describe('GitBranchesTab', () => {
     const { container } = await render();
     await waitFor(() => expect(container.textContent).toContain('feature/wip'));
     expect(container.textContent).not.toContain('emberline/run-1');
-    await click(getButton('2 run branches'));
+    // A link-styled toggle that says whether it is open, not plain text.
+    const toggle = getButton('2 run branches');
+    expect(toggle.classList.contains('link-btn')).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await click(toggle);
+    expect(getButton('2 run branches').getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('emberline/run-1');
     expect(container.textContent).toContain('emberline/run-2');
   });
