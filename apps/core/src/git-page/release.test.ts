@@ -312,11 +312,34 @@ describe('release', () => {
     await jobs.idle();
     const promoted = git(projectPath, 'rev-parse', 'main');
     expect(storedJob().state).toBe('failed');
-    // The push landed (and origin was read) without the job knowing.
+    // The push landed without the job knowing, and the tracking ref still names the old main:
+    // Undo reads origin itself.
+    const tracked = git(projectPath, 'rev-parse', 'refs/remotes/origin/main');
     git(projectPath, 'push', '-q', bare, 'main');
-    git(projectPath, 'update-ref', 'refs/remotes/origin/main', promoted);
+    git(projectPath, 'update-ref', 'refs/remotes/origin/main', tracked);
     expect((await refusal(jobs.undoPromote(projectId))).code).toBe('already_pushed');
     expect(git(projectPath, 'rev-parse', 'main')).toBe(promoted);
+  });
+
+  it('a main push that landed counts as done though recording it failed', async () => {
+    const head = await developWithTickets();
+    const repo = t.repository;
+    const jobs = jobsWith({
+      repository: {
+        remoteAction: (id, fn) => repo.remoteAction(id, fn),
+        readOrigin: (id, ws) => repo.readOrigin(id, ws),
+        recordPush: async () => {
+          throw new Error('the database is gone');
+        },
+      },
+    });
+    await jobs.start(projectId, publish(head, { mode: 'promote_only' }));
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('done');
+    expect(job.steps.find((s) => s.name === 'push_main')!.status).toBe('done');
+    expect(git(bare, 'rev-parse', 'main')).toBe(job.promoteOid);
+    expect((await refusal(jobs.undoPromote(projectId))).code).toBe('nothing_to_undo');
   });
 
   it('refuses a version whose tag exists on origin before main changes', async () => {

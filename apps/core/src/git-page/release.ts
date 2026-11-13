@@ -371,23 +371,30 @@ export class ReleaseJobs {
       const previous = stopped.previousMain;
       const ours = [stopped.releaseCommit, stopped.promoteOid].filter((oid): oid is string => oid !== null);
       const ctx: JobContext = { project, main, job: stopped, resumed: true, worktree: null };
-      await withMainWorkspaceLock(project.path, async () => {
-        const tip = await localTip(project.path, main);
-        if (!previous || tip === previous)
+      const nothingToUndo = () =>
+        conflict(`${main} is where it was before the release; there is nothing to undo.`, 'nothing_to_undo');
+      const moved = () =>
+        conflict(`${main} moved since the release stopped, so Emberline left it as it is.`, 'main_moved');
+      const local = await localTip(project.path, main);
+      if (!previous || local === previous) throw nothingToUndo();
+      if (!local || !ours.includes(local)) throw moved();
+      // origin as it is now, not as last read: a push that went through though nothing recorded it
+      // (the tracking ref may be older) means the promote is published, and it stays.
+      await this.deps.repository.remoteAction(project.id, async (ws) => {
+        const read = await this.deps.repository.readOrigin(project.id, ws);
+        if (read.stale || read.error)
           throw conflict(
-            `${main} is where it was before the release; there is nothing to undo.`,
-            'nothing_to_undo',
+            `Couldn't read origin${read.error ? ` (${read.error})` : ''}, so Emberline cannot tell whether ${main} is published there; ${main} stays as it is. Try again once origin answers.`,
+            'remote_unreachable',
           );
-        if (!tip || !ours.includes(tip))
-          throw conflict(
-            `${main} moved since the release stopped, so Emberline left it as it is.`,
-            'main_moved',
-          );
-        // The push went through though it was not recorded: origin has it, so it stays.
-        const originMain = await refTip(project.path, `refs/remotes/origin/${main}`);
-        if (originMain && (await isAncestorCommit(project.path, tip, originMain)))
-          throw conflict(`${main} is on origin already, so its promote stays.`, 'already_pushed');
-        await this.moveMain(ctx, tip, previous, 'emberline: undo promote');
+        await withMainWorkspaceLock(ws.path, async () => {
+          const tip = await localTip(ws.path, main);
+          if (tip === previous) throw nothingToUndo();
+          if (!tip || !ours.includes(tip)) throw moved();
+          if (read.main && (await isAncestorCommit(ws.path, tip, read.main)))
+            throw conflict(`${main} is on origin already, so its promote stays.`, 'already_pushed');
+          await this.moveMain(ctx, tip, previous, 'emberline: undo promote');
+        });
       });
       const job: ReleaseJob = { ...stopped, state: 'undone', finishedAt: new Date().toISOString() };
       this.write(projectId, job);
@@ -867,7 +874,9 @@ export class ReleaseJobs {
       if (!has) return 'gone' as const;
       const pushed = await pushBranch(ws.path, ws.access, main, expected);
       if (pushed === 'pushed') {
-        await this.deps.repository.recordPush(project.id, ws, main, expected);
+        // The push landed: origin has main now, whatever recording it here comes to. A failure of
+        // that record never makes the step failed (Undo would then take back a published promote).
+        await this.deps.repository.recordPush(project.id, ws, main, expected).catch(() => undefined);
         return pushed;
       }
       // Rejected: origin's main moved. If it has the release's commit already (Keep main pushed, or a
