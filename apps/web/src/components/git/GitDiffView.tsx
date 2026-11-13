@@ -97,6 +97,11 @@ export function GitDiffView({
             onLineClick={noop}
             onFocusComment={noop}
             draftLine={null}
+            hint={
+              <>
+                <kbd className="kbd">j</kbd>/<kbd className="kbd">k</kbd> files
+              </>
+            }
           />
         )}
       </div>

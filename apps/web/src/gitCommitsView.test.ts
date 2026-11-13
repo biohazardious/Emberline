@@ -14,8 +14,13 @@ vi.mock('./api', async (importOriginal) => ({
 }));
 // Monaco does not run in a DOM test; the stand-in shows which file it was given.
 vi.mock('./components/MonacoDiff', () => ({
-  MonacoDiff: (p: { filePath: string; modified: string }) =>
-    createElement('div', { 'data-testid': 'diff', 'data-modified': p.modified }, p.filePath),
+  MonacoDiff: (p: { filePath: string; modified: string; hint?: unknown }) =>
+    createElement(
+      'div',
+      null,
+      createElement('div', { 'data-testid': 'hint' }, p.hint as never),
+      createElement('div', { 'data-testid': 'diff', 'data-modified': p.modified }, p.filePath),
+    ),
 }));
 
 const sha = (n: number) => String(n).repeat(40);
@@ -126,6 +131,13 @@ describe('GitCommitsTab', () => {
     await click(container.querySelectorAll('.commit-row-main')[0]!);
     press('j');
     await waitFor(() => expect(container.querySelector('[data-testid="diff"]')?.textContent).toBe('b.ts'));
+  });
+
+  it('names only the keys the Git page has above the diff (no comments here)', async () => {
+    const { container } = await render();
+    await waitFor(() => expect(container.querySelector('[data-testid="diff"]')?.textContent).toBe('a.ts'));
+    const hint = container.querySelector('[data-testid="hint"]')?.textContent;
+    expect(hint).toBe('j/k files');
   });
 
   it('j typed in an input does not move', async () => {

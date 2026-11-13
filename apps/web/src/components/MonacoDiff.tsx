@@ -1,6 +1,6 @@
 import type { ReviewComment } from '@emberline/protocol';
 import type * as Monaco from 'monaco-editor';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemeMode } from '../hooks/useThemeMode';
 import { loadMonaco, monacoTheme } from '../monaco';
 import { glyphHoverText } from '../reviewComments';
@@ -31,6 +31,11 @@ interface Props {
   pending?: boolean;
   /** Hidden but kept alive (the selected file is binary or failed to load), so it is not rebuilt. */
   hidden?: boolean;
+  /**
+   * The keys line above the diff; the Review page's (comments and their keys) by default. A page
+   * without comments (the Git page) names only the keys it has.
+   */
+  hint?: ReactNode;
 }
 
 export function MonacoDiff({
@@ -48,6 +53,7 @@ export function MonacoDiff({
   draftLine,
   pending = false,
   hidden = false,
+  hint,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const diffEditorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
@@ -273,9 +279,13 @@ export function MonacoDiff({
     >
       <div className="monaco-diff-hint-bar">
         <span className="muted small">
-          Click any line or press <kbd className="kbd">c</kbd> to comment · <kbd className="kbd">j</kbd>/
-          <kbd className="kbd">k</kbd> files · <kbd className="kbd">n</kbd>/<kbd className="kbd">p</kbd>{' '}
-          comments · <kbd className="kbd">?</kbd> shortcuts
+          {hint ?? (
+            <>
+              Click any line or press <kbd className="kbd">c</kbd> to comment · <kbd className="kbd">j</kbd>/
+              <kbd className="kbd">k</kbd> files · <kbd className="kbd">n</kbd>/<kbd className="kbd">p</kbd>{' '}
+              comments · <kbd className="kbd">?</kbd> shortcuts
+            </>
+          )}
         </span>
         {draftLine && (
           <span className="badge badge-soft mono review-tabular">
