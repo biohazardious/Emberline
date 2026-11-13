@@ -226,6 +226,8 @@ export class ReleaseJobs {
   private readonly running = new Map<string, Promise<void>>();
   /** A start, Retry or Undo between its first check and its job: a second one is refused. */
   private readonly busy = new Set<string>();
+  /** The jobs' own worktrees while they exist: a sweep of leftovers never takes one of these. */
+  private readonly dirs = new Set<string>();
   /** The jobs' holds on merges into main (a release with main as its working branch). */
   private readonly holds = new Set<ReturnType<typeof holdMergesInto>>();
   private stopping = false;
@@ -303,6 +305,16 @@ export class ReleaseJobs {
         'release_unfinished',
       );
     }
+  }
+
+  /** Whether `dir` is the worktree of a release job running now. */
+  uses(dir: string): boolean {
+    return this.dirs.has(path.resolve(dir));
+  }
+
+  /** Whether `name` is the compose project of a release job running now. */
+  usesComposeProject(name: string): boolean {
+    return [...this.dirs].some((dir) => composeProjectOf(dir) === name);
   }
 
   /** The first refusal a release would meet that is decidable here, with no network; null: none. */
@@ -1210,9 +1222,16 @@ export class ReleaseJobs {
       await this.removeDir(project, path.join(parent, name));
     await mkdir(parent, { recursive: true });
     const dir = path.join(parent, `release-${ctx.job.id.replace(/-/g, '').slice(0, 8)}`);
-    await withMainWorkspaceLock(project.path, () =>
-      execGitFile(['worktree', 'add', '--detach', dir, commit], { cwd: project.path, timeout: 120_000 }),
-    );
+    // Claimed before it exists, so a sweep of leftovers that lists it never takes it.
+    this.dirs.add(path.resolve(dir));
+    try {
+      await withMainWorkspaceLock(project.path, () =>
+        execGitFile(['worktree', 'add', '--detach', dir, commit], { cwd: project.path, timeout: 120_000 }),
+      );
+    } catch (error) {
+      this.dirs.delete(path.resolve(dir));
+      throw error;
+    }
     ctx.worktree = dir;
     return dir;
   }
@@ -1222,6 +1241,7 @@ export class ReleaseJobs {
     const dir = ctx.worktree;
     ctx.worktree = null;
     await this.removeDir(ctx.project, dir);
+    this.dirs.delete(path.resolve(dir));
   }
 
   /** As a run's worktree goes: worktree.yml teardown and compose down, then the removal and a prune. */

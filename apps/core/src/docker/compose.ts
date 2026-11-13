@@ -273,6 +273,15 @@ export function isEmberlineComposeProject(name: string): boolean {
   return /^emberline-(?:[0-9a-f]{8}|main-[0-9a-f]{8})(?:-preview)?$/.test(name);
 }
 
+/**
+ * Core's own job compose projects: a pull's heal (`emberline-pull-<id8>`) and a release's checks
+ * (`emberline-release-<id8>`). The GC sweep leaves them alone (no run owns them); the Git page sweeps
+ * the ones a crash or a stop left behind.
+ */
+export function isCoreJobComposeProject(name: string): boolean {
+  return /^emberline-(?:pull|release)-[0-9a-f]{8}$/.test(name);
+}
+
 /** Dangling images older than 72 h (daily, from the GC sweep). */
 export function imagePruneArgs(): string[] {
   return ['image', 'prune', '-f', '--filter', 'until=72h'];

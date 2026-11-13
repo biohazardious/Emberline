@@ -178,6 +178,7 @@ import {
   passwordGitWouldShow,
   validateRepositoryUrl,
 } from '../repository/git.js';
+import type { GitPageService } from '../git-page/service.js';
 import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { runCommit } from '../factory/commit-identity.js';
@@ -247,7 +248,8 @@ export function registerProjectRoutes(
     scheduler,
     postMerge,
     mainPush,
-  }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed },
+    gitPage,
+  }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed; gitPage?: GitPageService },
 ): void {
   // The import clone holds a capability: it runs in the ops container, out of the agents' sight (the
   // runner in the dev stack, which has none).
@@ -1685,6 +1687,9 @@ export function registerProjectRoutes(
           }
         }
 
+        // A pull's heal or a release's checks a crash left: their teardown and compose project
+        // first, while the worktrees and the project are still there.
+        await gitPage?.sweepLeftovers(projectId).catch(() => undefined);
         // Never pull the worktrees out from under a teardown that still runs: they go once it ended.
         const worktreeSlugDir = path.join(config.workspacesDir, '.worktrees', row.slug);
         // Files the Docker engine's containers left may need handing back first (runs.removeTree).

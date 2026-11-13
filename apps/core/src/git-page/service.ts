@@ -1,4 +1,4 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type BranchRemoteState,
@@ -30,6 +30,8 @@ import { credentialAccountForRemote } from '../forge/account-store.js';
 import { parseForgeRemote, type ForgeService } from '../forge/service.js';
 import { aheadBehind, mainBranchState, originUrls, realGit, remoteUrlForDisplay } from '../repository/git.js';
 import type { RepositoryService } from '../repository/service.js';
+import { withMainWorkspaceLock } from '../factory/merge.js';
+import { pruneWorktree } from '../runs/git.js';
 import type { RunService } from '../runs/service.js';
 import type { TicketService } from '../tickets/service.js';
 import { approvedChecks } from '../worktree-config/load.js';
@@ -57,6 +59,8 @@ import {
   fetchOrigin,
   type GitNotify,
   HealJobs,
+  JOB_WORKTREE,
+  jobComposeProject,
   listBackups,
   matchOrigin,
   pull,
@@ -200,6 +204,36 @@ export class GitPageService {
     if (opts.auto && (await this.releases.standing(projectId)) === 'running')
       return fetchOrigin(this.syncDeps(), projectId);
     return pull(this.syncDeps(), projectId, opts);
+  }
+
+  /**
+   * What a crash or a stop during a pull's heal or a release's checks left behind: their worktrees
+   * (`pull-<id8>`, `release-<id8>` under the project's `.worktrees` folder), each with its
+   * worktree.yml teardown and compose project, and (for every project, at startup) their compose
+   * projects left in the engine. A heal's or release's that runs now is never touched. Best effort.
+   */
+  async sweepLeftovers(projectId?: string): Promise<void> {
+    if (this.heals.stopped) return;
+    const rows = projectId
+      ? [this.project(projectId)]
+      : this.db.select({ id: projects.id, path: projects.path, slug: projects.slug }).from(projects).all();
+    const inUse = (dir: string) => this.heals.uses(dir) || this.releases.uses(dir);
+    for (const row of rows) {
+      const parent = path.join(this.deps.workspacesDir, '.worktrees', row.slug);
+      const names = (await readdir(parent).catch(() => [] as string[])).filter((n) => JOB_WORKTREE.test(n));
+      for (const name of names) {
+        const dir = path.join(parent, name);
+        if (inUse(dir)) continue;
+        await this.deps.runs.teardownJobWorktree(row.id, dir, jobComposeProject(dir)).catch(() => undefined);
+        await withMainWorkspaceLock(row.path, () => pruneWorktree(row.path, dir)).catch(() => undefined);
+      }
+    }
+    if (projectId) return;
+    // The engine's leftovers: a job project whose worktree is in use now stays (asked after the
+    // engine was listed, so a job that started meanwhile keeps its own).
+    await this.deps.runs.downLeftoverJobProjects(
+      (name) => this.heals.usesComposeProject(name) || this.releases.usesComposeProject(name),
+    );
   }
 
   /** Resolves once no pull's heal, release-notes draft or release job runs in the background. */

@@ -236,14 +236,27 @@ export async function buildServer(
     log: (message) => app.log.warn(message),
     ready: runnerReady,
   });
+  // What a crash or a stop during a pull's heal or a release's checks left behind (their worktrees
+  // and compose projects) goes once, when the runner is first there to take it down.
+  let leftoversSwept = false;
+  const sweepGitLeftovers = () => {
+    if (leftoversSwept || !runnerReady()) return;
+    leftoversSwept = true;
+    void gitPage
+      .sweepLeftovers()
+      .catch((err: unknown) => app.log.warn({ err }, "sweeping the Git page's leftover worktrees failed"));
+  };
   const onPtydStatus = (status: string) => {
-    if (status === 'connected') resumeMainPushes();
+    if (status !== 'connected') return;
+    resumeMainPushes();
+    sweepGitLeftovers();
   };
   deps.ptyd.on('status', onPtydStatus);
   if (ops !== deps.ptyd) ops.on('status', onPtydStatus);
   app.addHook('onListen', async () => {
     listening = true;
     resumeMainPushes();
+    sweepGitLeftovers();
     gitSync.start();
   });
   app.addHook('onClose', async () => {
@@ -299,7 +312,7 @@ export async function buildServer(
     sshKeyMissing: sshKeyMissingProjects(deps.db),
     docker: deps.runs.docker.status,
   }));
-  registerProjectRoutes(app, { ...deps, postMerge, mainPush });
+  registerProjectRoutes(app, { ...deps, postMerge, mainPush, gitPage });
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
   registerContainerPreviewRoutes(app, deps);

@@ -62,8 +62,14 @@ const PULLED_KEPT = 500;
 const MAX_HEALS = 2;
 /** Core's own worktree for a pull's heal: `<workspacesDir>/.worktrees/<slug>/pull-<id8>`. */
 const HEAL_DIR = /^pull-[0-9a-f]{8}$/;
-/** The heal's compose project, apart from every run's and the main workspace's. */
-const healComposeProject = (dir: string) => `emberline-${path.basename(dir)}`;
+/**
+ * Core's own job worktrees under `<workspacesDir>/.worktrees/<slug>/`: a pull's heal (`pull-<id8>`)
+ * and a release's checks (`release-<id8>`).
+ */
+export const JOB_WORKTREE = /^(?:pull|release)-[0-9a-f]{8}$/;
+/** A job worktree's compose project, apart from every run's and the main workspace's. */
+export const jobComposeProject = (dir: string) => `emberline-${path.basename(dir)}`;
+const healComposeProject = jobComposeProject;
 const BACKUP_PREFIX = 'refs/emberline/backup/';
 const ORIGIN_CHANGED =
   "This project's origin changed while Emberline read it, so nothing was pulled. Pull again.";
@@ -413,7 +419,26 @@ export const HEAL_STOP_TIMEOUT_MS = 5_000;
 /** A pull's heals running in the background, at most one per project. */
 export class HealJobs {
   private readonly jobs = new Map<string, { message: string; done: Promise<void> }>();
+  /** The heals' own worktrees while they exist: a sweep of leftovers never takes one of these. */
+  private readonly dirs = new Set<string>();
   private stopping = false;
+
+  /** Whether `dir` is the worktree of a heal running now. */
+  uses(dir: string): boolean {
+    return this.dirs.has(path.resolve(dir));
+  }
+
+  /** Whether `name` is the compose project of a heal running now. */
+  usesComposeProject(name: string): boolean {
+    return [...this.dirs].some((dir) => jobComposeProject(dir) === name);
+  }
+
+  /** Marks `dir` as a running heal's worktree; the function returned ends that. */
+  claim(dir: string): () => void {
+    const key = path.resolve(dir);
+    this.dirs.add(key);
+    return () => this.dirs.delete(key);
+  }
 
   /** Core is stopping: a running heal gives up at its next check, and none starts. */
   get stopped(): boolean {
@@ -763,10 +788,17 @@ async function healPull(
   await sweepHealWorktrees(deps, projectId, ws.path, parent);
   const dir = path.join(parent, `pull-${randomUUID().slice(0, 8)}`);
   const composeProject = healComposeProject(dir);
-  await mkdir(parent, { recursive: true });
-  await withMainWorkspaceLock(ws.path, () =>
-    execGitFile(['worktree', 'add', '--detach', dir, req.before], { cwd: ws.path }),
-  );
+  // Claimed before it exists, so a sweep of leftovers that lists it never takes it.
+  const unclaim = deps.heals.claim(dir);
+  try {
+    await mkdir(parent, { recursive: true });
+    await withMainWorkspaceLock(ws.path, () =>
+      execGitFile(['worktree', 'add', '--detach', dir, req.before], { cwd: ws.path }),
+    );
+  } catch (error) {
+    unclaim();
+    throw error;
+  }
   try {
     const healed = await healConflicts({
       worktreePath: dir,
@@ -797,6 +829,7 @@ async function healPull(
     return { before: req.before, commit: healed.commitOid };
   } finally {
     await removeHealWorktree(deps, projectId, ws.path, dir);
+    unclaim();
   }
 }
 

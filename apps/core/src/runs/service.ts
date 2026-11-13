@@ -85,6 +85,7 @@ import {
   composeDownArgs,
   composeLogsArgs,
   engineHostName,
+  isCoreJobComposeProject,
   isEmberlineComposeProject,
 } from '../docker/compose.js';
 import {
@@ -2769,6 +2770,27 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       );
     }
     await this.downComposeProjects([composeProject], null);
+  }
+
+  /**
+   * Core's own job compose projects in the engine (isCoreJobComposeProject) that `inUse` does not
+   * claim, taken down with their volumes: what a crash or a stop during a pull's heal or a
+   * release's checks left behind. `inUse` is asked after the listing, so a job that started since
+   * is never taken down. Returns the names taken down; a failure is logged.
+   */
+  async downLeftoverJobProjects(inUse: (name: string) => boolean): Promise<string[]> {
+    if (!this.docker.host) return [];
+    await this.docker.ready();
+    const env = this.docker.cliEnv();
+    if (!env.DOCKER_HOST) return [];
+    const listed = await composeProjects(env);
+    if (!listed.ok) {
+      this.log?.warn({ error: listed.error }, "docker compose ls failed; core's leftover job projects stay");
+      return [];
+    }
+    const stale = listed.names.filter((name) => isCoreJobComposeProject(name) && !inUse(name));
+    const failed = await this.downComposeProjects(stale, null);
+    return stale.filter((name) => !failed.has(name));
   }
 
   /**

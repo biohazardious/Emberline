@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BuildDemoResponse } from '@emberline/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
@@ -31,7 +31,7 @@ const git = (dir: string, ...args: string[]) =>
   execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], {
     encoding: 'utf8',
   }).trim();
-const send = (method: 'GET' | 'POST' | 'PATCH', url: string, payload?: object) =>
+const send = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
   t.app.inject({ method, url, headers: authHeaders(cookie), ...(payload ? { payload } : {}) });
 const commit = (dir: string, file: string, content = `${file}\n`, subject = `feat: ${file}`) => {
   writeFileSync(path.join(dir, file), content);
@@ -506,6 +506,65 @@ describe('pull from origin', () => {
     const after = (await service().status(projectId)).sync;
     expect(after.state).toBe('error');
     expect(after.message).toContain('the pull did not finish. Pull again.');
+  });
+
+  it("sweeps the heal and release worktrees a crash left, with their compose projects, never a running heal's", async () => {
+    additiveConflict();
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => (release = r));
+    const svc = service({
+      buildWorkspaceDemo: async () => {
+        await blocked;
+        return okBuild();
+      },
+    });
+    await svc.pull(projectId, { auto: false });
+    await waitFor(() => worktrees().length === 2);
+    const parent = path.join(t.config.workspacesDir, '.worktrees', projectSlug);
+    const running = readdirSync(parent).find((n) => n.startsWith('pull-'))!;
+    for (const name of ['pull-deadbeef', 'release-0a1b2c3d'])
+      git(projectPath, 'worktree', 'add', '-q', '--detach', path.join(parent, name));
+    const torn: string[] = [];
+    const teardown = vi
+      .spyOn(t.runs, 'teardownJobWorktree')
+      .mockImplementation(async (_p, _dir, composeProject) => void torn.push(composeProject));
+    let kept: Record<string, boolean> = {};
+    const engine = vi.spyOn(t.runs, 'downLeftoverJobProjects').mockImplementation(async (inUse) => {
+      kept = Object.fromEntries(
+        [`emberline-${running}`, 'emberline-pull-deadbeef', 'emberline-release-0a1b2c3d'].map((n) => [
+          n,
+          inUse(n),
+        ]),
+      );
+      return [];
+    });
+    await svc.sweepLeftovers();
+    expect(torn.sort()).toEqual(['emberline-pull-deadbeef', 'emberline-release-0a1b2c3d']);
+    expect(existsSync(path.join(parent, 'pull-deadbeef'))).toBe(false);
+    expect(existsSync(path.join(parent, 'release-0a1b2c3d'))).toBe(false);
+    expect(existsSync(path.join(parent, running))).toBe(true);
+    expect(kept).toEqual({
+      [`emberline-${running}`]: true,
+      'emberline-pull-deadbeef': false,
+      'emberline-release-0a1b2c3d': false,
+    });
+    teardown.mockRestore();
+    engine.mockRestore();
+    release();
+    await svc.idle();
+  });
+
+  it("a deleted project's heal and release leftovers are torn down with it", async () => {
+    const parent = path.join(t.config.workspacesDir, '.worktrees', projectSlug);
+    mkdirSync(parent, { recursive: true });
+    git(projectPath, 'worktree', 'add', '-q', '--detach', path.join(parent, 'release-0a1b2c3d'));
+    const torn: string[] = [];
+    const teardown = vi
+      .spyOn(t.runs, 'teardownJobWorktree')
+      .mockImplementation(async (_p, _dir, composeProject) => void torn.push(composeProject));
+    expect((await send('DELETE', `/api/projects/${projectId}`)).statusCode).toBe(200);
+    expect(torn).toEqual(['emberline-release-0a1b2c3d']);
+    teardown.mockRestore();
   });
 
   it('a failed read of origin never hides a conflict that waits for the person', async () => {

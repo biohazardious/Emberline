@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   builderPruneArgs,
   RECLAIM_IMAGE,
+  isCoreJobComposeProject,
   isEmberlineComposeProject,
   parseComposeLs,
   reclaimArgs,
@@ -290,6 +291,20 @@ describe('cleanup builders', () => {
     ]) {
       expect(isEmberlineComposeProject(name), name).toBe(false);
     }
+  });
+
+  it("core's own job projects (a pull's heal, a release's checks) are told apart by their names", () => {
+    for (const name of ['emberline-pull-deadbeef', 'emberline-release-0a1b2c3d'])
+      expect(isCoreJobComposeProject(name), name).toBe(true);
+    for (const name of [
+      'emberline-deadbeef',
+      'emberline-pull-DEADBEEF',
+      'emberline-release-deadbeef0',
+      'emberline-pull-',
+      'x-emberline-pull-deadbeef',
+      'emberline-main-12345678',
+    ])
+      expect(isCoreJobComposeProject(name), name).toBe(false);
   });
 
   it('reads project names from `compose ls --format json`', () => {
