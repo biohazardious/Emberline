@@ -121,9 +121,10 @@ export async function refLabels(
     const [, object, peeled, ref] = match as unknown as [string, string, string, string];
     if (ref.startsWith('refs/heads/')) {
       const name = ref.slice('refs/heads/'.length);
+      // Main as the working branch is one label, not the same name twice.
       if (name === working) add(object, { kind: 'working', name });
-      if (name === main) add(object, { kind: 'main', name });
-      if (name !== working && name !== main) add(object, { kind: 'branch', name });
+      else if (name === main) add(object, { kind: 'main', name });
+      else add(object, { kind: 'branch', name });
     } else if (ref.startsWith('refs/tags/')) {
       add(peeled || object, { kind: 'tag', name: ref.slice('refs/tags/'.length) });
     } else if (ref.startsWith('refs/remotes/origin/')) {

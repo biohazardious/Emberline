@@ -49,6 +49,10 @@ describe('git history', () => {
         { kind: 'tag', name: 'v0.1.0' },
       ]),
     );
+    // main is the working branch: one label for it, not two.
+    expect(page.commits[0].labels.filter((l: { name: string }) => l.name === 'main')).toEqual([
+      { kind: 'working', name: 'main' },
+    ]);
     const next = (await send('GET', `/api/projects/${projectId}/git/commits?cursor=50`)).json();
     expect(next.nextCursor).toBeNull();
     expect(next.commits.length).toBeGreaterThan(0);
