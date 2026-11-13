@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
-import { HttpError } from '../errors.js';
+import type { HttpError } from '../errors.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import type { RepositoryService } from '../repository/service.js';
 import { prepareWorkspace } from '../runs/git.js';
