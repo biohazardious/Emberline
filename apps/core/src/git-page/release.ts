@@ -59,9 +59,9 @@ import { type GitNotify, within, workspaceDirty } from './sync.js';
 export const RELEASE_STOP_TIMEOUT_MS = 5_000;
 /** The last part of a failed check's output that is kept. */
 const CHECK_OUTPUT_KEPT = 2_400;
-/** Core's own worktree for a release's checks: `<workspacesDir>/.worktrees/<slug>/release-<id8>`. */
+/** Core's own worktree for a release's checks: `<workspacesDir>/.worktrees/<slug>/release-<random8>`. */
 const RELEASE_DIR = /^release-[0-9a-f]{8}$/;
-/** The checks' compose project (`emberline-release-<id8>`), apart from every run's and the main preview's. */
+/** The checks' compose project (`emberline-release-<random8>`), apart from every run's and the main preview's. */
 const composeProjectOf = (dir: string) => `emberline-${path.basename(dir)}`;
 
 const NO_CHECKS = 'No approved checks in .emberline/worktree.yml';

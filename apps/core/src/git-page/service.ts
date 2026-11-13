@@ -212,7 +212,7 @@ export class GitPageService {
 
   /**
    * What a crash or a stop during a pull's heal or a release's checks left behind: their worktrees
-   * (`pull-<id8>`, `release-<id8>` under the project's `.worktrees` folder), each with its
+   * (`pull-<id8>`, `release-<random8>` under the project's `.worktrees` folder), each with its
    * worktree.yml teardown and compose project, and (for every project, at startup) their compose
    * projects left in the engine. A heal's or release's that runs now is never touched: each run of
    * one makes its worktree under a name of its own, claimed before the folder exists, so a name

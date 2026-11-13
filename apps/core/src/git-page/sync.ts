@@ -64,7 +64,7 @@ const MAX_HEALS = 2;
 const HEAL_DIR = /^pull-[0-9a-f]{8}$/;
 /**
  * Core's own job worktrees under `<workspacesDir>/.worktrees/<slug>/`: a pull's heal (`pull-<id8>`)
- * and a release's checks (`release-<id8>`).
+ * and a release's checks (`release-<random8>`).
  */
 export const JOB_WORKTREE = /^(?:pull|release)-[0-9a-f]{8}$/;
 /** A job worktree's compose project, apart from every run's and the main workspace's. */

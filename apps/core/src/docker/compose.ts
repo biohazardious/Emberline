@@ -275,7 +275,7 @@ export function isEmberlineComposeProject(name: string): boolean {
 
 /**
  * Core's own job compose projects: a pull's heal (`emberline-pull-<id8>`) and a release's checks
- * (`emberline-release-<id8>`). The GC sweep leaves them alone (no run owns them); the Git page sweeps
+ * (`emberline-release-<random8>`). The GC sweep leaves them alone (no run owns them); the Git page sweeps
  * the ones a crash or a stop left behind.
  */
 export function isCoreJobComposeProject(name: string): boolean {
