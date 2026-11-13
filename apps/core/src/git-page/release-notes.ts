@@ -118,7 +118,13 @@ export const MAX_PROMPT_BYTES = 100_000;
 /** What the commit lines and the ticket lines together may take. */
 const COMMIT_BUDGET_BYTES = 80_000;
 const MAX_TICKET_LINES = 100;
-const oneLine = (text: string, max = 300) => text.replace(/\s+/g, ' ').trim().slice(0, max);
+/** `text` on one line, at most `max` UTF-16 units, never ending on half of a character (an emoji). */
+const oneLine = (text: string, max = 300) => {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line.length <= max) return line;
+  const last = line.charCodeAt(max - 1);
+  return line.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+};
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 
 /** `text` cut to at most `max` UTF-8 bytes, never inside a character. */

@@ -270,6 +270,19 @@ describe('buildReleaseNotesPrompt', () => {
     expect(prompt).not.toContain('�');
   });
 
+  it('a subject or ticket title cut at its length limit never splits an emoji in two', () => {
+    // 1 + 2 × 200 UTF-16 units: the 300-unit cut falls between the halves of the 150th emoji.
+    const long = `a${'😀'.repeat(200)}`;
+    const prompt = buildReleaseNotesPrompt(
+      { baseTag: 'v1.0.0', head: 'h', commits: [{ sha: '1', subject: long, body: '' }], diffstat: '' },
+      [{ key: 'EMB-1', title: long }],
+    );
+    expect(prompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(Buffer.from(prompt, 'utf8').toString('utf8')).not.toContain('�');
+    expect(prompt).toContain(`- a${'😀'.repeat(149)}\n`);
+    expect(prompt).toContain(`- EMB-1: a${'😀'.repeat(149)}\n`);
+  });
+
   it('truncateBytes never cuts a character in two', () => {
     expect(truncateBytes('ab', 5)).toBe('ab');
     expect(truncateBytes('a変b', 3)).toBe('a');
