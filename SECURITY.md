@@ -30,13 +30,13 @@ Each pushed image digest is signed with [cosign](https://docs.sigstore.dev/) key
 You need cosign 2.x or later. A tag can move, so verify it once and then use the digest the output names. To check that an image was built by this repository's CI workflow from a version tag:
 
 ```sh
-IMAGE=ghcr.io/biohazardious/emberline-core:0.8.0
+IMAGE=ghcr.io/biohazardious/emberline-core:0.9.0
 cosign verify "$IMAGE" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github\.com/biohazardious/[Ee]mberline/\.github/workflows/ci\.yml@refs/tags/v'
 ```
 
-For `edge` images built from `main`, use `@refs/heads/main$` in place of `@refs/tags/v`. To check one exact release, use `--certificate-identity https://github.com/biohazardious/Emberline/.github/workflows/ci.yml@refs/tags/v0.8.0` instead of the regular expression. The output names the digest that was verified. Pull that digest (`docker pull ghcr.io/biohazardious/emberline-core@sha256:…`) or pin it in your compose file.
+For `edge` images built from `main`, use `@refs/heads/main$` in place of `@refs/tags/v`. To check one exact release, use `--certificate-identity https://github.com/biohazardious/Emberline/.github/workflows/ci.yml@refs/tags/v0.9.0` instead of the regular expression. The output names the digest that was verified. Pull that digest (`docker pull ghcr.io/biohazardious/emberline-core@sha256:…`) or pin it in your compose file.
 
 To check an SBOM from the release against the image's attestation, download `emberline-core.spdx.json` from the release, then compare the two digests. They must be the same:
 

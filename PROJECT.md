@@ -260,7 +260,7 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`; `pnpm 
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture and design decisions.
 - [`SECURITY.md`](SECURITY.md): threat model, container privileges, secrets, SSH keys and host key checks.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): workflow and conventions.
-- [`CHANGELOG.md`](CHANGELOG.md): release history (current: 0.8.0).
+- [`CHANGELOG.md`](CHANGELOG.md): release history (current: 0.9.0).
 
 ---
 

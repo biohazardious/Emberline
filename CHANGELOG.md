@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
 A Git page for every project. The factory can work on a branch of its own (for example `develop`), so main changes only when you approve; commits pushed elsewhere come in by themselves; the history, each commit's diff and the branches are on one page; and Promote & release merges the working branch into main, tags it and publishes the release on the forge, with notes an agent drafts for you. Read the upgrade notes: auto-pull is on for existing projects too.
 
 ### Added
@@ -715,7 +717,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/biohazardious/emberline/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/biohazardious/emberline/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/biohazardious/emberline/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/biohazardious/emberline/compare/v0.6.1...v0.6.2
