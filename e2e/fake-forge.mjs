@@ -4,8 +4,9 @@
  * Debug routes without auth (the e2e network only): GET /_e2e/head/<owner>/<name> reports the commit of
  * refs/heads/main (`main`), of every branch (`heads`, by name) and of every tag (`tags`, the commit an
  * annotated tag points to) in a repository; POST /_e2e/commit/<owner>/<name> adds a commit on main, as
- * a push from elsewhere (the JSON body may name its `branch`, `subject`, and a top-level `file` with
- * its `content`); GET /_e2e/releases lists the releases created through the API.
+ * a push from elsewhere (the JSON body may name its `branch`, which starts at `from`'s tip when it is
+ * new, `subject`, a top-level `file` with its `content`, and a lightweight `tag` on the new commit);
+ * GET /_e2e/releases lists the releases created through the API.
  * POST /_e2e/hold makes fetches (git-upload-pack) wait, GET /_e2e/held counts the waiting ones and
  * POST /_e2e/release lets them through: a clone that is running while the test looks around.
  */
@@ -153,7 +154,17 @@ createServer((req, res) => {
           env: { ...process.env, ...env },
           ...(input === undefined ? {} : { input }),
         }).trim();
-      const parent = g(['rev-parse', branch]);
+      const plainName = /^[\w.-]+$/;
+      if (ask.from !== undefined && !plainName.test(ask.from)) return json(res, 400, { message: 'bad from' });
+      if (ask.tag !== undefined && !plainName.test(ask.tag)) return json(res, 400, { message: 'bad tag' });
+      let exists = true;
+      try {
+        g(['rev-parse', '--verify', '--quiet', branch]);
+      } catch {
+        exists = false;
+      }
+      // A new branch starts at `from`'s tip.
+      const parent = g(['rev-parse', exists ? branch : `refs/heads/${ask.from ?? 'main'}`]);
       const who = {
         GIT_AUTHOR_NAME: 'outside',
         GIT_AUTHOR_EMAIL: 'o@e',
@@ -170,7 +181,8 @@ createServer((req, res) => {
         tree = g(['mktree'], {}, `${[...kept, `100644 blob ${blob}\t${ask.file}`].join('\n')}\n`);
       }
       const commit = g(['commit-tree', tree, '-p', parent, '-m', subject], who);
-      g(['update-ref', branch, commit, parent]);
+      g(['update-ref', branch, commit, exists ? parent : '']);
+      if (ask.tag !== undefined) g(['update-ref', `refs/tags/${ask.tag}`, commit, '']);
       return json(res, 200, { main: commit });
     }
     if (req.method === 'POST' && url.pathname === '/_e2e/hold') {

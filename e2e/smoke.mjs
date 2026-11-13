@@ -506,6 +506,55 @@ await step('git page: promote and release', async () => {
   assert.equal(job.releaseUrl, `${FORGE}/e2e/smoke/releases/tag/v0.1.0`);
 });
 
+await step("git page: origin's other branches and tags are read, listed and checked out", async () => {
+  const git = `/api/projects/${project.id}/git`;
+  const commitOnForge = async (body) =>
+    (
+      await (
+        await fetch(`${FORGE}/_e2e/commit/e2e/smoke`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      ).json()
+    ).main;
+  // A branch only on origin, and a tag on a new commit of origin's main (both pushed from elsewhere).
+  const branchTipOnForge = await commitOnForge({
+    branch: 'from-elsewhere',
+    from: 'main',
+    subject: 'feat: a branch pushed from elsewhere',
+    file: 'from-elsewhere.txt',
+    content: 'from elsewhere\n',
+  });
+  const tagged = await commitOnForge({ subject: 'docs: tagged elsewhere', tag: 'v0.1.1' });
+  const read = await api('POST', `${git}/fetch`);
+  assert.equal(read.status, 200, read.text);
+  const listed = (await api('GET', `${git}/branches`)).json.find((b) => b.name === 'from-elsewhere');
+  assert.equal(listed?.kind, 'origin', JSON.stringify(listed));
+  assert.equal(listed.tip, branchTipOnForge);
+  const compare = await api('GET', `${git}/compare?base=main&head=from-elsewhere`);
+  assert.equal(compare.status, 200, compare.text);
+  assert.ok(
+    compare.json.files.some((f) => f.path === 'from-elsewhere.txt'),
+    JSON.stringify(compare.json),
+  );
+
+  // origin's main and its tag come in: the strip reads the tag as main's latest.
+  const pulled = await api('POST', `${git}/pull`);
+  assert.equal(pulled.status, 200, pulled.text);
+  assert.ok(['pulled', 'up_to_date'].includes(pulled.json.state), pulled.text);
+  assert.equal(await branchTip('main'), tagged);
+  assert.equal((await api('GET', git)).json.latestTag, 'v0.1.1');
+
+  // Check out: a local branch at origin's tip; the working branch stays.
+  const checkedOut = await api('POST', `${git}/branches`, { name: 'from-elsewhere', from: 'origin' });
+  assert.equal(checkedOut.status, 200, checkedOut.text);
+  const local = (await api('GET', `${git}/branches`)).json.find((b) => b.name === 'from-elsewhere');
+  assert.equal(local?.kind, 'person', JSON.stringify(local));
+  assert.equal(local.tip, branchTipOnForge);
+  assert.equal((await api('GET', git)).json.checkedOut, 'develop');
+});
+
 await step('demo is served sandboxed through a capability URL', async () => {
   const entry = await api('GET', `/api/projects/${project.id}/demo/main/`);
   assert.equal(entry.status, 302);

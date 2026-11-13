@@ -4,6 +4,14 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- **Refresh** and auto-pull read all of origin: every branch, not only main and the working branch, and origin's tags. A tag origin has and the project lacks is created as origin has it, so main's latest tag, the suggested release version and "commits since the last tag" are right again; a local tag is never moved, and the Git page says which ones differ from origin's.
+- The Branches tab lists the branches that are only on origin (such as a backup branch pushed from elsewhere). They can be compared, checked out here with **Check out**, picked as the working branch, and, when fully merged, deleted on origin with the tick.
+- A pull onto a history origin rewrote while keeping its old base (filter-repo, a rebase) no longer tries a merge that conflicts in every file: when nearly all of the branch's commits are on origin under new hashes, the pull stops as rewritten and says how many, and **Match origin…** takes origin's history and keeps the old tip as a backup.
+- A pull that stops on a conflict offers **Match origin…** next to **Resolve with a ticket** when the branch's history has diverged from origin's, and Match origin now asks for confirmation first.
+- A pull conflict names at most ten files in its message and banner, then how many more; **Show all N files** lists the rest.
+
 ## [0.9.0] - 2026-11-13
 
 A Git page for every project. The factory can work on a branch of its own (for example `develop`), so main changes only when you approve; commits pushed elsewhere come in by themselves; the history, each commit's diff and the branches are on one page; and Promote & release merges the working branch into main, tags it and publishes the release on the forge, with notes an agent drafts for you. Read the upgrade notes: auto-pull is on for existing projects too.
