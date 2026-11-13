@@ -847,3 +847,89 @@ describe('reading all of origin', () => {
     expect(has(projectPath, 'refs/remotes/origin/gone-soon')).toBe('');
   });
 });
+
+describe('a pull that cannot merge, and Match origin', () => {
+  /** On `dir` (checked out), the same change as `file`'s commit here: the same patch under a new hash. */
+  const samePatch = (dir: string, file: string) =>
+    commit(dir, file, `${file}\n`, `feat: ${file} (rewritten)`);
+
+  it("origin rewritten with the old history kept (the TrueNAS case): classified rewritten, nothing merged, and Match origin takes origin's", async () => {
+    // origin keeps the old base; its history after it is a rewrite of the commits here, plus more.
+    const elsewhere = cloneOf(bare);
+    for (let i = 1; i <= 9; i++) commit(projectPath, `f${i}.txt`);
+    git(projectPath, 'switch', '-q', '-c', 'side');
+    commit(projectPath, 's.txt');
+    git(projectPath, 'switch', '-q', 'main');
+    git(projectPath, 'merge', '-q', '--no-ff', '-m', 'Merge side into main', 'side');
+    git(projectPath, 'branch', '-D', 'side');
+    // One commit of the project's own that origin's rewrite does not have, which conflicts with origin.
+    commit(projectPath, 'own.txt', 'mine\n', 'feat: own');
+    const oldTip = head();
+    for (let i = 1; i <= 9; i++) samePatch(elsewhere, `f${i}.txt`);
+    samePatch(elsewhere, 's.txt');
+    commit(elsewhere, 'own.txt', 'theirs\n', 'feat: own, rewritten differently');
+    const originTip = commit(elsewhere, 'after.txt', 'after\n', 'feat: after the rewrite');
+    git(elsewhere, 'push', '-q', '-f', 'origin', 'main');
+
+    const sync = await pullNow();
+    expect(sync).toMatchObject({ state: 'rewritten', branch: 'main', files: [] });
+    expect(sync.message).toContain(
+      "10 of your 11 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.",
+    );
+    // No merge was tried.
+    expect(head()).toBe(oldTip);
+    expect(has(projectPath, 'MERGE_HEAD')).toBe('');
+    expect(worktrees()).toHaveLength(1);
+    expect((await send('GET', gitUrl())).json()).toMatchObject({ main: 'rewritten', working: 'rewritten' });
+
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(matched.statusCode).toBe(200);
+    expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
+    expect(head()).toBe(originTip);
+    const backups = await listBackups(projectPath);
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^main-\d{8}-\d{6}$/);
+    expect(git(projectPath, 'rev-parse', `refs/emberline/backup/${backups[0]}`)).toBe(oldTip);
+  });
+
+  it('commits mostly on origin under new hashes, but not nearly all, are a conflict that says so', async () => {
+    const elsewhere = cloneOf(bare);
+    commit(projectPath, 'f1.txt');
+    commit(projectPath, 'f2.txt');
+    commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    samePatch(elsewhere, 'f1.txt');
+    samePatch(elsewhere, 'f2.txt');
+    commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    await pullNow();
+    const sync = await settled();
+    expect(sync).toMatchObject({ state: 'conflict', branch: 'main', files: ['a.txt'] });
+    expect(sync.message).toContain(
+      "2 of your 3 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.",
+    );
+  });
+
+  it('a pull that stops on a conflict with diverged history can match origin; nothing to gain is still refused', async () => {
+    const elsewhere = cloneOf(bare);
+    const theirs = commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    const mine = commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    await pullNow();
+    const sync = await settled();
+    expect(sync.state).toBe('conflict');
+    expect(sync.message).toContain(
+      "Match origin takes origin's history instead and keeps yours as a backup.",
+    );
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(matched.statusCode).toBe(200);
+    expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
+    expect(head()).toBe(theirs);
+    const backups = await listBackups(projectPath);
+    expect(git(projectPath, 'rev-parse', `refs/emberline/backup/${backups[0]}`)).toBe(mine);
+    expect(readRepositorySettings(t.db, projectId).syncStop).toBeNull();
+    // Re-read: the same as origin now, so there is nothing to match.
+    const again = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('nothing_to_match');
+  });
+});

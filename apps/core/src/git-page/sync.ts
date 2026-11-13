@@ -49,6 +49,8 @@ import {
   gitMessage,
   liveRunsOf,
   localTip,
+  type PatchesOnOrigin,
+  patchesOnOrigin,
   refTip,
   WORKSPACE_DIRTY,
 } from './branches.js';
@@ -211,6 +213,8 @@ interface HealRequest {
   source: string;
   label: string;
   conflicts: string[];
+  /** Said with the conflict if the heal cannot resolve it (Match origin, for origin's branch). */
+  note?: string;
 }
 
 /** `quiet`: an automatic pull that keeps out of a running release's way, and records nothing. */
@@ -570,7 +574,7 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
         message: `${main} and origin's ${main} both have commits the other lacks, so nothing was pulled. Emberline never merges into ${main} by itself: bring origin's ${main} in from a terminal, or use Match origin to take origin's.`,
       });
     } else if (state === 'rewritten') {
-      return stop(rewrittenOutcome(main, `origin/${main}`, remote.main));
+      return stop(await rewrittenOutcome(ws.path, main, local, remote.main));
     }
   }
 
@@ -584,7 +588,7 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
       const merged = await mergeInto(ctx, remote.working, `origin/${working}`);
       if (merged) return merged;
     } else if (state === 'rewritten') {
-      return stop(rewrittenOutcome(working, `origin/${working}`, remote.working));
+      return stop(await rewrittenOutcome(ws.path, working, local, remote.working));
     }
   }
 
@@ -619,13 +623,47 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
   });
 }
 
-const rewrittenOutcome = (branch: string, source: string, sourceTip: string): Outcome => ({
-  state: 'rewritten',
-  branch,
-  source,
-  sourceTip,
-  message: `origin's ${branch} no longer shares history with ${branch} here (it was rewritten and force-pushed), so nothing was pulled into it. Match origin takes origin's history and keeps the old tip under a backup ref.`,
-});
+/** Says that `p` of the branch's commits are on origin under new hashes, and what Match origin does then. */
+const rewriteNote = (p: PatchesOnOrigin) =>
+  `${p.already} of your ${p.total} ${p.total === 1 ? 'commit is' : 'commits are'} already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.`;
+
+/** More than half of the branch's own commits are on origin under new hashes: worth saying in a conflict. */
+const mostlyOnOrigin = (p: PatchesOnOrigin | null): p is PatchesOnOrigin =>
+  p !== null && p.already > 0 && p.already * 2 > p.total;
+
+/**
+ * origin's `branch` was rewritten: it shares no history with the branch here, or it has nearly all
+ * of the branch's own commits under new hashes (classify's rule). Nothing is merged either way.
+ */
+async function rewrittenOutcome(
+  mainPath: string,
+  branch: string,
+  local: string | null,
+  sourceTip: string,
+): Promise<Outcome> {
+  const shared = local !== null && (await hasMergeBase(mainPath, local, sourceTip));
+  const patches = shared ? await patchesOnOrigin(mainPath, local, sourceTip) : null;
+  return {
+    state: 'rewritten',
+    branch,
+    source: `origin/${branch}`,
+    sourceTip,
+    message: patches
+      ? `Nothing was pulled into ${branch}: ${rewriteNote(patches)}`
+      : `origin's ${branch} no longer shares history with ${branch} here (it was rewritten and force-pushed), so nothing was pulled into it. Match origin takes origin's history and keeps the old tip under a backup ref.`,
+  };
+}
+
+/**
+ * What a conflict merging origin's working branch adds: Match origin is a way out too, and when most
+ * of the branch's commits are on origin under new hashes, that origin was probably rewritten.
+ */
+async function matchOriginNote(mainPath: string, ours: string, theirs: string): Promise<string> {
+  const patches = await patchesOnOrigin(mainPath, ours, theirs);
+  return mostlyOnOrigin(patches)
+    ? rewriteNote(patches)
+    : "Match origin takes origin's history instead and keeps yours as a backup.";
+}
 
 const dirtyOutcome = (working: string, what: string, why?: string): Outcome => ({
   state: 'workspace_dirty',
@@ -718,11 +756,14 @@ async function mergeInto(ctx: PullContext, source: string, label: string): Promi
   const before = await localTip(ws.path, working);
   if (!before)
     return { outcome: { state: 'error', branch: working, message: `${working} has no commits yet.` } };
+  // Merging origin's own branch in: Match origin is the other way out of a conflict.
+  const fromOrigin = label === `origin/${working}`;
   const conflicts = await mergeConflicts(ws.path, before, source);
   if (conflicts.length > 0) {
+    const note = fromOrigin ? await matchOriginNote(ws.path, before, source) : undefined;
     if (effectiveFactorySettings(deps.db, projectId).autoResolveAdditiveConflicts)
-      return { heal: { before, source, label, conflicts } };
-    return { outcome: conflictOutcome(working, label, source, conflicts) };
+      return { heal: { before, source, label, conflicts, ...(note ? { note } : {}) } };
+    return { outcome: conflictOutcome(working, label, source, conflicts, note) };
   }
   const inMain = { cwd: ws.path };
   try {
@@ -754,7 +795,10 @@ async function mergeInto(ctx: PullContext, source: string, label: string): Promi
     // Only a merge that started is aborted; the tree was clean, so that puts it back exactly.
     if ((await refTip(ws.path, 'MERGE_HEAD')) !== null)
       await execGitFile(['merge', '--abort'], inMain).catch(unlessRunnerUnavailable(undefined));
-    if (files.length > 0) return { outcome: conflictOutcome(working, label, source, files) };
+    if (files.length > 0) {
+      const note = fromOrigin ? await matchOriginNote(ws.path, before, source) : undefined;
+      return { outcome: conflictOutcome(working, label, source, files, note) };
+    }
     if (WORKSPACE_DIRTY.test(why)) return { outcome: dirtyOutcome(working, label, why) };
     return {
       outcome: {
@@ -824,7 +868,8 @@ async function healPull(
     });
     if (!healed.healed) {
       const files = healed.conflicts.length > 0 ? healed.conflicts : req.conflicts;
-      return { outcome: conflictOutcome(working, req.label, req.source, files, healed.message) };
+      const detail = [healed.message, req.note].filter(Boolean).join(' ');
+      return { outcome: conflictOutcome(working, req.label, req.source, files, detail) };
     }
     return { before: req.before, commit: healed.commitOid };
   } finally {

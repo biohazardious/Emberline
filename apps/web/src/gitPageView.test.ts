@@ -175,26 +175,56 @@ describe('Git page', () => {
   });
 
   it.each([
-    ['conflict', { files: ['a.ts'] }, 'Pull stopped: a.ts conflict', ['Resolve with a ticket']],
-    ['rewritten', {}, "Origin's history was rewritten. Match origin keeps", ['Match origin']],
-    ['diverged', { message: 'Both moved.' }, 'Both moved.', ['Match origin']],
-    ['workspace_dirty', {}, 'Pull waits: the main workspace has uncommitted changes', []],
-    ['main_unpushed', {}, 'push or promote first', []],
-    ['error', { message: 'Origin said no' }, 'Origin said no', []],
-    ['idle', { message: 'Checking the merge' }, 'Checking the merge', []],
-  ] as const)('shows the %s banner', async (state, over, text, buttons) => {
-    serve(status({ sync: sync({ state, ...(over as Partial<GitSync>) }) }));
+    ['conflict', { files: ['a.ts'] }, {}, 'Pull stopped: a.ts conflict', ['Resolve with a ticket']],
+    [
+      'conflict',
+      { files: ['a.ts'], branch: 'develop' },
+      { working: 'diverged' },
+      'Pull stopped: a.ts conflict',
+      ['Resolve with a ticket', 'Match origin…'],
+    ],
+    ['rewritten', {}, {}, "Origin's history was rewritten. Match origin keeps", ['Match origin…']],
+    ['diverged', { message: 'Both moved.' }, {}, 'Both moved.', ['Match origin…']],
+    ['workspace_dirty', {}, {}, 'Pull waits: the main workspace has uncommitted changes', []],
+    ['main_unpushed', {}, {}, 'push or promote first', []],
+    ['error', { message: 'Origin said no' }, {}, 'Origin said no', []],
+    ['idle', { message: 'Checking the merge' }, {}, 'Checking the merge', []],
+  ] as const)('shows the %s banner (%j, %j)', async (state, over, page, text, buttons) => {
+    serve(
+      status({ ...(page as Partial<GitPageStatus>), sync: sync({ state, ...(over as Partial<GitSync>) }) }),
+    );
     const view = await open();
     await waitFor(() => expect(view.container.textContent).toContain(text));
-    for (const b of ['Match origin', 'Resolve with a ticket'])
+    for (const b of ['Match origin…', 'Resolve with a ticket'])
       expect(queryButton(b) !== null).toBe((buttons as readonly string[]).includes(b));
   });
 
-  it('Match origin names the branch; Resolve with a ticket links to the ticket', async () => {
+  it('Match origin… asks first, names the branch and the backup; Resolve with a ticket links to the ticket', async () => {
     serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }));
     await open();
-    await waitFor(() => getButton('Match origin'));
-    await click(getButton('Match origin'));
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('refs/emberline/backup/develop-');
+    // Cancel sends nothing.
+    await click(getButton('Cancel', dialog));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(calls).toEqual([]);
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => expect(calls).toContain('match {"branch":"develop"}'));
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    await cleanup();
+
+    // From a conflict whose branch has diverged from origin, too.
+    calls.length = 0;
+    serve(
+      status({ working: 'diverged', sync: sync({ state: 'conflict', branch: 'develop', files: ['a.ts'] }) }),
+    );
+    await open();
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
     await waitFor(() => expect(calls).toContain('match {"branch":"develop"}'));
     await cleanup();
 

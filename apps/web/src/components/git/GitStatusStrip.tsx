@@ -1,9 +1,10 @@
 import type { GitBranch, GitPageStatus } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { GitBranch as BranchIcon, RefreshCw, Rocket } from 'lucide-react';
-import { useState } from 'react';
+import { GitBranch as BranchIcon, RefreshCw, Rocket, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../../api';
+import { trapTab } from '../../focusTrap';
 import { remoteStateText, splitBranches, syncText, tagsDifferText } from '../../gitPage';
 import { timeAgo } from '../../time';
 
@@ -39,6 +40,76 @@ export function GitProblemBanner({ problem }: { problem: Problem }) {
   );
 }
 
+/**
+ * Match origin's confirmation: what happens to the branch, and where its current tip is kept. Focus
+ * starts on Cancel; Escape closes it.
+ */
+function MatchOriginDialog({
+  branch,
+  onConfirm,
+  onClose,
+}: {
+  branch: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // Mount-only: a parent re-render must not move the focus. `onClose` is read through a ref.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeRef.current();
+      } else trapTab(dialogRef.current, e);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus();
+    };
+  }, []);
+  return (
+    <div className="drawer-backdrop" onClick={onClose}>
+      <aside
+        ref={dialogRef}
+        className="drawer request-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="git-match-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="drawer-head">
+          <h2 id="git-match-title" className="issue-dialog-title">
+            Match {branch} with origin?
+          </h2>
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <X className="icon" aria-hidden />
+          </button>
+        </header>
+        <p className="small">
+          <span className="mono">{branch}</span> takes origin&apos;s history: it is reset to origin&apos;s{' '}
+          <span className="mono">{branch}</span>. Its current tip is kept first as{' '}
+          <span className="mono">refs/emberline/backup/{branch}-&lt;date&gt;-&lt;time&gt;</span> and listed
+          under Backups on the Branches tab, so no commit is lost.
+        </p>
+        <div className="request-dialog-actions">
+          <button type="button" className="btn btn-primary" onClick={onConfirm}>
+            Match origin
+          </button>
+          <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 /** The strip at the top of the Git page: where the factory works, how main and origin stand, and the actions. */
 export function GitStatusStrip({
   projectId,
@@ -54,6 +125,7 @@ export function GitStatusStrip({
   const [busy, setBusy] = useState<Action | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [ticketId, setTicketId] = useState<string | null>(null);
+  const [confirmMatch, setConfirmMatch] = useState(false);
 
   const branches = useQuery({
     queryKey: ['git', projectId, 'branches'],
@@ -91,6 +163,18 @@ export function GitStatusStrip({
   // A status read from a core before this field (a page left open across an upgrade) has none.
   const tagsNote = tagsDifferText(status.tagsDifferFromOrigin ?? []);
   const matchBranch = status.sync.branch ?? status.workingBranch;
+  // How that branch stands against origin's as last read: Match origin helps only when its history
+  // no longer fits (a conflict merging origin's branch in is the case besides the two stops).
+  const matchState =
+    matchBranch === status.workingBranch
+      ? status.working
+      : matchBranch === status.defaultBranch
+        ? status.main
+        : 'unknown';
+  const offerMatch =
+    status.sync.state === 'rewritten' ||
+    status.sync.state === 'diverged' ||
+    (status.sync.state === 'conflict' && (matchState === 'diverged' || matchState === 'rewritten'));
   const anyBusy = busy !== null;
 
   return (
@@ -215,16 +299,14 @@ export function GitStatusStrip({
         >
           <span>{banner}</span>
           <div className="git-banner-actions">
-            {(status.sync.state === 'rewritten' || status.sync.state === 'diverged') && (
+            {offerMatch && (
               <button
                 type="button"
                 className="btn btn-sm"
                 disabled={anyBusy}
-                onClick={() =>
-                  void run('match', () => api(`${base}/match-origin`, 'POST', { branch: matchBranch }))
-                }
+                onClick={() => setConfirmMatch(true)}
               >
-                Match origin
+                Match origin…
               </button>
             )}
             {status.sync.state === 'conflict' && ticketId === null && (
@@ -250,6 +332,17 @@ export function GitStatusStrip({
       )}
 
       {problem && <GitProblemBanner problem={problem} />}
+
+      {confirmMatch && (
+        <MatchOriginDialog
+          branch={matchBranch}
+          onClose={() => setConfirmMatch(false)}
+          onConfirm={() => {
+            setConfirmMatch(false);
+            void run('match', () => api(`${base}/match-origin`, 'POST', { branch: matchBranch }));
+          }}
+        />
+      )}
     </section>
   );
 }

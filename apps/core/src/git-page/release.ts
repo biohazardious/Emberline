@@ -218,7 +218,7 @@ const PULL_FIRST: Partial<Record<string, (b: string) => string>> = {
   behind: (b) => `origin's ${b} has commits ${b} here does not have yet; Pull first.`,
   diverged: (b) => `${b} and origin's ${b} both have commits the other lacks; Pull first.`,
   rewritten: (b) =>
-    `origin's ${b} no longer shares history with ${b} here (it was rewritten); use Match origin on the Git page first.`,
+    `origin's ${b} was rewritten, so its history no longer fits ${b} here; use Match origin on the Git page first.`,
 };
 
 /** A job's hold on factory merges into main (holdMergesInto). */

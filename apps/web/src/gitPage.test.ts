@@ -55,6 +55,11 @@ describe('syncText', () => {
       sync({ state: 'rewritten' }),
       "Origin's history was rewritten. Match origin keeps your old commits under a backup.",
     ],
+    // Core says how many of the branch's commits origin has under new hashes.
+    [
+      sync({ state: 'rewritten', message: 'Nothing was pulled into main: 36 of your 37 commits…' }),
+      'Nothing was pulled into main: 36 of your 37 commits…',
+    ],
     [sync({ state: 'error', message: 'Origin refused' }), 'Origin refused'],
     [sync({ state: 'idle', message: 'Checking the merge' }), 'Checking the merge'],
     [sync({ state: 'idle' }), null],

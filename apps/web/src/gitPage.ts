@@ -50,7 +50,10 @@ export function syncText(sync: GitSync, pulledCount?: number): string | null {
       // Core says what to do: push main, or Retry / Undo promote after a release that stopped.
       return sync.message ?? 'Main has commits origin lacks; push or promote first';
     case 'rewritten':
-      return "Origin's history was rewritten. Match origin keeps your old commits under a backup.";
+      // Core says why it reads as rewritten (no shared history, or the commits under new hashes).
+      return (
+        sync.message ?? "Origin's history was rewritten. Match origin keeps your old commits under a backup."
+      );
     case 'diverged':
       return sync.message ?? remoteStateText('diverged');
     case 'error':

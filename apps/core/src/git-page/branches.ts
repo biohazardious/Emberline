@@ -152,9 +152,72 @@ async function counts(mainPath: string, a: string, b: string): Promise<[number, 
   return [ahead ?? 0, behind ?? 0];
 }
 
+/** How many of a branch's own commits (not merges) origin has as the same change under a new hash. */
+export interface PatchesOnOrigin {
+  /** The branch's commits that origin's branch lacks, merges left out. */
+  total: number;
+  /** Of those, the ones origin's branch has as the same patch (`git cherry`'s "-"). */
+  already: number;
+}
+
+/**
+ * Beyond this many commits (merges left out) on the two sides together, the patches are not
+ * compared: each one costs a diff.
+ */
+const PATCH_COMPARE_MAX = 2000;
+/** The comparisons already made, by the two commits: the answer never changes for a pair. */
+const patchCache = new Map<string, PatchesOnOrigin | null>();
+const PATCH_CACHE_SIZE = 200;
+
+/**
+ * Of `local`'s own commits (those `remote` lacks, merges left out), how many `remote` has as the same
+ * patch under another hash, as `git cherry` tells; null when there are too many to compare.
+ */
+export async function patchesOnOrigin(
+  mainPath: string,
+  local: string,
+  remote: string,
+): Promise<PatchesOnOrigin | null> {
+  const key = `${local}:${remote}`;
+  if (patchCache.has(key)) return patchCache.get(key)!;
+  const sides = Number(
+    (
+      await realGit(['rev-list', '--count', '--no-merges', `${local}...${remote}`, '--'], mainPath)
+    ).stdout.trim(),
+  );
+  let found: PatchesOnOrigin | null = null;
+  if (Number.isSafeInteger(sides) && sides <= PATCH_COMPARE_MAX) {
+    const out = (
+      await realGit(
+        ['rev-list', '--cherry-mark', '--right-only', '--no-merges', `${remote}...${local}`, '--'],
+        mainPath,
+      )
+    ).stdout;
+    const marks = out.split('\n').map((line) => line.charAt(0));
+    found = {
+      total: marks.filter((m) => m === '=' || m === '+').length,
+      already: marks.filter((m) => m === '=').length,
+    };
+  }
+  if (patchCache.size >= PATCH_CACHE_SIZE) patchCache.delete(patchCache.keys().next().value!);
+  patchCache.set(key, found);
+  return found;
+}
+
+/**
+ * A rewrite of origin's history (filter-repo, a rebase) that kept the old base: at least 90% of the
+ * branch's own commits are on origin as the same patch. A rewrite reproduces nearly every patch, but
+ * filter-repo can change a few (a path it removed, as on the install that showed this: 36 of 37), so
+ * all of them is too strict; 90% leaves at most one in ten that only the backup keeps after Match
+ * origin, and the message names how many. With fewer, the branch has work of its own and is merged.
+ */
+export const looksRewritten = (p: PatchesOnOrigin | null): boolean =>
+  p !== null && p.total > 0 && p.already * 10 >= p.total * 9;
+
 /**
  * How a local branch stands against origin's: no remote branch is `unpublished`; with no common
- * history at all, origin's was `rewritten` (a filter-repo and force-push), else `diverged`.
+ * history at all, or with nearly all of its own commits on origin under new hashes
+ * ({@link looksRewritten}), origin's was `rewritten` (a filter-repo and force-push), else `diverged`.
  */
 export async function classify(
   mainPath: string,
@@ -171,7 +234,8 @@ export async function classify(
     (r) => r.stdout.trim(),
     absentWhen('', 1),
   );
-  return base ? 'diverged' : 'rewritten';
+  if (!base) return 'rewritten';
+  return looksRewritten(await patchesOnOrigin(mainPath, local, remote)) ? 'rewritten' : 'diverged';
 }
 
 const kindOf = (name: string, working: string, main: string): GitBranchKind =>
