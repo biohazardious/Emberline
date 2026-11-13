@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projectWorktreeConfig } from '../db/schema.js';
 import { HttpError } from '../errors.js';
-import { syncWorktreeToMainWorkspace, withMainWorkspaceLock } from '../factory/merge.js';
+import { MergeWaitCancelled, syncWorktreeToMainWorkspace, withMainWorkspaceLock } from '../factory/merge.js';
 import type { buildWorkspaceDemo } from '../factory/demo.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
@@ -750,6 +750,86 @@ describe('release', () => {
     expect(sync.state).toBe('main_unpushed');
     expect(sync.message).toContain('Retry or Undo promote on the Release tab');
     expect(sync.message).not.toContain('Push main');
+  });
+
+  it('working = default: a factory merge during the release waits for it, then lands on the release', async () => {
+    approveChecks();
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    const worktree = path.join(t.dir, 'run-wt');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/r1', worktree, 'main');
+    writeFileSync(path.join(worktree, 'run.txt'), 'run\n');
+    let green!: () => void;
+    const checking = new Promise<void>((r) => (green = r));
+    const jobs = jobsWith({
+      build: async (p) => {
+        checked.push(p.workspacePath);
+        await checking;
+        return okBuild();
+      },
+    });
+    await jobs.start(projectId, publish(head));
+    await waitFor(() => storedJob().steps[1]!.status === 'running');
+    let landed = false;
+    const merging = syncWorktreeToMainWorkspace({
+      worktreePath: worktree,
+      mainWorkspacePath: projectPath,
+      ticketKey: 'EMB-9',
+      runId: 'r1',
+    }).then((r) => {
+      landed = true;
+      return r;
+    });
+    await sleep(300);
+    // It waits: main is what the checks are running on.
+    expect(landed).toBe(false);
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(head);
+    green();
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('done');
+    expect(checked).toHaveLength(1);
+    expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(head);
+    const merged = await merging;
+    expect(merged.ok).toBe(true);
+    // The merge sits on main as the release left it.
+    expect(git(projectPath, 'rev-parse', 'main^1')).toBe(head);
+    expect(existsSync(path.join(projectPath, 'run.txt'))).toBe(true);
+  });
+
+  it('working = default: core stopping lets a merge that waits for the release go, unmerged', async () => {
+    approveChecks();
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    const worktree = path.join(t.dir, 'run-wt');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/r1', worktree, 'main');
+    writeFileSync(path.join(worktree, 'run.txt'), 'run\n');
+    let green!: () => void;
+    const checking = new Promise<void>((r) => (green = r));
+    const jobs = jobsWith({
+      build: async () => {
+        await checking;
+        return okBuild();
+      },
+    });
+    await jobs.start(projectId, publish(head));
+    await waitFor(() => storedJob().steps[1]!.status === 'running');
+    const merging = syncWorktreeToMainWorkspace({
+      worktreePath: worktree,
+      mainWorkspacePath: projectPath,
+      ticketKey: 'EMB-9',
+      runId: 'r1',
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await jobs.stop(50);
+    const error = await merging;
+    expect(error).toBeInstanceOf(MergeWaitCancelled);
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(head);
+    expect(git(worktree, 'status', '--porcelain')).toBe('?? run.txt');
+    green();
+    await jobs.idle();
   });
 
   it('is refused while a run is merging into the working branch', async () => {

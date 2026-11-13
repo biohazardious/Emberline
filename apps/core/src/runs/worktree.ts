@@ -6,7 +6,7 @@ import type { Db } from '../db/index.js';
 import { runs, tickets } from '../db/schema.js';
 import { HttpError } from '../errors.js';
 import { type HealFailure, type HealGate, healConflicts } from '../factory/conflict-heal.js';
-import { mainWorkspaceBranch, type SyncWorktreeResult } from '../factory/merge.js';
+import { mainWorkspaceBranch, MergeWaitCancelled, type SyncWorktreeResult } from '../factory/merge.js';
 import { syncWorktreeToMainWorkspace } from '../factory/service.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { copyIntoWorktree, type CopyOutcome, notIgnoredPaths } from '../worktree-config/lifecycle.js';
@@ -224,7 +224,9 @@ export async function mergeRunBranch(params: {
         if (stale()) throw new TurnMoved();
       },
     }).catch((error: unknown): RunMerge | null => {
-      if (error instanceof TurnMoved) return null;
+      // Core stopped while the merge waited for a release: nothing happened, and nothing is noted
+      // (no hold for a person), as if core had stopped before the merge.
+      if (error instanceof TurnMoved || error instanceof MergeWaitCancelled) return null;
       return {
         ok: false,
         summary: (error as Error).message,

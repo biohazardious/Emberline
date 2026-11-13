@@ -334,6 +334,69 @@ export function runsMergingInto(mainWorkspacePath: string): string[] {
   return [...(mergesInFlight.get(path.resolve(mainWorkspacePath))?.keys() ?? [])];
 }
 
+/** How a release's hold on merges ended: the release finished, or core is stopping. */
+type HoldEnd = 'ended' | 'cancelled';
+interface MergeHold {
+  done: Promise<HoldEnd>;
+  settle: (how: HoldEnd) => void;
+}
+
+/** The holds a running release keeps on merges into each main workspace, by path. */
+const mergeHolds = new Map<string, Set<MergeHold>>();
+
+/**
+ * Thrown to a merge that was waiting for a release when core stops: nothing was merged, and the
+ * run's branch, worktree and index are as they were.
+ */
+export class MergeWaitCancelled extends HttpError {
+  constructor() {
+    super(
+      503,
+      'stopping',
+      'Emberline is stopping, so this merge (which was waiting for a release to finish) was not made. Merge again once Emberline is back.',
+    );
+  }
+}
+
+/**
+ * Makes every merge into this main workspace wait, before it takes the lock, until `end` is called:
+ * a release on main itself (the working branch is the default branch) holds them, so a merge does
+ * not move main under its checks. `cancel` (core stopping) makes the waiting merges give up at once,
+ * and any later one too, until `end`.
+ */
+export function holdMergesInto(mainWorkspacePath: string): { end(): void; cancel(): void } {
+  const key = path.resolve(mainWorkspacePath);
+  let settle!: (how: HoldEnd) => void;
+  const done = new Promise<HoldEnd>((resolve) => (settle = resolve));
+  const hold: MergeHold = { done, settle };
+  const holds = mergeHolds.get(key) ?? new Set<MergeHold>();
+  mergeHolds.set(key, holds);
+  holds.add(hold);
+  return {
+    end: () => {
+      holds.delete(hold);
+      if (holds.size === 0 && mergeHolds.get(key) === holds) mergeHolds.delete(key);
+      settle('ended');
+    },
+    cancel: () => settle('cancelled'),
+  };
+}
+
+/**
+ * While a release holds merges into this main workspace: the wait for it (which throws
+ * MergeWaitCancelled when core stops). Null when none does, so a merge then takes its place in the
+ * lock's queue at once, in the order it was asked.
+ */
+function mergeHoldsOf(mainWorkspacePath: string): Promise<void> | null {
+  const key = path.resolve(mainWorkspacePath);
+  if (!mergeHolds.get(key)?.size) return null;
+  return (async () => {
+    for (let holds = mergeHolds.get(key); holds && holds.size > 0; holds = mergeHolds.get(key)) {
+      for (const hold of [...holds]) if ((await hold.done) === 'cancelled') throw new MergeWaitCancelled();
+    }
+  })();
+}
+
 /** Counts a run's merge as in flight; the function returned ends it. */
 function mergeStarted(mainWorkspacePath: string, runId: string): () => void {
   const key = path.resolve(mainWorkspacePath);
@@ -424,9 +487,13 @@ export async function runProducedChanges(worktreePath: string, mainWorkspacePath
 export async function syncWorktreeToMainWorkspace(
   params: Parameters<typeof mergeRunIntoMainWorkspace>[0],
 ): Promise<SyncWorktreeResult> {
-  // Counted while it waits for the lock too: a release does not start meanwhile (runsMergingInto).
+  // Counted while it waits for the lock (or a release) too: a release does not start meanwhile
+  // (runsMergingInto).
   const ended = mergeStarted(params.mainWorkspacePath, params.runId);
   try {
+    // A release running on main itself: the merge lands once it has finished, never under its checks.
+    const held = mergeHoldsOf(params.mainWorkspacePath);
+    if (held) await held;
     return await mergeRunIntoMainWorkspace(params);
   } finally {
     ended();

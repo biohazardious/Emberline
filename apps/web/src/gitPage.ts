@@ -166,6 +166,16 @@ export function releasePlan(
   return names.map((name) => ({ name, text: releaseStepText(name, status, version) }));
 }
 
+/**
+ * With main as the working branch the release runs on main itself, and core holds the factory's
+ * merges into it back until the release ends: said so on the Release tab. Null otherwise.
+ */
+export function factoryMergesWaitText(status: GitPageStatus, working = status.workingBranch): string | null {
+  return working === status.defaultBranch
+    ? `Factory merges into ${status.defaultBranch} wait while the release runs.`
+    : null;
+}
+
 /** The summary line: what the release carries. */
 export function releaseSummaryText(status: GitPageStatus): string {
   const { commits, tickets } = status.releaseSummary;

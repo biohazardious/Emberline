@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiRequestError } from '../../api';
 import {
   canUndoPromote,
+  factoryMergesWaitText,
   releaseBlockedText,
   releaseChecksText,
   releasePlan,
@@ -216,6 +217,9 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
         </span>
       </h3>
       <JobSteps job={job} status={status} />
+      {job.state === 'running' && factoryMergesWaitText(status, job.working) && (
+        <p className="muted small">{factoryMergesWaitText(status, job.working)}</p>
+      )}
       {job.error && (
         <div className="banner banner-error" role="alert">
           {job.error}
@@ -361,6 +365,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
                 <li key={l.name}>{l.text}</li>
               ))}
             </ol>
+            {factoryMergesWaitText(status) && <p className="muted small">{factoryMergesWaitText(status)}</p>}
           </section>
 
           {blocked && <p className="muted small">{blocked}</p>}

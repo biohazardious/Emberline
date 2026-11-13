@@ -114,6 +114,7 @@ describe('the release tab', () => {
       'Create the release on github.com',
       'Bring develop up to date with main',
     ]);
+    expect(container.textContent).not.toContain('Factory merges into main wait');
   });
 
   it('leaves out the promote steps when the working branch is main, and says so', async () => {
@@ -135,6 +136,7 @@ describe('the release tab', () => {
       'No forge account for github.com: only the tag is pushed',
     ]);
     expect(container.textContent).not.toContain('Promote only');
+    expect(container.textContent).toContain('Factory merges into main wait while the release runs.');
   });
 
   it('plans a promote only without the tag, the notes and the release, and sends that mode', async () => {
@@ -432,5 +434,13 @@ describe('the release tab', () => {
     const running = await show(status({ releaseJob: job({ state: 'running' }, { promote: 'running' }) }));
     expect(running.container.textContent).toContain('Merge develop into main');
     expect(running.container.querySelectorAll('button')).toHaveLength(0);
+    expect(running.container.textContent).not.toContain('Factory merges into main wait');
+    const onMain = await show(
+      status({
+        workingBranch: 'main',
+        releaseJob: job({ state: 'running', working: 'main' }, { promote: 'skipped', checks: 'running' }),
+      }),
+    );
+    expect(onMain.container.textContent).toContain('Factory merges into main wait while the release runs.');
   });
 });

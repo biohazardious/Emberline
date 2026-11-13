@@ -34,7 +34,7 @@ import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { commitIdentityFor, gitIdentityArgs } from '../factory/commit-identity.js';
 import { writeResolved } from '../factory/conflict-heal.js';
 import { buildWorkspaceDemo } from '../factory/demo.js';
-import { runsMergingInto, withMainWorkspaceLock } from '../factory/merge.js';
+import { holdMergesInto, runsMergingInto, withMainWorkspaceLock } from '../factory/merge.js';
 import { parseForgeRemote, type ForgeService } from '../forge/service.js';
 import { redactGitText } from '../git-gateway/gateway.js';
 import { execGitFile } from '../git-exec.js';
@@ -226,6 +226,8 @@ export class ReleaseJobs {
   private readonly running = new Map<string, Promise<void>>();
   /** A start, Retry or Undo between its first check and its job: a second one is refused. */
   private readonly busy = new Set<string>();
+  /** The jobs' holds on merges into main (a release with main as its working branch). */
+  private readonly holds = new Set<ReturnType<typeof holdMergesInto>>();
   private stopping = false;
 
   constructor(
@@ -268,6 +270,8 @@ export class ReleaseJobs {
    */
   async stop(timeoutMs = RELEASE_STOP_TIMEOUT_MS): Promise<void> {
     this.stopping = true;
+    // Merges waiting for a job give up now rather than keep core's stop waiting for its checks.
+    for (const hold of this.holds) hold.cancel();
     await within(this.idle(), timeoutMs);
   }
 
@@ -622,9 +626,19 @@ export class ReleaseJobs {
 
   private launch(project: ReleaseProject, job: ReleaseJob, resumed: boolean): void {
     const ctx: JobContext = { project, main: project.defaultBranch, job, resumed, worktree: null };
+    // On main itself, a factory merge would move main under the checks (and stop the release): the
+    // merges wait until the job ends. Core stopping lets them go, unmerged.
+    const hold = job.working === project.defaultBranch ? holdMergesInto(project.path) : null;
+    if (hold) this.holds.add(hold);
     const running = this.run(ctx)
       .catch(() => undefined)
-      .finally(() => this.running.delete(project.id));
+      .finally(() => {
+        this.running.delete(project.id);
+        if (hold) {
+          this.holds.delete(hold);
+          hold.end();
+        }
+      });
     this.running.set(project.id, running);
   }
 
