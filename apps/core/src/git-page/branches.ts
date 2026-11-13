@@ -399,10 +399,22 @@ export async function deleteBranch(
       return outcome;
     });
   }
+  // Whatever stops the local delete now, origin's outcome stands and is said with it.
+  const onOriginText =
+    onOrigin === 'deleted'
+      ? 'On origin it is deleted.'
+      : onOrigin === 'already_gone'
+        ? 'On origin it was already gone.'
+        : null;
   await withMainWorkspaceLock(project.path, async () => {
-    if ((await deletable(db, project, name)) !== tip)
+    const now = await deletable(db, project, name).catch((error: unknown) => {
+      if (onOriginText && error instanceof HttpError)
+        throw new HttpError(error.statusCode, error.code, `${error.message} ${onOriginText}`, error.details);
+      throw error;
+    });
+    if (now !== tip)
       throw conflict(
-        `${name} moved while it was being deleted, so it stays here${onOrigin === 'deleted' ? ' (on origin it is deleted)' : ''}. Look again.`,
+        `${name} moved while it was being deleted, so it stays here. ${onOriginText ? `${onOriginText} ` : ''}Look again.`,
         'branch_moved',
       );
     await execGitFile(['update-ref', '-m', 'emberline: branch deleted', '-d', `refs/heads/${name}`, tip], {

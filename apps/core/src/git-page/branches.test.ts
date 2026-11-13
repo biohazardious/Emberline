@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
+import { HttpError } from '../errors.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
+import type { RepositoryService } from '../repository/service.js';
 import { prepareWorkspace } from '../runs/git.js';
 import { doneStarting, startingWorktrees } from '../runs/starting.js';
 import { prepareRunWorkspace } from '../runs/worktree.js';
@@ -17,6 +19,7 @@ import {
   startGitGateway,
   type TestApp,
 } from '../test-utils.js';
+import { deleteBranch } from './branches.js';
 
 let t: TestApp;
 let cookie: string;
@@ -421,6 +424,29 @@ describe('git branches on origin', () => {
     expect(refused.statusCode).toBe(409);
     expect(git(bare, 'rev-parse', 'refs/heads/shared')).toBe(theirs);
     expect(has(projectPath, 'refs/heads/shared')).not.toBe('');
+  });
+
+  it("a local refusal after origin's delete says what happened on origin", async () => {
+    git(projectPath, 'branch', 'old');
+    git(projectPath, 'push', '-q', bare, 'old');
+    const wt = path.join(t.dir, 'wt-old');
+    // Checked out elsewhere while origin's branch was being deleted.
+    const repository: Pick<RepositoryService, 'remoteAction'> = {
+      remoteAction: async (id, fn) => {
+        const out = await t.repository.remoteAction(id, fn);
+        git(projectPath, 'worktree', 'add', '-q', wt, 'old');
+        return out;
+      },
+    };
+    const project = { id: projectId, path: projectPath, defaultBranch: 'main' };
+    const error = await deleteBranch(t.db, project, 'old', true, repository).then(
+      () => null,
+      (e: unknown) => e as HttpError,
+    );
+    expect(error?.code).toBe('branch_checked_out');
+    expect(error?.message).toBe('old is checked out in a worktree, so it stays. On origin it is deleted.');
+    expect(has(bare, 'refs/heads/old')).toBe('');
+    expect(has(projectPath, 'refs/heads/old')).not.toBe('');
   });
 
   it('a branch already gone on origin counts as deleted there', async () => {
