@@ -484,6 +484,28 @@ describe('release', () => {
     expect(again.code).toBe('nothing_to_release');
   });
 
+  it('a CHANGELOG.md that is not UTF-8 is left as it is, and the release goes on', async () => {
+    // Latin-1 bytes: read as UTF-8 they would turn into U+FFFD in the release commit.
+    const latin1 = Buffer.from('# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- Caf\xe9.\n', 'latin1');
+    writeFileSync(path.join(projectPath, 'CHANGELOG.md'), latin1);
+    git(projectPath, 'add', 'CHANGELOG.md');
+    git(projectPath, 'commit', '-q', '-m', 'docs: log');
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    const jobs = jobsWith();
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('done');
+    expect(job.steps.find((s) => s.name === 'changelog')).toEqual({
+      name: 'changelog',
+      status: 'skipped',
+      detail: 'CHANGELOG.md is not UTF-8 text; the notes were not added.',
+    });
+    expect(job.releaseCommit).toBeNull();
+    expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(head);
+    expect(readFileSync(path.join(projectPath, 'CHANGELOG.md')).equals(latin1)).toBe(true);
+  });
+
   it('without a forge account the tag is pushed and the release step is skipped with the reason', async () => {
     const head = await developWithTickets();
     const jobs = jobsWith({

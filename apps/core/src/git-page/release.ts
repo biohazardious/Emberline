@@ -822,6 +822,11 @@ export class ReleaseJobs {
       return skipped(`CHANGELOG.md on ${main} is not a regular file, so it was left as it is.`);
     const version = job.version ?? '';
     const text = (await realGit(['cat-file', 'blob', blob], mainPath)).stdout;
+    // Read as UTF-8 text, bytes that are not UTF-8 would come back as U+FFFD and be written so:
+    // such a file is left as it is rather than changed past what the notes add.
+    const size = Number((await realGit(['cat-file', '-s', blob], mainPath)).stdout.trim());
+    if (Buffer.byteLength(text, 'utf8') !== size)
+      return skipped('CHANGELOG.md is not UTF-8 text; the notes were not added.');
     const next = withReleaseSection(text, version, new Date().toISOString().slice(0, 10), job.notes ?? '');
     const dir = await this.worktreeAt(ctx, expected);
     await writeResolved(dir, 'CHANGELOG.md', next);
