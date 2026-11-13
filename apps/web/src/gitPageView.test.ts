@@ -184,6 +184,8 @@ describe('Git page', () => {
           runs: [
             { id: 'r1', ticketId: 't1', ticketKey: 'EMB-1', title: 'EMB-1 Fix login', status: 'live' },
             { id: 'r2', ticketId: null, ticketKey: null, title: 'Tidy up', status: 'waiting' },
+            // A core from before the ticket fields says neither.
+            { id: 'r3', title: 'Old core' },
           ],
         });
       },
@@ -196,7 +198,7 @@ describe('Git page', () => {
     await waitFor(() => expect(view.container.querySelector('.git-strip > [role="alert"]')).not.toBeNull());
     const alert = view.container.querySelector('.git-strip > [role="alert"]')!;
     const items = [...alert.querySelectorAll('li')].map((li) => li.textContent);
-    expect(items).toEqual(['EMB-1 Fix login (running)', 'Tidy up (waiting to merge)']);
+    expect(items).toEqual(['EMB-1 Fix login (running)', 'Tidy up (waiting to merge)', 'Old core']);
     expect(alert.querySelector('a[href="/projects/p1/board?ticket=t1"]')?.textContent).toBe('EMB-1');
     // Nothing is set aside from here.
     expect(queryButton('Set them aside and match origin')).toBeNull();
@@ -368,6 +370,54 @@ describe('Match origin blocked by runs', () => {
     );
     expect(calls).toContain('POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":["r38"]}');
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  });
+
+  it('says the factory may start the tickets again when Backlog pickup is on', async () => {
+    serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }), {
+      'POST /api/projects/p1/git/match-origin': () => {
+        throw new ApiRequestError(409, 'runs_live', 'develop stays as it is while runs are live.', {
+          runs: blocking,
+          backlogPickup: true,
+        });
+      },
+    });
+    await open();
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+        "Their branches stay as they are; their tickets go back to Backlog, where Backlog auto-pickup may start them again, on origin's history.",
+      ),
+    );
+  });
+
+  it('a set-aside that fails for another reason closes the dialog, and the strip says why', async () => {
+    serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }), {
+      'POST /api/projects/p1/git/match-origin': (body) => {
+        if ((body as { setAside?: string[] }).setAside)
+          throw new ApiRequestError(
+            409,
+            'backup_failed',
+            'Could not keep a backup of develop, so it was not changed.',
+          );
+        throw new ApiRequestError(409, 'runs_live', 'develop stays as it is while runs are live.', {
+          runs: blocking,
+        });
+      },
+    });
+    const view = await open();
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!),
+    );
+    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(view.container.querySelector('.git-strip > [role="alert"]')?.textContent).toBe(
+      'Could not keep a backup of develop, so it was not changed.',
+    );
   });
 });
 

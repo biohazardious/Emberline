@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GitBranch } from '@emberline/protocol';
 import { eq } from 'drizzle-orm';
@@ -392,6 +392,23 @@ describe('a working branch the factory merges into', () => {
     expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
     expect(failures('sa')).toEqual([]);
     expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
+
+  it('the completion pass of a run set aside while its session was still open does nothing when it comes', async () => {
+    // A finished turn whose session was still open: its pass waits out the settle window.
+    const dir = path.join(t.dir, 'wt-late');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/late', dir);
+    mkdirSync(path.join(dir, '.emberline'), { recursive: true });
+    writeFileSync(path.join(dir, '.emberline', 'brainstorm-suggestions.json'), '[]\n');
+    seedRun('late', { state: 'done', branch: 'emberline/late', worktreePath: dir });
+    t.db.update(runs).set({ title: '[Brainstorm] ideas' }).where(eq(runs.id, 'late')).run();
+    await t.runs.setAside('late', 'Set aside by Match origin');
+    expect(t.runs.getRun('late').endedAt).toBeNull();
+    await (
+      t.tickets as unknown as { handleRunCompleted(run: unknown, opts?: object): Promise<void> }
+    ).handleRunCompleted(t.runs.getRun('late'), { finalizing: true });
+    // The pass stood down before its first step: nothing was copied to main.
+    expect(existsSync(path.join(projectPath, '.emberline', 'brainstorm-suggestions.json'))).toBe(false);
   });
 
   it("a person's merge of a run set aside is refused, also when the set-aside lands while it waits for the lock", async () => {

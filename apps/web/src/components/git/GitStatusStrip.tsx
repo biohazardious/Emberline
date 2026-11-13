@@ -17,9 +17,14 @@ import { timeAgo } from '../../time';
 
 type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
 
+/** A blocking run as the page shows it; `status` is null from a core from before the field. */
+export type BlockingRun = Omit<GitBlockingRun, 'status'> & { status: GitBlockingRun['status'] | null };
+
 export interface Problem {
   text: string;
-  runs: GitBlockingRun[];
+  runs: BlockingRun[];
+  /** Match origin's refusal: whether the factory picks tickets up from Backlog (Backlog auto-pickup). */
+  backlogPickup: boolean;
 }
 
 /** A failed request as the strip shows it; `runs_live` also lists the runs that block the change. */
@@ -28,23 +33,24 @@ export function problemOf(error: unknown): Problem {
     error instanceof ApiRequestError && error.code === 'runs_live' && Array.isArray(error.data.runs)
       ? (error.data.runs as Partial<GitBlockingRun>[]).map(
           // A core from before the ticket fields (a page left open across an upgrade) sends id and title.
-          (r): GitBlockingRun => ({
+          (r): BlockingRun => ({
             id: String(r.id),
             ticketId: r.ticketId ?? null,
             ticketKey: r.ticketKey ?? null,
             title: r.title ?? null,
-            status: r.status === 'waiting' ? 'waiting' : 'live',
+            status: r.status === 'waiting' || r.status === 'live' ? r.status : null,
           }),
         )
       : [];
-  return { text: errorMessage(error), runs };
+  const backlogPickup = error instanceof ApiRequestError && error.data.backlogPickup === true;
+  return { text: errorMessage(error), runs, backlogPickup };
 }
 
 /**
  * The runs that block a change, each with its ticket's key as a link to the ticket on the board
  * (the run's title starts with that key) and whether it runs or waits to merge.
  */
-export function BlockingRuns({ projectId, runs }: { projectId: string; runs: GitBlockingRun[] }) {
+export function BlockingRuns({ projectId, runs }: { projectId: string; runs: BlockingRun[] }) {
   return (
     <ul className="git-runs">
       {runs.map((r) => {
@@ -61,7 +67,9 @@ export function BlockingRuns({ projectId, runs }: { projectId: string; runs: Git
             ) : (
               title
             )}
-            <span className="muted"> ({r.status === 'live' ? 'running' : 'waiting to merge'})</span>
+            {r.status && (
+              <span className="muted"> ({r.status === 'live' ? 'running' : 'waiting to merge'})</span>
+            )}
           </li>
         );
       })}
@@ -159,7 +167,9 @@ function MatchOriginDialog({
             <span>{blocked.text}</span>
             <BlockingRuns projectId={projectId} runs={blocked.runs} />
             <p className="small git-runs-note">
-              Their branches stay as they are; their tickets go back to Backlog.
+              {blocked.backlogPickup
+                ? "Their branches stay as they are; their tickets go back to Backlog, where Backlog auto-pickup may start them again, on origin's history."
+                : 'Their branches stay as they are; their tickets go back to Backlog.'}
             </p>
           </div>
         )}

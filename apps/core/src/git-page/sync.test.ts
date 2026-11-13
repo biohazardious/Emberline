@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { BuildDemoResponse } from '@emberline/protocol';
+import { type BuildDemoResponse, TICKET_BODY_MAX } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
+import { updateFactorySettings } from '../factory/settings.js';
 import { doneStarting, markStarting } from '../runs/starting.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
@@ -18,7 +19,7 @@ import {
 } from '../test-utils.js';
 import { classify } from './branches.js';
 import { type GitPageDeps, GitPageService } from './service.js';
-import { GitSync, listBackups } from './sync.js';
+import { GitSync, listBackups, setAsideNote } from './sync.js';
 
 let t: TestApp;
 let cookie: string;
@@ -733,6 +734,8 @@ describe('pull from origin', () => {
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error).toBe('runs_live');
     expect(refused.json().message).toContain('set them aside');
+    // Backlog pickup is off: the tickets stay in Backlog until someone starts them.
+    expect(refused.json().backlogPickup).toBe(false);
     const byId = (list: { id: string }[]) => [...list].sort((a, b) => a.id.localeCompare(b.id));
     expect(byId(refused.json().runs)).toEqual([
       { id: 'live1', ticketId: busy.id, ticketKey: busy.key, title: 'Run live1', status: 'live' },
@@ -782,7 +785,11 @@ describe('pull from origin', () => {
     const rewritten = forcePushUnrelated(cloneOf(bare));
     expect((await pullNow()).state).toBe('rewritten');
     seedRun('seen', 'working');
-    expect((await send('POST', gitUrl('/match-origin'), { branch: 'main' })).json().runs).toHaveLength(1);
+    // With Backlog pickup on, the refusal says so: the factory may start the tickets again.
+    updateFactorySettings(t.db, { autoPickupBacklog: true });
+    const first = (await send('POST', gitUrl('/match-origin'), { branch: 'main' })).json();
+    expect(first.runs).toHaveLength(1);
+    expect(first.backlogPickup).toBe(true);
     // Another run starts working before the person confirms.
     seedRun('later', 'working');
     const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['seen'] });
@@ -1222,7 +1229,7 @@ describe('a pull that cannot merge, and Match origin', () => {
     const ticket = t.tickets.get(resolve.id);
     expect(ticket.status).toBe('backlog');
     expect(ticket.body).toMatch(
-      /^Set aside by Match origin on \d{4}-\d{2}-\d{2}: main took origin's history, and this ticket's work \(on emberline\/emb38\) was based on its old history, so it was not merged\./,
+      /^Set aside by Match origin on \d{4}-\d{2}-\d{2}: main took origin's history, and this ticket's earlier work was based on the old history, so it was not merged\. Do not reuse its branch emberline\/emb38; start from the current main\.$/,
     );
     expect(t.tickets.get(split.id).status).toBe('done');
     // Nothing left to match.
@@ -1270,6 +1277,35 @@ describe('a pull that cannot merge, and Match origin', () => {
     const again = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
     expect(again.statusCode).toBe(409);
     expect(again.json().error).toBe('nothing_to_match');
+  });
+});
+
+describe('the note on a ticket whose runs Match origin set aside', () => {
+  const day = new Date().toISOString().slice(0, 10);
+  it("goes after the person's text, and replaces an earlier one instead of adding another", () => {
+    const once = setAsideNote('Do the thing.', 'main', ['emberline/a']);
+    expect(once).toBe(
+      `Do the thing.\n\nSet aside by Match origin on ${day}: main took origin's history, and this ticket's earlier work was based on the old history, so it was not merged. Do not reuse its branch emberline/a; start from the current main.`,
+    );
+    const twice = setAsideNote(once, 'main', ['emberline/b', 'emberline/c']);
+    expect(twice).toBe(
+      `Do the thing.\n\nSet aside by Match origin on ${day}: main took origin's history, and this ticket's earlier work was based on the old history, so it was not merged. Do not reuse its branches emberline/b, emberline/c; start from the current main.`,
+    );
+    expect(setAsideNote('', 'main', [null])).toBe(
+      `Set aside by Match origin on ${day}: main took origin's history, and this ticket's earlier work was based on the old history, so it was not merged. Start from the current main.`,
+    );
+  });
+
+  it("never cuts the person's text: a short note when the full one does not fit, none when nothing fits", () => {
+    const long = 'x'.repeat(TICKET_BODY_MAX - 120);
+    const short = setAsideNote(long, 'main', ['emberline/a']);
+    expect(short.startsWith(`${long}\n\n`)).toBe(true);
+    expect(short.slice(long.length + 2)).toBe(
+      `Set aside by Match origin on ${day}: do not reuse branch emberline/a; start from the current main.`,
+    );
+    expect(short.length).toBeLessThanOrEqual(TICKET_BODY_MAX);
+    const full = 'y'.repeat(TICKET_BODY_MAX - 10);
+    expect(setAsideNote(full, 'main', ['emberline/a'])).toBe(full);
   });
 });
 

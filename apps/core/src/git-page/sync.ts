@@ -18,6 +18,7 @@ import {
   type GitSync as SyncRecord,
   type GitSyncState,
   MatchOriginBody,
+  TICKET_BODY_MAX,
 } from '@emberline/protocol';
 import { eq, isNotNull } from 'drizzle-orm';
 import { CommandFailedError, isRunnerUnavailable } from '../command-exec.js';
@@ -1045,13 +1046,19 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
       if (branch === working) {
         const live = await liveRunsOf(db, projectId);
         const names = live.map((r) => r.title ?? r.id).join(', ');
+        // Whether the factory may start their tickets again from Backlog (the dialog says so).
+        const factory = effectiveFactorySettings(db, projectId);
+        const details = {
+          runs: blockingRuns(live),
+          backlogPickup: factory.autoPickupReady && factory.autoPickupBacklog,
+        };
         const allConfirmed = live.every((r) => confirmed.has(r.id));
         if (live.length > 0 && !(allConfirmed && deps.setAside))
           throw new HttpError(
             409,
             'runs_live',
             `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or set them aside, then match origin.`,
-            { runs: blockingRuns(live) },
+            details,
           );
         // A run that is starting has no row to stop yet.
         if (live.some((r) => r.starting))
@@ -1059,7 +1066,7 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
             409,
             'runs_live',
             `${branch} stays as it is while a run is starting, so nothing was set aside. Match origin again in a moment, once it has started.`,
-            { runs: blockingRuns(live) },
+            details,
           );
         if (live.length > 0) await deps.setAside?.(projectId, live, branch);
         setAside = live.length;
@@ -1117,23 +1124,37 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
   });
 }
 
-/** The reason on the run events of a run Match origin set aside. */
+/** The reason on the run events of a run Match origin set aside, and how its ticket's note starts. */
 export const SET_ASIDE_REASON = 'Set aside by Match origin';
-/** A ticket's body as UpdateTicketBody takes it, at most. */
-const TICKET_BODY_MAX = 20_000;
 
 /**
- * `body` with the note of a ticket whose runs (on `runBranches`) Match origin set aside, at its end:
- * what happened and what to do next. An overlong body loses its end to make room.
+ * `body` with the note of a ticket whose runs (on `runBranches`) Match origin set aside, after the
+ * person's text, so its next run (a person's or the factory's) does not build on the old history.
+ * An earlier such note is replaced, not added to. The person's text is never cut: a shorter note
+ * when the full one does not fit in TICKET_BODY_MAX, none when that does not fit either.
  */
 export function setAsideNote(body: string, branch: string, runBranches: (string | null)[]): string {
   const named = [...new Set(runBranches.filter((b): b is string => b !== null))];
-  const on = named.length === 0 ? '' : ` (on ${named.join(', ')})`;
-  const note = `${SET_ASIDE_REASON} on ${new Date().toISOString().slice(0, 10)}: ${branch} took origin's history, and this ticket's work${on} was based on its old history, so it was not merged. Its branch is kept as it is; start the ticket again to do the work on origin's history.`;
-  const kept = body.trimEnd();
-  if (!kept) return note;
-  const room = TICKET_BODY_MAX - note.length - 2;
-  return `${kept.length > room ? `${kept.slice(0, room - 1)}…` : kept}\n\n${note}`;
+  const head = `${SET_ASIDE_REASON} on ${new Date().toISOString().slice(0, 10)}:`;
+  const reuse =
+    named.length === 0
+      ? `Start from the current ${branch}.`
+      : `Do not reuse its ${named.length === 1 ? 'branch' : 'branches'} ${named.join(', ')}; start from the current ${branch}.`;
+  const full = `${head} ${branch} took origin's history, and this ticket's earlier work was based on the old history, so it was not merged. ${reuse}`;
+  const short =
+    named.length === 0
+      ? `${head} start from the current ${branch}.`
+      : `${head} do not reuse ${named.length === 1 ? 'branch' : 'branches'} ${named.join(', ')}; start from the current ${branch}.`;
+  const kept = body
+    .split('\n\n')
+    .filter((paragraph) => !paragraph.startsWith(`${SET_ASIDE_REASON} on `))
+    .join('\n\n')
+    .trimEnd();
+  for (const note of [full, short]) {
+    const next = kept ? `${kept}\n\n${note}` : note;
+    if (next.length <= TICKET_BODY_MAX) return next;
+  }
+  return kept;
 }
 
 /** The body of "Resolve with a ticket": what conflicted, and how the run resolves it. */

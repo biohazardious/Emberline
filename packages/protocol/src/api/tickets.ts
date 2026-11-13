@@ -85,9 +85,12 @@ export const Ticket = z.object({
 });
 export type Ticket = z.infer<typeof Ticket>;
 
+/** The longest ticket body (its description) a ticket keeps. */
+export const TICKET_BODY_MAX = 20_000;
+
 export const CreateTicketBody = z.object({
   title: z.string().trim().min(1).max(200),
-  body: z.string().max(20_000).default(''),
+  body: z.string().max(TICKET_BODY_MAX).default(''),
   persona: AgentPersona.default('coder'),
   priority: TicketPriority.default(1),
   status: TicketStatus.default('backlog'),
@@ -97,7 +100,7 @@ export type CreateTicketBody = z.input<typeof CreateTicketBody>;
 export const UpdateTicketBody = z
   .object({
     title: z.string().trim().min(1).max(200),
-    body: z.string().max(20_000),
+    body: z.string().max(TICKET_BODY_MAX),
     persona: AgentPersona,
     priority: TicketPriority,
     status: TicketStatus,
