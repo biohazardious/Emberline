@@ -55,6 +55,10 @@ const cloneOf = (from: string) => {
   return dir;
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const waitFor = async (ok: () => boolean) => {
+  for (let i = 0; i < 200 && !ok(); i++) await sleep(25);
+  expect(ok()).toBe(true);
+};
 const storedJob = () => readRepositorySettings(t.db, projectId).releaseJob!;
 const stepsOf = (job: ReleaseJob) => job.steps.map((s) => [s.name, s.status]);
 const okBuild = (): BuildDemoResponse => ({
@@ -667,6 +671,44 @@ describe('release', () => {
     await after.idle();
     expect(storedJob().state).toBe('done');
     expect(git(bare, 'log', '-1', '--format=%s', 'main')).toBe('chore(release): v0.2.0');
+  });
+
+  it('switching the working branch and Match origin are refused while a release runs, and while one left main unpushed', async () => {
+    approveChecks();
+    const head = await developWithTickets();
+    git(projectPath, 'branch', 'other', 'main');
+    let red!: () => void;
+    const checking = new Promise<void>((r) => (red = r));
+    const jobs = jobsWith({
+      build: async () => {
+        await checking;
+        return { ...okBuild(), ok: false, output: 'red' };
+      },
+    });
+    const svc = serviceWith(jobs);
+    await jobs.start(projectId, publish(head));
+    await waitFor(() => storedJob().steps[1]!.status === 'running');
+    // During the checks the unchecked promote on main is not checked out (Keep pushed would publish it).
+    const switching = await refusal(svc.setWorkingBranch(projectId, { branch: 'main' }));
+    expect(switching.code).toBe('job_running');
+    expect(switching.message).toContain('the working branch stays develop');
+    const matching = await refusal(svc.matchOrigin(projectId, { branch: 'develop' }));
+    expect(matching.code).toBe('job_running');
+    expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('develop');
+    red();
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('failed');
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(job.promoteOid);
+    // Stopped with main promoted here and not pushed: Retry or Undo promote first.
+    expect((await refusal(svc.setWorkingBranch(projectId, { branch: 'other' }))).code).toBe(
+      'release_unfinished',
+    );
+    expect((await refusal(svc.matchOrigin(projectId, { branch: 'main' }))).code).toBe('release_unfinished');
+    expect(readRepositorySettings(t.db, projectId).workingBranch).toBe('develop');
+    await jobs.undoPromote(projectId);
+    await svc.setWorkingBranch(projectId, { branch: 'other' });
+    expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('other');
   });
 
   it('is refused while a run is merging into the working branch', async () => {

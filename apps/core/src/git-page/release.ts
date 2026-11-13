@@ -201,6 +201,19 @@ export async function latestVersionTag(mainPath: string, ref: string): Promise<s
   );
 }
 
+/** Whether `job` stopped with main changed here and not pushed: one of its own commits is main's tip. */
+function leftMainUnpushed(job: ReleaseJob | null, mainTip: string | null): boolean {
+  return (
+    job?.state === 'failed' &&
+    !finished(job, 'push_main') &&
+    mainTip !== null &&
+    [job.promoteOid, job.releaseCommit].includes(mainTip)
+  );
+}
+
+/** What a release asks of main and the working branch now (see ReleaseJobs.standing). */
+export type ReleaseStanding = 'running' | 'unfinished' | null;
+
 const PULL_FIRST: Partial<Record<string, (b: string) => string>> = {
   behind: (b) => `origin's ${b} has commits ${b} here does not have yet; Pull first.`,
   diverged: (b) => `${b} and origin's ${b} both have commits the other lacks; Pull first.`,
@@ -256,6 +269,36 @@ export class ReleaseJobs {
   async stop(timeoutMs = RELEASE_STOP_TIMEOUT_MS): Promise<void> {
     this.stopping = true;
     await within(this.idle(), timeoutMs);
+  }
+
+  /**
+   * What a release asks of main and the working branch right now: `running` while a job runs (or a
+   * start, Retry or Undo is under way), `unfinished` while a stopped job left main changed here and
+   * not pushed (one of its own commits is main's tip), else null. A switch of the working branch,
+   * Match origin and auto-pull keep out of the way of both.
+   */
+  async standing(projectId: string): Promise<ReleaseStanding> {
+    if (this.running.has(projectId) || this.busy.has(projectId)) return 'running';
+    const project = this.project(projectId);
+    const mainTip = await localTip(project.path, project.defaultBranch);
+    return leftMainUnpushed(this.current(projectId), mainTip) ? 'unfinished' : null;
+  }
+
+  /**
+   * Refuses (409) a change a running or unfinished release depends on: `outcome` says what did not
+   * happen ("the working branch stays develop").
+   */
+  async guard(projectId: string, outcome: string): Promise<void> {
+    const standing = await this.standing(projectId);
+    if (standing === 'running')
+      throw conflict(`A release is running, so ${outcome}. Wait for it to finish.`, 'job_running');
+    if (standing === 'unfinished') {
+      const main = this.project(projectId).defaultBranch;
+      throw conflict(
+        `The last release stopped with ${main} changed here and not pushed, so ${outcome}. Retry it, or Undo promote, on the Release tab first.`,
+        'release_unfinished',
+      );
+    }
   }
 
   /** The first refusal a release would meet that is decidable here, with no network; null: none. */
@@ -469,12 +512,7 @@ export class ReleaseJobs {
           'working_mismatch',
         );
     }
-    const last = this.current(project.id);
-    if (
-      last?.state === 'failed' &&
-      !finished(last, 'push_main') &&
-      [last.promoteOid, last.releaseCommit].includes(mainTip)
-    )
+    if (leftMainUnpushed(this.current(project.id), mainTip))
       return conflict(
         `The last release stopped with ${main} changed here and not pushed. Retry it, or Undo promote, first.`,
         'release_unfinished',

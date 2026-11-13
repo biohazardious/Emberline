@@ -40,6 +40,7 @@ import {
   unlessRunnerUnavailable,
 } from '../repository/git.js';
 import type { RepositoryService, Snapshot } from '../repository/service.js';
+import type { ReleaseJobs } from './release.js';
 import { pruneWorktree } from '../runs/git.js';
 import { verifyBuildIn } from '../runs/gates.js';
 import {
@@ -93,6 +94,11 @@ export interface SyncDeps {
   };
   /** The heals running in the background (one per project). */
   heals: HealJobs;
+  /**
+   * The project's release (ReleaseJobs): while one runs or stopped with main changed, Match origin is
+   * refused and auto-pull keeps out of its way.
+   */
+  releases?: Pick<ReleaseJobs, 'standing' | 'guard'>;
   /** Where core keeps worktrees (`<workspacesDir>/.worktrees/<slug>/…`); the heal's own goes there. */
   workspacesDir: string;
   /** Runs the checks on a healed merge (tests inject it); default: buildWorkspaceDemo. */
@@ -821,6 +827,9 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
     throw badRequest('Name the branch to match with origin.');
   const { db } = deps;
   if (deps.heals.running(projectId)) throw pullRunning();
+  // A release's checks and its sync of the working branch build on the history as it is now.
+  const releaseGuard = () => deps.releases?.guard(projectId, `${branch} was not matched with origin`);
+  await releaseGuard();
   const done = await deps.repository.remoteAction(projectId, async (ws) => {
     // Queued behind the pull that started a heal.
     if (deps.heals.running(projectId)) throw pullRunning();
@@ -839,6 +848,7 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
     return withMainWorkspaceLock(ws.path, async () => {
       if (!(await deps.repository.originStill(projectId, ws)))
         throw conflict(ORIGIN_CHANGED, 'origin_changed');
+      await releaseGuard();
       const local = await localTip(ws.path, branch);
       const state = await classify(ws.path, local, remote);
       if (!local || (state !== 'rewritten' && state !== 'diverged'))

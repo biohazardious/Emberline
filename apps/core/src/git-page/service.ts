@@ -168,7 +168,9 @@ export class GitPageService {
 
   async setWorkingBranch(projectId: string, raw: unknown): Promise<void> {
     const body = SetWorkingBranchBody.parse(raw ?? {});
-    await setWorkingBranch(this.db, this.project(projectId), body.branch);
+    await setWorkingBranch(this.db, this.project(projectId), body.branch, (current) =>
+      this.releases.guard(projectId, `the working branch stays ${current}`),
+    );
   }
 
   private syncDeps(): SyncDeps {
@@ -182,6 +184,7 @@ export class GitPageService {
           this.deps.runs.teardownJobWorktree(projectId, worktreePath, composeProject),
       },
       heals: this.heals,
+      releases: this.releases,
       workspacesDir: this.deps.workspacesDir,
       ...(this.deps.buildWorkspaceDemo ? { buildWorkspaceDemo: this.deps.buildWorkspaceDemo } : {}),
     };

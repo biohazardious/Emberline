@@ -424,14 +424,22 @@ export const WORKSPACE_DIRTY =
 
 /**
  * Makes `rawBranch` the working branch: refused while any run is live or waiting to merge (a run
- * based on the old branch would merge into the new one). A branch only on origin (as last read)
+ * based on the old branch would merge into the new one), and while a release runs or stopped with
+ * main changed (`guard`): its checks and Keep pushed would publish what the switch checks out. A branch only on origin (as last read)
  * becomes a local branch at that commit first. The main workspace then checks it out, never by
  * force, which also makes it the branch runs merge into.
  */
-export async function setWorkingBranch(db: Db, project: BranchProject, rawBranch: unknown): Promise<void> {
+export async function setWorkingBranch(
+  db: Db,
+  project: BranchProject,
+  rawBranch: unknown,
+  /** Refuses the switch (throws) while a release depends on the working branch; asked under the lock. */
+  guard?: (current: string) => Promise<void>,
+): Promise<void> {
   const branch = await validBranchName(project.path, rawBranch);
   await withMainWorkspaceLock(project.path, async () => {
     const current = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
+    await guard?.(current);
     const live = await liveRunRows(db, project);
     if (live.length > 0) {
       const names = live.map((r) => r.title ?? r.id).join(', ');
