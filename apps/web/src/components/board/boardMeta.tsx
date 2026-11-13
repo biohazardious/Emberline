@@ -10,6 +10,7 @@ import type {
 import type { BoardFilter } from '../../boardFilter';
 import type { ConflictHoldFallback } from '../../holdRecovery';
 import type { BoardSelectionState } from '../../hooks/useBoardSelection';
+import type { Unmergeable } from '../../reviewComments';
 import type { SyncResolvingNotice } from '../../syncResolution';
 
 export const POSITION_STEP = 1024;
@@ -61,7 +62,7 @@ export interface BoardCtx {
   error: string | undefined;
   setError: (message: string | undefined) => void;
   blockedDrop: { ticket: Ticket; target: DropTarget; count: number } | undefined;
-  missingDrop: { ticket: Ticket; target: DropTarget } | undefined;
+  missingDrop: { ticket: Ticket; target: DropTarget; why: Unmergeable } | undefined;
   resolvingNotice?: SyncResolvingNotice | undefined;
   clearBlockedDrop: () => void;
   clearMissingDrop: () => void;

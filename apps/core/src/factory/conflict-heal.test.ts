@@ -371,6 +371,7 @@ describe('mergeRunBranch with the heal', () => {
     const { b } = parallelAppends();
     const notes: Array<[string, Record<string, unknown>]> = [];
     const res = await mergeRunBranch({
+      setAside: () => false,
       run: run(b, 'b'),
       mainWorkspacePath: main,
       ticketKey: 'T-2',
@@ -400,6 +401,7 @@ describe('mergeRunBranch with the heal', () => {
     const mainBefore = git(main, 'rev-parse', 'HEAD');
     const notes: string[] = [];
     const res = await mergeRunBranch({
+      setAside: () => false,
       run: run(b, 'b'),
       mainWorkspacePath: main,
       ticketKey: 'T-2',

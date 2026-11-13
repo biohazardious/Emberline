@@ -248,6 +248,7 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     writeFileSync(path.join(wt, '.emberline', 'notes.md'), 'kept\n');
 
     const res = await syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath: wt,
       mainWorkspacePath: project.path,
       ticketKey: 'T-1',

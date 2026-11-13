@@ -148,6 +148,7 @@ import {
   readWorkspaceFileRaw,
   rollbackProjectCheckpoint,
   runCrossProviderCritic,
+  runSetAside,
   seedStarterTickets,
   serveWorkspaceDemoAsset,
   syncWorktreeToMainWorkspace,
@@ -955,6 +956,12 @@ export function registerProjectRoutes(
       const run = runs.get(body.runId);
       if (!run || run.projectId !== project.id) throw notFound('no such run for this project');
       const ticket = run.ticketId ? tickets.get(run.ticketId) : null;
+      // Match origin replaced the history this run's work is based on: the person may still move the
+      // ticket on without a merge, or start it again (the merge asks again under the lock).
+      if (runs.wasSetAside(run.id))
+        throw new HttpError(409, 'run_set_aside', runSetAside(ticket?.key ?? run.id.slice(0, 8)).message, {
+          ticketId: ticket?.id ?? null,
+        });
       // Open blocking review comments keep the gate closed for a person too, unless they say otherwise.
       const blocking = openBlockingCount(db, run.id);
       const commit = runCommit(db, run, ticket);
@@ -967,6 +974,7 @@ export function registerProjectRoutes(
           branch: run.branch,
           ...commit,
           workingBranch: () => factoryWorkingBranch(db, project.id, row.defaultBranch),
+          setAside: () => runs.wasSetAside(run.id),
           // A person's request is answered now, not after a release on main has finished.
           refuseWhileHeld: true,
           // Only work that is not in main yet is held back: a no-op merge needs no override.
@@ -982,7 +990,10 @@ export function registerProjectRoutes(
           },
         }).catch((error: unknown) => {
           // The person may still move the ticket on without a merge: say which ticket.
-          if (error instanceof HttpError && error.code === 'worktree_missing') {
+          if (
+            error instanceof HttpError &&
+            (error.code === 'worktree_missing' || error.code === 'run_set_aside')
+          ) {
             throw new HttpError(409, error.code, error.message, { ticketId: ticket?.id ?? null });
           }
           throw error;

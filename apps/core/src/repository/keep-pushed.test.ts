@@ -75,6 +75,7 @@ const worktree = (id: string) => {
 };
 const merge = (id: string, dir: string) =>
   syncWorktreeToMainWorkspace({
+    setAside: () => false,
     worktreePath: dir,
     mainWorkspacePath: projectPath,
     ticketKey: null,

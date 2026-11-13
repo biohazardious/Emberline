@@ -708,6 +708,7 @@ describe("the runner's environment and PATH never reach core's commands", () => 
         git(wt, 'add', 'b.txt'); // staged by hand: the merge copies the index (cp) to build its output
         plantEverything();
         const merged = await syncWorktreeToMainWorkspace({
+          setAside: () => false,
           worktreePath: wt,
           mainWorkspacePath: main,
           ticketKey: 'T-1',

@@ -209,8 +209,10 @@ export async function mergeRunBranch(params: {
   commit?: { identity: CommitIdentity; subject: string };
   /** See syncWorktreeToMainWorkspace: a merge waits while the main workspace is off this branch. */
   workingBranch?: () => string | null;
+  /** See syncWorktreeToMainWorkspace: a run Match origin set aside is never merged. */
+  setAside: () => boolean;
 }): Promise<RunMerge | null> {
-  const { run, stale, heal, mainWorkspacePath, ticketKey, commit, workingBranch } = params;
+  const { run, stale, heal, mainWorkspacePath, ticketKey, commit, workingBranch, setAside } = params;
   const mergeOnce = () =>
     syncWorktreeToMainWorkspace({
       worktreePath: run.worktreePath,
@@ -220,13 +222,16 @@ export async function mergeRunBranch(params: {
       branch: run.branch,
       ...commit,
       ...(workingBranch ? { workingBranch } : {}),
+      setAside,
       beforeMerge: () => {
         if (stale()) throw new TurnMoved();
       },
     }).catch((error: unknown): RunMerge | null => {
       // Core stopped while the merge waited for a release: nothing happened, and nothing is noted
-      // (no hold for a person), as if core had stopped before the merge.
+      // (no hold for a person), as if core had stopped before the merge. A run set aside has no
+      // merge left to note either: it stands down like a pass whose turn is over.
       if (error instanceof TurnMoved || error instanceof MergeWaitCancelled) return null;
+      if (error instanceof HttpError && error.code === 'run_set_aside') return null;
       return {
         ok: false,
         summary: (error as Error).message,

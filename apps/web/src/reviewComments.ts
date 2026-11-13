@@ -159,13 +159,40 @@ export function worktreeMissing(error: unknown): { ticketId: string | null } | n
   return { ticketId: typeof error.data.ticketId === 'string' ? error.data.ticketId : null };
 }
 
+/**
+ * The run's ticket when `error` is sync-worktree's 409 for a run Match origin set aside (its work is
+ * based on a history the branch no longer has), else null.
+ */
+export function runSetAside(error: unknown): { ticketId: string | null } | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status !== 409 || error.code !== 'run_set_aside') return null;
+  return { ticketId: typeof error.data.ticketId === 'string' ? error.data.ticketId : null };
+}
+
+/** Why a run's work cannot be merged at all, so the ticket may only move on without a merge. */
+export type Unmergeable = 'worktree_missing' | 'set_aside';
+
+/** The sentence for a merge that cannot happen at all (the Board's drop, the drawer's recovery block). */
+export function unmergeableText(why: Unmergeable, ticketKey: string): string {
+  return why === 'set_aside'
+    ? `${ticketKey}'s run was set aside by Match origin: its work is based on the old history, so nothing was merged.`
+    : `The worktree of ${ticketKey}'s run is gone and its work isn't in main. Nothing was merged.`;
+}
+
+/** Why `error` says the run's work cannot be merged at all, else null. */
+export function unmergeable(error: unknown): Unmergeable | null {
+  if (worktreeMissing(error)) return 'worktree_missing';
+  if (runSetAside(error)) return 'set_aside';
+  return null;
+}
+
 /** Why a merge from the ticket drawer (Mark done, Accept) did not happen, as one sentence for the recovery block. */
 export function mergeNowFailure(error: unknown, ticketKey: string): string {
   const blocking = reviewBlockedCount(error);
   if (blocking !== null)
     return `${blockingMessage(blocking)} on ${ticketKey}, so it was not merged. Resolve them in Review first.`;
-  if (worktreeMissing(error))
-    return `The worktree of ${ticketKey}'s run is gone and its work isn't in main. Nothing was merged.`;
+  const why = unmergeable(error);
+  if (why) return unmergeableText(why, ticketKey);
   return `Not merged: ${errorMessage(error)}`;
 }
 
@@ -174,7 +201,7 @@ export type MergeNext = 'merge_anyway' | 'move_without_merge' | null;
 
 export function mergeNowNext(error: unknown): MergeNext {
   if (reviewBlockedCount(error) !== null) return 'merge_anyway';
-  if (worktreeMissing(error)) return 'move_without_merge';
+  if (unmergeable(error)) return 'move_without_merge';
   return null;
 }
 

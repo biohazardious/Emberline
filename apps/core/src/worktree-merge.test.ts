@@ -39,6 +39,7 @@ function addWorktree(name: string): string {
 
 const sync = (worktreePath: string, ticketKey: string) =>
   syncWorktreeToMainWorkspace({
+    setAside: () => false,
     worktreePath,
     mainWorkspacePath: main,
     ticketKey,
@@ -166,6 +167,7 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
     writeFileSync(path.join(a, 'feature-a.js'), 'a\n');
     writeFileSync(path.join(main, 'app.js'), 'edited in main\n'); // snapshotted before the merge
     const res = await syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath: a,
       mainWorkspacePath: main,
       ticketKey: 'T-1',
@@ -186,6 +188,7 @@ describe('syncWorktreeToMainWorkspace (git merge)', () => {
 describe('a merge refused before it starts', () => {
   const refusing = (worktreePath: string, beforeMerge: () => void) =>
     syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath,
       mainWorkspacePath: main,
       ticketKey: 'T-1',

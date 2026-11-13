@@ -17,6 +17,7 @@ import {
   type PendingMergeStep,
   requestTargets,
   reviewBlockedCount,
+  runSetAside,
   worktreeMissing,
   commentActions,
   commentBadges,
@@ -206,6 +207,20 @@ describe('a person merge of a run whose worktree is gone', () => {
     expect(worktreeMissing(new ApiRequestError(409, 'worktree_missing', 'x'))).toEqual({ ticketId: null });
     expect(worktreeMissing(new ApiRequestError(409, 'review_blocked', 'x'))).toBeNull();
     expect(worktreeMissing(new Error('boom'))).toBeNull();
+  });
+});
+
+describe('a person merge of a run Match origin set aside', () => {
+  it('reads the ticket from a run_set_aside 409, says why, and offers to move the ticket without merging', () => {
+    const refused = new ApiRequestError(409, 'run_set_aside', 'x', { ticketId: 't1' });
+    expect(runSetAside(refused)).toEqual({ ticketId: 't1' });
+    expect(runSetAside(new ApiRequestError(409, 'run_set_aside', 'x'))).toEqual({ ticketId: null });
+    expect(runSetAside(new ApiRequestError(409, 'worktree_missing', 'x'))).toBeNull();
+    expect(runSetAside(new Error('boom'))).toBeNull();
+    expect(mergeNowNext(refused)).toBe('move_without_merge');
+    expect(mergeNowFailure(refused, 'EL-3')).toBe(
+      "EL-3's run was set aside by Match origin: its work is based on the old history, so nothing was merged.",
+    );
   });
 });
 

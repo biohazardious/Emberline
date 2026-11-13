@@ -29,7 +29,8 @@ import {
   mergeNowFailure,
   mergeNowNext,
   reviewBlockedCount,
-  worktreeMissing,
+  type Unmergeable,
+  unmergeable,
 } from '../reviewComments';
 import { type ManualConflictState, type SyncResolvingNotice, syncWorktreeOutcome } from '../syncResolution';
 import { dropIntoInProgress } from '../ticketDeps';
@@ -71,7 +72,7 @@ export function BoardPage({ projectId }: { projectId: string }) {
   const [demoPanelOpen, setDemoPanelOpen] = useState(false);
   const [error, setError] = useState<string>();
   const [blockedDrop, setBlockedDrop] = useState<{ ticket: Ticket; target: DropTarget; count: number }>();
-  const [missingDrop, setMissingDrop] = useState<{ ticket: Ticket; target: DropTarget }>();
+  const [missingDrop, setMissingDrop] = useState<{ ticket: Ticket; target: DropTarget; why: Unmergeable }>();
   const [resolvingNotice, setResolvingNotice] = useState<SyncResolvingNotice>();
   const [manualConflict, setManualConflict] = useState<ManualConflictState>();
 
@@ -196,8 +197,9 @@ export function BoardPage({ projectId }: { projectId: string }) {
           setBlockedDrop({ ticket, target, count: blocking });
           return;
         }
-        if (worktreeMissing(e)) {
-          setMissingDrop({ ticket, target });
+        const why = unmergeable(e);
+        if (why) {
+          setMissingDrop({ ticket, target, why });
           return;
         }
         setError(`Not merged: ${errorMessage(e)}`);

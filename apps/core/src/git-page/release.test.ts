@@ -772,6 +772,7 @@ describe('release', () => {
     await waitFor(() => storedJob().steps[1]!.status === 'running');
     let landed = false;
     const merging = syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath: worktree,
       mainWorkspacePath: projectPath,
       ticketKey: 'EMB-9',
@@ -815,6 +816,7 @@ describe('release', () => {
     await jobs.start(projectId, publish(head));
     await waitFor(() => storedJob().steps[1]!.status === 'running');
     const merging = syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath: worktree,
       mainWorkspacePath: projectPath,
       ticketKey: 'EMB-9',
@@ -841,6 +843,7 @@ describe('release', () => {
     writeFileSync(path.join(worktree, 'run.txt'), 'run\n');
     const merge = () =>
       syncWorktreeToMainWorkspace({
+        setAside: () => false,
         worktreePath: worktree,
         mainWorkspacePath: projectPath,
         ticketKey: 'EMB-9',
@@ -953,6 +956,7 @@ describe('release', () => {
     let unlock: () => void = () => undefined;
     const held = withMainWorkspaceLock(projectPath, () => new Promise<void>((r) => (unlock = r)));
     const merging = syncWorktreeToMainWorkspace({
+      setAside: () => false,
       worktreePath: worktree,
       mainWorkspacePath: projectPath,
       ticketKey: null,

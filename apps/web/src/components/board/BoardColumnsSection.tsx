@@ -1,6 +1,6 @@
 import { type DragEvent, useState } from 'react';
 import { EMPTY_BOARD_FILTER } from '../../boardFilter';
-import { blockingMessage } from '../../reviewComments';
+import { blockingMessage, unmergeableText } from '../../reviewComments';
 import { BoardBulkBar } from '../BoardBulkBar';
 import { BOARD_COLUMNS, TicketCard } from '../BoardCard';
 import { BoardFilterBar, MobileColumnNav } from '../BoardFilterBar';
@@ -97,10 +97,7 @@ export function BoardColumnsSection({
       )}
       {missingDrop && (
         <div className="banner banner-warn board-blocked-drop" role="alert">
-          <span>
-            The worktree of {missingDrop.ticket.key}&apos;s run is gone and its work isn&apos;t in main.
-            Nothing was merged.
-          </span>
+          <span>{unmergeableText(missingDrop.why, missingDrop.ticket.key)}</span>
           <button
             type="button"
             className="btn btn-sm btn-primary"

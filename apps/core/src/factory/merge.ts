@@ -470,6 +470,14 @@ export async function runProducedChanges(worktreePath: string, mainWorkspacePath
   }
 }
 
+/** The refusal to merge a run Match origin set aside; `label` names it (its ticket's key). */
+export const runSetAside = (label: string) =>
+  new HttpError(
+    409,
+    'run_set_aside',
+    `${label} was set aside by Match origin: its work is based on the old history, so it is not merged. Move the ticket on without merging, or start it again.`,
+  );
+
 /**
  * Integrates a run's worktree into the project's main workspace with git: the run's output is
  * committed on its own branch and merged (`--no-ff`) into the main checkout. Untracked and ignored
@@ -524,6 +532,12 @@ async function mergeRunIntoMainWorkspace(params: {
    * is refused, so the factory's work never lands on main (or any branch) by a checkout.
    */
   workingBranch?: () => string | null;
+  /**
+   * Whether Match origin set the run aside (RunService.wasSetAside), asked under the lock so a merge
+   * that waited for it sees a set-aside made meanwhile. Such a run's work is based on a history the
+   * branch no longer has: no path merges it (run_set_aside).
+   */
+  setAside: () => boolean;
 }): Promise<SyncWorktreeResult> {
   const { worktreePath, mainWorkspacePath, ticketKey, runId, branch, beforeMerge } = params;
   const label = ticketKey ?? runId.slice(0, 8);
@@ -574,6 +588,7 @@ async function mergeRunIntoMainWorkspace(params: {
   }
 
   return mainWorkspaceLock.run(path.resolve(mainWorkspacePath), async () => {
+    if (params.setAside()) throw runSetAside(label);
     const inWorktree = { cwd: worktreePath };
     const inMain = { cwd: mainWorkspacePath };
 

@@ -254,6 +254,7 @@ const CALL_SITES: CallSite[] = [
       git(main, 'worktree', 'add', '-q', '-b', 'emberline/a', wt, 'HEAD');
       writeFileSync(path.join(wt, 'b.js'), 'b\n');
       const res = await syncWorktreeToMainWorkspace({
+        setAside: () => false,
         worktreePath: wt,
         mainWorkspacePath: main,
         ticketKey: 'T-1',

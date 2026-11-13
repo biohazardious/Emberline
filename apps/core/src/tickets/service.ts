@@ -1837,9 +1837,8 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       run,
       mainWorkspacePath,
       ticketKey,
-      // Also checked under the main-workspace lock, right before the merge: a run set aside while
-      // this pass waited for the lock merges nothing.
-      stale: () => stale() || this.runs.wasSetAside(run.id),
+      stale,
+      setAside: () => this.runs.wasSetAside(run.id),
       heal,
       commit,
       workingBranch,

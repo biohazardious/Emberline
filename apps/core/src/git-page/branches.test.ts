@@ -361,6 +361,38 @@ describe('a working branch the factory merges into', () => {
     expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
   });
 
+  it("a person's merge of a run set aside is refused, also when the set-aside lands while it waits for the lock", async () => {
+    const ticket = t.tickets.create(projectId, { title: 'Old history', status: 'review' });
+    const at = (id: string) => {
+      const dir = path.join(t.dir, `wt-${id}`);
+      git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
+      commit(dir, `${id}.txt`);
+      seedRun(id, { state: 'done', branch: `emberline/${id}`, worktreePath: dir, ticketId: ticket.id });
+    };
+    const mainBefore = git(projectPath, 'rev-parse', 'main');
+    at('pa');
+    await t.runs.setAside('pa', 'Set aside by Match origin');
+    const refused = await send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: 'pa' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'run_set_aside', ticketId: ticket.id });
+    expect(refused.json().message).toContain('set aside by Match origin');
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+
+    // Asked again under the lock: a merge that waited for it while the run was set aside merges nothing.
+    at('pb');
+    let release!: () => void;
+    const held = withMainWorkspaceLock(projectPath, () => new Promise<void>((r) => (release = r)));
+    const waiting = send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: 'pb' });
+    await new Promise((r) => setTimeout(r, 300));
+    await t.runs.setAside('pb', 'Set aside by Match origin');
+    release();
+    await held;
+    const late = await waiting;
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error).toBe('run_set_aside');
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+  });
+
   it('a merge waits while the main workspace is off the working branch, and main is unchanged', async () => {
     git(projectPath, 'branch', 'develop');
     writeRepositorySettings(t.db, projectId, { workingBranch: 'develop' }); // main stays checked out
