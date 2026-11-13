@@ -401,8 +401,12 @@ export class GitPageService {
     const { sync, syncStop } = readRepositorySettings(this.db, projectId);
     if (sync?.state !== 'conflict' || !sync.branch || !syncStop)
       throw conflict('There is no pull conflict to resolve.', 'no_conflict');
+    // One ticket per stop: while the one made for it is open, asking again answers with it.
+    const made = syncStop.ticketId ? this.deps.tickets.find(syncStop.ticketId) : undefined;
+    if (made && made.projectId === projectId && made.status !== 'done') return { ticketId: made.id };
     const { title, body } = pullTicketText(syncStop.source, sync.branch, sync.files);
     const ticket = this.deps.tickets.create(projectId, { title, body, status: 'ready' });
+    writeRepositorySettings(this.db, projectId, { syncStop: { ...syncStop, ticketId: ticket.id } });
     return { ticketId: ticket.id };
   }
 }

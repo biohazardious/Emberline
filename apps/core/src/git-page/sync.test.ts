@@ -264,6 +264,53 @@ describe('pull from origin', () => {
     );
   });
 
+  it('one ticket per conflict, and auto-pull lifts the stop once the ticket merged origin in', async () => {
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    await pullNow();
+    expect((await settled()).state).toBe('conflict');
+    const first = await send('POST', gitUrl('/pull/ticket'));
+    const again = await send('POST', gitUrl('/pull/ticket'));
+    expect(again.json().ticketId).toBe(first.json().ticketId);
+    expect(t.tickets.list(projectId).filter((x) => x.title === 'Merge origin/main into main')).toHaveLength(
+      1,
+    );
+
+    // The ticket's run merges origin in (by hand here), as its prompt asks.
+    git(projectPath, 'fetch', '-q', bare, 'main');
+    try {
+      git(projectPath, 'merge', '-q', 'FETCH_HEAD');
+    } catch {
+      // the conflict the ticket is for
+    }
+    writeFileSync(path.join(projectPath, 'a.txt'), 'mine and theirs\n');
+    git(projectPath, 'commit', '-qam', 'fix: merge origin/main');
+    // origin did not move, yet the stop no longer stands: the tick pulls and lifts it.
+    await new GitSync(t.db, service(), { log: () => undefined }).tick();
+    expect(storedSync()?.state).toBe('up_to_date');
+    expect(readRepositorySettings(t.db, projectId).syncStop).toBeNull();
+    expect((await send('POST', gitUrl('/pull/ticket'))).statusCode).toBe(409);
+  });
+
+  it('a ticket that is done no longer answers for its conflict: asking again makes a new one', async () => {
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    await pullNow();
+    expect((await settled()).state).toBe('conflict');
+    const first = (await send('POST', gitUrl('/pull/ticket'))).json().ticketId as string;
+    // The same stop again (a person's Pull) keeps its ticket.
+    await pullNow();
+    expect((await settled()).state).toBe('conflict');
+    expect((await send('POST', gitUrl('/pull/ticket'))).json().ticketId).toBe(first);
+    t.tickets.update(first, { status: 'done' });
+    const second = (await send('POST', gitUrl('/pull/ticket'))).json().ticketId as string;
+    expect(second).not.toBe(first);
+  });
+
   it('heals a purely additive conflict like the merge ladder does', async () => {
     const { elsewhere, mine } = additiveConflict();
     // A heal worktree a crash left behind goes before the next heal.

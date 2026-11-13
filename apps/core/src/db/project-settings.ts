@@ -178,6 +178,13 @@ const SyncStopSchema = z.object({
   main: z.string().nullable(),
   /** What was being merged: `origin/<branch>`, or the default branch merged into the working branch. */
   source: z.string(),
+  /**
+   * The commit that was being merged. Once the working branch has it (a "Resolve with a ticket" run
+   * merged it in), auto-pull tries again. Absent in stops stored before it was kept.
+   */
+  sourceTip: z.string().nullable().optional(),
+  /** The ticket "Resolve with a ticket" made for this stop: asked again, it is the answer while open. */
+  ticketId: z.string().optional(),
 });
 export type SyncStop = z.infer<typeof SyncStopSchema>;
 const RemoteCheckSchema = z.object({

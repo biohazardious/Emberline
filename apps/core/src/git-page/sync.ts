@@ -113,6 +113,8 @@ interface Outcome {
   message: string | null;
   /** A stop that waits for the person (a conflict, a rewritten origin): what was being merged. */
   source?: string;
+  /** That stop's commit being merged. */
+  sourceTip?: string | null;
 }
 
 type Mode = 'read' | 'auto' | 'person';
@@ -154,9 +156,22 @@ function record(
     const pulledOids = extra.pulled?.length
       ? [...new Set([...extra.pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT)
       : settings.pulledOids;
+    const old = settings.syncStop;
+    // The same stop again (origin's tips and what was merged): its ticket stays its ticket.
+    const same =
+      old !== null &&
+      extra.tips !== undefined &&
+      old.working === extra.tips.working &&
+      old.main === extra.tips.main &&
+      old.source === outcome.source;
     const syncStop =
       outcome.source !== undefined && extra.tips
-        ? { ...extra.tips, source: outcome.source }
+        ? {
+            ...extra.tips,
+            source: outcome.source,
+            sourceTip: outcome.sourceTip ?? null,
+            ...(same && old.ticketId ? { ticketId: old.ticketId } : {}),
+          }
         : outcome.state === 'pulled' || outcome.state === 'up_to_date'
           ? null
           : settings.syncStop;
@@ -260,9 +275,16 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
   if (mode === 'auto') {
     // With auto-pull off, the read alone shows the new commits; the person pulls.
     if (!settings.autoPull) return current();
-    // A conflict or a rewritten origin waits for the person, until origin moves on.
+    // A conflict or a rewritten origin waits for the person, until origin moves on, or until the
+    // working branch has what was being merged (a "Resolve with a ticket" run merged it in).
     const stop = settings.syncStop;
-    if (stop && stop.working === read.working && stop.main === read.main) return current();
+    if (
+      stop &&
+      stop.working === read.working &&
+      stop.main === read.main &&
+      !(await stopResolved(ws.path, stop.sourceTip ?? null, read.workingBranch))
+    )
+      return current();
   }
   const ctx: PullContext = {
     deps,
@@ -286,6 +308,13 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
   if (!deps.heals.start(projectId, message, () => healInBackground(ctx, heal)))
     return healingSync(db, projectId, deps.heals.running(projectId) ?? message);
   return record(db, projectId, { state: 'idle', branch: ctx.working, message });
+}
+
+/** Whether the working branch has the commit a stop was merging, so the stop no longer stands. */
+async function stopResolved(mainPath: string, sourceTip: string | null, working: string): Promise<boolean> {
+  if (!sourceTip) return false;
+  const tip = await localTip(mainPath, working);
+  return tip !== null && (await isAncestorCommit(mainPath, sourceTip, tip));
 }
 
 /** Records how the pull ended, with the commits it brought in. */
@@ -516,7 +545,7 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
         message: `${main} and origin's ${main} both have commits the other lacks, so nothing was pulled. Emberline never merges into ${main} by itself: bring origin's ${main} in from a terminal, or use Match origin to take origin's.`,
       });
     } else if (state === 'rewritten') {
-      return stop(rewrittenOutcome(main, `origin/${main}`));
+      return stop(rewrittenOutcome(main, `origin/${main}`, remote.main));
     }
   }
 
@@ -530,7 +559,7 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
       const merged = await mergeInto(ctx, remote.working, `origin/${working}`);
       if (merged) return merged;
     } else if (state === 'rewritten') {
-      return stop(rewrittenOutcome(working, `origin/${working}`));
+      return stop(rewrittenOutcome(working, `origin/${working}`, remote.working));
     }
   }
 
@@ -544,6 +573,7 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
           state: 'rewritten',
           branch: working,
           source: main,
+          sourceTip: mainTip,
           message: `${main} no longer shares history with ${working} (one of them was rewritten), so ${main} was not merged into ${working}. Match origin on ${working} takes origin's history, or merge them in a terminal.`,
         });
       const merged = await mergeInto(ctx, mainTip, main);
@@ -557,10 +587,11 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
   });
 }
 
-const rewrittenOutcome = (branch: string, source: string): Outcome => ({
+const rewrittenOutcome = (branch: string, source: string, sourceTip: string): Outcome => ({
   state: 'rewritten',
   branch,
   source,
+  sourceTip,
   message: `origin's ${branch} no longer shares history with ${branch} here (it was rewritten and force-pushed), so nothing was pulled into it. Match origin takes origin's history and keeps the old tip under a backup ref.`,
 });
 
@@ -570,13 +601,20 @@ const dirtyOutcome = (working: string, what: string, why?: string): Outcome => (
   message: `The main workspace has uncommitted changes, so Emberline did not bring ${what} into ${working}. Commit or discard them, then pull again.${why ? ` (${why})` : ''}`,
 });
 
-const conflictOutcome = (working: string, label: string, files: string[], detail?: string): Outcome => {
+const conflictOutcome = (
+  working: string,
+  label: string,
+  sourceTip: string,
+  files: string[],
+  detail?: string,
+): Outcome => {
   const shown = files.slice(0, 10).join(', ') + (files.length > 10 ? ', …' : '');
   return {
     state: 'conflict',
     branch: working,
     files,
     source: label,
+    sourceTip,
     message: `${label} and ${working} changed the same lines in ${shown}, so ${working} was left as it was. Resolve it with a ticket, or merge ${label} in a terminal.${detail ? ` ${detail}` : ''}`,
   };
 };
@@ -652,7 +690,7 @@ async function mergeInto(ctx: PullContext, source: string, label: string): Promi
   if (conflicts.length > 0) {
     if (effectiveFactorySettings(deps.db, projectId).autoResolveAdditiveConflicts)
       return { heal: { before, source, label, conflicts } };
-    return { outcome: conflictOutcome(working, label, conflicts) };
+    return { outcome: conflictOutcome(working, label, source, conflicts) };
   }
   const inMain = { cwd: ws.path };
   try {
@@ -684,7 +722,7 @@ async function mergeInto(ctx: PullContext, source: string, label: string): Promi
     // Only a merge that started is aborted; the tree was clean, so that puts it back exactly.
     if ((await refTip(ws.path, 'MERGE_HEAD')) !== null)
       await execGitFile(['merge', '--abort'], inMain).catch(unlessRunnerUnavailable(undefined));
-    if (files.length > 0) return { outcome: conflictOutcome(working, label, files) };
+    if (files.length > 0) return { outcome: conflictOutcome(working, label, source, files) };
     if (WORKSPACE_DIRTY.test(why)) return { outcome: dirtyOutcome(working, label, why) };
     return {
       outcome: {
@@ -747,7 +785,7 @@ async function healPull(
     });
     if (!healed.healed) {
       const files = healed.conflicts.length > 0 ? healed.conflicts : req.conflicts;
-      return { outcome: conflictOutcome(working, req.label, files, healed.message) };
+      return { outcome: conflictOutcome(working, req.label, req.source, files, healed.message) };
     }
     return { before: req.before, commit: healed.commitOid };
   } finally {
