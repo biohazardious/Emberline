@@ -216,6 +216,8 @@ export const GitPageStatus = z.object({
   tagsDifferFromOrigin: z.array(z.string()),
   /** origin's tags named like a branch, which Emberline does not create here. */
   tagsNamedLikeBranches: z.array(z.string()),
+  /** Some of origin's branches or tags could not be fetched at the last read; Emberline tries again later. */
+  originRefsUnread: z.boolean(),
 });
 export type GitPageStatus = z.infer<typeof GitPageStatus>;
 

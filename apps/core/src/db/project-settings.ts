@@ -180,6 +180,11 @@ export interface RepositorySettings {
    * here, since a tag beside a branch of the same name makes git's short names ambiguous.
    */
   tagsNamedLikeBranches: string[];
+  /**
+   * The last fetch of origin's other branches and tags (not main or the working branch) that failed:
+   * those refs are left alone for a while (origin-refs.ts), and the Git page says some could not be read.
+   */
+  originRefsUnread: { at: string; key: string } | null;
   releaseDraft: ReleaseDraft | null;
   releaseJob: ReleaseJob | null;
 }
@@ -220,6 +225,7 @@ const RepositorySettingsSchema = z.object({
   syncStop: SyncStopSchema.nullable().catch(null).default(null),
   tagsDifferFromOrigin: z.array(z.string()).max(100).catch([]).default([]),
   tagsNamedLikeBranches: z.array(z.string()).max(100).catch([]).default([]),
+  originRefsUnread: z.object({ at: z.string(), key: z.string() }).nullable().catch(null).default(null),
   releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
   releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });

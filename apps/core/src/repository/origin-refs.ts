@@ -4,6 +4,7 @@
  * fetch of the objects that are missing) runs outside the main-workspace lock; the ref writes run
  * under it, compare-and-set, and only for what changed. A local tag is never moved or deleted.
  */
+import { createHash } from 'node:crypto';
 import { isRunnerUnavailable } from '../command-exec.js';
 import { HttpError } from '../errors.js';
 import { execGitFile } from '../git-exec.js';
@@ -28,12 +29,28 @@ const FETCH_CHUNK = 100;
 /** The tags that differ from origin's kept for the Git page, at most. */
 const DIFFERING_KEPT = 100;
 
+/**
+ * How long origin's other branches and tags are left alone after their fetch failed, unless the
+ * refs to fetch change first: a fetch that keeps failing would otherwise run on every read (every
+ * 2 minutes) while it holds the project's remote-ops queue.
+ */
+export const UNREAD_BACKOFF_MS = 30 * 60_000;
+
+/** The last fetch of origin's other branches and tags that failed: when, and what it fetched. */
+export interface UnreadRefs {
+  at: string;
+  /** A digest of the refs and commits it asked for: other refs to fetch mean a new try. */
+  key: string;
+}
+
 /** What one read brought in, ready to be written under the lock. */
 export interface OriginObjects {
   /** origin's branches whose commits are here now, by name. */
   branches: Map<string, string>;
   /** origin's tags this project lacked, whose objects are here now. */
   newTags: Map<string, string>;
+  /** Set while some of origin's branches or tags (not main or the working branch) could not be fetched. */
+  unread: UnreadRefs | null;
 }
 
 /** The refs under `prefix` (`refs/remotes/origin/`, `refs/tags/`) with what each names, by the rest of the name. */
@@ -77,6 +94,9 @@ export async function bringOriginObjects(
   access: RemoteAccess,
   refs: OriginRefs,
   needed: readonly string[],
+  /** The last failed fetch of the other refs: within {@link UNREAD_BACKOFF_MS}, the same refs are not tried again. */
+  lastUnread: UnreadRefs | null = null,
+  now = Date.now(),
 ): Promise<OriginObjects> {
   const [tracked, localTags, localBranches] = await Promise.all([
     refsUnder(mainPath, 'refs/remotes/origin/'),
@@ -108,21 +128,41 @@ export async function bringOriginObjects(
     if (await hasRealObject(mainPath, oid)) newTags.set(name, oid);
     else missing.push({ ref: `refs/tags/${name}`, name, oid, tag: true });
   }
-  if (missing.length === 0) return { branches, newTags };
+  if (missing.length === 0) return { branches, newTags, unread: null };
 
+  const isNeeded = (m: (typeof missing)[number]) => !m.tag && needed.includes(m.name);
+  const optional = missing.filter((m) => !isNeeded(m));
+  const key = createHash('sha256')
+    .update(
+      optional
+        .map((m) => `${m.ref} ${m.oid}`)
+        .sort()
+        .join('\n'),
+    )
+    .digest('hex')
+    .slice(0, 32);
+  // The same refs failed a short while ago: only what the read needs is fetched this time.
+  const waiting =
+    optional.length > 0 &&
+    lastUnread !== null &&
+    lastUnread.key === key &&
+    now - Date.parse(lastUnread.at) < UNREAD_BACKOFF_MS;
+  const toFetch = waiting ? missing.filter(isNeeded) : missing;
+  let unread: UnreadRefs | null = waiting ? lastUnread : null;
   try {
-    for (let i = 0; i < missing.length; i += FETCH_CHUNK)
+    for (let i = 0; i < toFetch.length; i += FETCH_CHUNK)
       await fetchRefObjects(
         mainPath,
         access,
-        missing.slice(i, i + FETCH_CHUNK).map((m) => m.ref),
+        toFetch.slice(i, i + FETCH_CHUNK).map((m) => m.ref),
       );
   } catch (error) {
     if (isRunnerUnavailable(error)) throw error;
-    // A ref origin dropped since the listing fails the whole fetch: the branches the read needs are
-    // fetched alone then (their own failure is the read's), and the rest wait for the next read.
-    for (const m of missing)
-      if (!m.tag && needed.includes(m.name)) await fetchBranchObjects(mainPath, access, m.name, m.oid);
+    // A ref origin dropped since the listing, or one the forge will not send, fails the whole fetch:
+    // the branches the read needs are fetched alone then (their own failure is the read's), and the
+    // rest are left alone for a while.
+    if (optional.length > 0) unread = { at: new Date(now).toISOString(), key };
+    for (const m of missing) if (isNeeded(m)) await fetchBranchObjects(mainPath, access, m.name, m.oid);
   }
   for (const m of missing) {
     const here = m.tag ? await hasRealObject(mainPath, m.oid) : await hasRealCommit(mainPath, m.oid);
@@ -134,12 +174,12 @@ export async function bringOriginObjects(
         `origin's ${m.name} changed while Emberline read it. Press Refresh again.`,
       );
   }
-  return { branches, newTags };
+  return { branches, newTags, unread };
 }
 
 /**
- * Under the main-workspace lock: each `refs/remotes/origin/<branch>` that changed set to what origin
- * named, the tracking refs of branches origin no longer has removed, and the new tags created
+ * Under the main-workspace lock: the tracking refs of branches origin no longer has removed, each
+ * `refs/remotes/origin/<branch>` that changed set to what origin named, and the new tags created
  * (compare-and-set: one that appeared meanwhile is left as it is). A write of `needed` that fails is
  * the read's failure; any other is skipped (a name that clashes with another ref, say). Returns the
  * tags here that name something other than origin's tag of the same name, and origin's tags that
@@ -153,6 +193,15 @@ export async function writeOriginRefs(
 ): Promise<{ tagsDiffer: string[]; tagsNamedLikeBranches: string[] }> {
   const inMain = { cwd: mainPath };
   const tracked = await refsUnder(mainPath, 'refs/remotes/origin/');
+  // The branches gone from origin go first: one named like a new branch's folder (`develop/x` when
+  // origin now has `develop`) would block that branch's write.
+  for (const [name, old] of tracked) {
+    if (refs.branches.has(name)) continue;
+    await execGitFile(
+      ['update-ref', '-m', 'emberline: gone from origin', '-d', `refs/remotes/origin/${name}`, old],
+      inMain,
+    ).catch(unlessRunnerUnavailable(undefined));
+  }
   for (const [name, oid] of objects.branches) {
     const old = tracked.get(name);
     if (old === oid) continue;
@@ -164,13 +213,6 @@ export async function writeOriginRefs(
     } catch (error) {
       if (isRunnerUnavailable(error) || needed.includes(name)) throw error;
     }
-  }
-  for (const [name, old] of tracked) {
-    if (refs.branches.has(name)) continue;
-    await execGitFile(
-      ['update-ref', '-m', 'emberline: gone from origin', '-d', `refs/remotes/origin/${name}`, old],
-      inMain,
-    ).catch(unlessRunnerUnavailable(undefined));
   }
   const [localTags, localBranches] = await Promise.all([
     refsUnder(mainPath, 'refs/tags/'),

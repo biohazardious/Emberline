@@ -50,6 +50,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     backups: [],
     tagsDifferFromOrigin: [],
     tagsNamedLikeBranches: [],
+    originRefsUnread: false,
     ...over,
   }) as GitPageStatus;
 const branch = (name: string, kind: GitBranch['kind']) =>
@@ -109,6 +110,16 @@ describe('Git page', () => {
     );
     expect(view.container.querySelector('option[value="12112026_backup"]')?.textContent).toBe(
       '12112026_backup (on origin)',
+    );
+  });
+
+  it("says when some of origin's branches could not be read", async () => {
+    serve(status({ originRefsUnread: true }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.textContent).toContain(
+        "Some of origin's branches or tags could not be read. Emberline tries them again in a while.",
+      ),
     );
   });
 

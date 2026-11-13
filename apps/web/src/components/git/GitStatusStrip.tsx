@@ -271,6 +271,11 @@ export function GitStatusStrip({
 
       {tagsNote && <p className="muted small">{tagsNote}</p>}
       {tagsLikeBranchesNote && <p className="muted small">{tagsLikeBranchesNote}</p>}
+      {status.originRefsUnread && (
+        <p className="muted small">
+          Some of origin&apos;s branches or tags could not be read. Emberline tries them again in a while.
+        </p>
+      )}
 
       {detached && (
         <div className="banner banner-warn" role="status">

@@ -833,6 +833,72 @@ describe('reading all of origin', () => {
     expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
   });
 
+  it('a branch origin replaced by one named like its folder (develop/x, then develop) never blocks a read', async () => {
+    const elsewhere = cloneOf(bare);
+    git(elsewhere, 'switch', '-q', '-c', 'develop/x');
+    const tip = commit(elsewhere, 'x.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'develop/x');
+    await refresh();
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/develop/x')).toBe(tip);
+    // On origin, develop/x goes and develop comes; here develop is the working branch (a needed read).
+    git(bare, 'update-ref', '-d', 'refs/heads/develop/x');
+    git(bare, 'update-ref', 'refs/heads/develop', tip);
+    git(projectPath, 'branch', 'develop');
+    writeRepositorySettings(t.db, projectId, { workingBranch: 'develop' });
+    await refresh();
+    expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.error).toBeNull();
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/develop')).toBe(tip);
+    expect(has(projectPath, 'refs/remotes/origin/develop/x')).toBe('');
+  });
+
+  it("origin's branches whose fetch keeps failing are left alone for a while, and the page says so", async () => {
+    const elsewhere = cloneOf(bare);
+    git(elsewhere, 'switch', '-q', '-c', 'broken');
+    const broken = commit(elsewhere, 'broken.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'broken');
+    const { localCommandExecutor, setCommandExecutor } = await import('../command-exec.js');
+    let fetches = 0;
+    let failing = true;
+    setCommandExecutor(async (request) => {
+      if (!request.args.includes('fetch') || !request.args.includes('refs/heads/broken'))
+        return localCommandExecutor(request);
+      fetches++;
+      // A ref the forge refuses to send, every time.
+      const args = request.args.map((a) => (failing && a === 'refs/heads/broken' ? 'refs/heads/no-such' : a));
+      return localCommandExecutor({ ...request, args });
+    });
+    try {
+      await refresh();
+      expect(fetches).toBe(1);
+      expect(readRepositorySettings(t.db, projectId).lastRemoteCheck?.error).toBeNull();
+      expect((await send('GET', gitUrl())).json().originRefsUnread).toBe(true);
+      // The next reads leave it alone: no fetch while origin's listing stays the same.
+      await refresh();
+      await refresh();
+      expect(fetches).toBe(1);
+      // origin moved on: tried again.
+      commit(elsewhere, 'broken-2.txt');
+      git(elsewhere, 'push', '-q', 'origin', 'broken');
+      await refresh();
+      expect(fetches).toBe(2);
+      // After the wait, tried again too, and once it comes in the page no longer says so.
+      failing = false;
+      const unread = readRepositorySettings(t.db, projectId).originRefsUnread!;
+      writeRepositorySettings(t.db, projectId, {
+        originRefsUnread: { ...unread, at: new Date(Date.now() - 31 * 60_000).toISOString() },
+      });
+      await refresh();
+      expect(fetches).toBe(3);
+    } finally {
+      setCommandExecutor(localCommandExecutor);
+    }
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/broken')).toBe(
+      git(elsewhere, 'rev-parse', 'HEAD'),
+    );
+    expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/broken')).not.toBe(broken);
+    expect((await send('GET', gitUrl())).json().originRefsUnread).toBe(false);
+  });
+
   it('a branch origin drops between the listing and the fetch fails no read; the others come in the next one', async () => {
     const elsewhere = cloneOf(bare);
     git(elsewhere, 'switch', '-q', '-c', 'gone-soon');

@@ -320,6 +320,7 @@ export class GitPageService {
       backups: [],
       tagsDifferFromOrigin: settings.tagsDifferFromOrigin,
       tagsNamedLikeBranches: settings.tagsNamedLikeBranches,
+      originRefsUnread: settings.originRefsUnread !== null,
     };
     const dir = project.path;
     if (!(await isGitRepo(dir))) return base;

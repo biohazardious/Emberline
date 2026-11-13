@@ -580,6 +580,7 @@ export class RepositoryService {
     const workingBranch = workingBranchOf(readRepositorySettings(this.db, projectId), branch);
     const separate = workingBranch !== branch;
     const needed = separate ? [branch, workingBranch] : [branch];
+    const { originRefsUnread } = readRepositorySettings(this.db, projectId);
     const at = new Date().toISOString();
     const checkedUrl = remoteUrlForDisplay(ws.origin).display; // stored: never with a token
     const key = originKey(ws.origin);
@@ -595,7 +596,7 @@ export class RepositoryService {
       const refs = await listOriginRefs(ws.path, ws.access);
       remoteOid = refs.branches.get(branch) ?? null;
       workingOid = separate ? (refs.branches.get(workingBranch) ?? null) : remoteOid;
-      read = { refs, objects: await bringOriginObjects(ws.path, ws.access, refs, needed) };
+      read = { refs, objects: await bringOriginObjects(ws.path, ws.access, refs, needed, originRefsUnread) };
       check = { url: checkedUrl, originKey: key, branch, at, published: remoteOid !== null, error: null };
     } catch (error) {
       if (isRunnerUnavailable(error)) throw error; // origin was not read: nothing to record
@@ -623,7 +624,11 @@ export class RepositoryService {
         writeRepositorySettings(this.db, projectId, {
           lastRemoteCheck: check,
           ...(tags
-            ? { tagsDifferFromOrigin: tags.tagsDiffer, tagsNamedLikeBranches: tags.tagsNamedLikeBranches }
+            ? {
+                tagsDifferFromOrigin: tags.tagsDiffer,
+                tagsNamedLikeBranches: tags.tagsNamedLikeBranches,
+                originRefsUnread: read?.objects.unread ?? null,
+              }
             : {}),
         });
       } catch {
@@ -668,6 +673,7 @@ export class RepositoryService {
           lastRemoteCheck: null,
           tagsDifferFromOrigin: [],
           tagsNamedLikeBranches: [],
+          originRefsUnread: null,
         });
     });
   }
