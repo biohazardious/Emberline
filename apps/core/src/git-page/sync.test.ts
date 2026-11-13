@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from 'node:path';
 import { type BuildDemoResponse, TICKET_BODY_MAX } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
+import {
+  readRepositorySettings,
+  writeProjectSettings,
+  writeRepositorySettings,
+} from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { updateFactorySettings } from '../factory/settings.js';
@@ -812,6 +816,37 @@ describe('pull from origin', () => {
     expect(matched.statusCode).toBe(200);
     expect(head()).toBe(rewritten);
     expect(t.runs.getRun('later').cancelled).toBe(true);
+  });
+
+  it('a backup that cannot be kept refuses Match origin before any run is set aside', async () => {
+    const oldTip = head();
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    const busy = t.tickets.create(projectId, { title: 'Live work', status: 'in_progress' });
+    seedRun('kept1', 'working', { ticketId: busy.id });
+    // A ref where the backups' folder would go: no backup ref can be made under it.
+    git(projectPath, 'update-ref', 'refs/emberline/backup', oldTip);
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['kept1'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('backup_failed');
+    expect(t.runs.getRun('kept1').cancelled).toBe(false);
+    expect(t.tickets.get(busy.id).status).toBe('in_progress');
+    expect(head()).toBe(oldTip);
+  });
+
+  it("says Backlog auto-pickup is on as the dispatcher reads it: the global setting, whatever a project's own settings hold", async () => {
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('hint1', 'working');
+    updateFactorySettings(t.db, { autoPickupReady: true, autoPickupBacklog: true });
+    // A project's own settings that say otherwise are not what dispatch reads.
+    writeProjectSettings(t.db, projectId, { gates: { autoPickupBacklog: false, autoPickupReady: false } });
+    const on = (await send('POST', gitUrl('/match-origin'), { branch: 'main' })).json();
+    expect(on.backlogPickup).toBe(true);
+    updateFactorySettings(t.db, { autoPickupBacklog: false });
+    writeProjectSettings(t.db, projectId, { gates: { autoPickupBacklog: true } });
+    const off = (await send('POST', gitUrl('/match-origin'), { branch: 'main' })).json();
+    expect(off.backlogPickup).toBe(false);
   });
 
   it('an unfinished merge in the main workspace refuses Match origin before any run is set aside', async () => {

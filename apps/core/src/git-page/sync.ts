@@ -30,7 +30,7 @@ import { commitIdentityFor, gitIdentityArgs } from '../factory/commit-identity.j
 import { healConflicts } from '../factory/conflict-heal.js';
 import type { buildWorkspaceDemo } from '../factory/demo.js';
 import { resetScratchFilesToHead, withMainWorkspaceLock } from '../factory/merge.js';
-import { effectiveFactorySettings } from '../factory/settings.js';
+import { effectiveFactorySettings, getFactorySettings } from '../factory/settings.js';
 import { execGitFile } from '../git-exec.js';
 import {
   isAncestorCommit,
@@ -1042,18 +1042,17 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
       // Runs based on the working branch's history would merge it back in. They are set aside only
       // as the person confirmed them: a run that blocks since the refusal they saw is listed again,
       // and nothing is set aside.
-      let setAside = 0;
-      if (branch === working) {
-        const live = await liveRunsOf(db, projectId);
+      const live = branch === working ? await liveRunsOf(db, projectId) : [];
+      if (live.length > 0) {
         const names = live.map((r) => r.title ?? r.id).join(', ');
-        // Whether the factory may start their tickets again from Backlog (the dialog says so).
-        const factory = effectiveFactorySettings(db, projectId);
+        // Whether the factory may start their tickets again from Backlog (the dialog says so), as
+        // the dispatcher reads it: the global settings (a project's own overrides are gates only).
+        const factory = getFactorySettings(db);
         const details = {
           runs: blockingRuns(live),
           backlogPickup: factory.autoPickupReady && factory.autoPickupBacklog,
         };
-        const allConfirmed = live.every((r) => confirmed.has(r.id));
-        if (live.length > 0 && !(allConfirmed && deps.setAside))
+        if (!(live.every((r) => confirmed.has(r.id)) && deps.setAside))
           throw new HttpError(
             409,
             'runs_live',
@@ -1068,21 +1067,32 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
             `${branch} stays as it is while a run is starting, so nothing was set aside. Match origin again in a moment, once it has started.`,
             details,
           );
-        if (live.length > 0) await deps.setAside?.(projectId, live, branch);
-        setAside = live.length;
       }
+      // The backup moves no branch: kept before any run is set aside, so its failure changes nothing.
       const backup = await keepBackup(ws.path, branch, local);
-      if (checkedOut === branch) {
-        try {
-          await execGitFile(['reset', '--keep', remote], { cwd: ws.path, timeout: 120_000 });
-        } catch (error) {
-          if (isRunnerUnavailable(error)) throw error;
-          return { backup, setAside, refused: gitMessage(error) };
+      if (live.length > 0) await deps.setAside?.(projectId, live, branch);
+      const setAside = live.length;
+      try {
+        if (checkedOut === branch) {
+          try {
+            await execGitFile(['reset', '--keep', remote], { cwd: ws.path, timeout: 120_000 });
+          } catch (error) {
+            if (isRunnerUnavailable(error)) throw error;
+            return { backup, setAside, refused: gitMessage(error) };
+          }
+        } else {
+          await execGitFile(
+            ['update-ref', '-m', 'emberline: match origin', `refs/heads/${branch}`, remote, local],
+            { cwd: ws.path },
+          );
         }
-      } else {
-        await execGitFile(
-          ['update-ref', '-m', 'emberline: match origin', `refs/heads/${branch}`, remote, local],
-          { cwd: ws.path },
+      } catch (error) {
+        // The runs stay set aside: the message says so, whatever stopped the match afterwards.
+        if (setAside === 0 || isRunnerUnavailable(error)) throw error;
+        const why = error instanceof HttpError ? error.message : gitMessage(error);
+        throw conflict(
+          `${setAsideCount(setAside)} set aside; ${branch} stayed as it was (its tip is also kept as ${backup}): ${why}`,
+          error instanceof HttpError ? error.code : 'match_failed',
         );
       }
       const pulled = (
@@ -1105,7 +1115,7 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
   if (done.refused !== null) {
     const why = `the main workspace has changes that matching origin would overwrite (its tip is also kept as ${done.backup}). Commit or discard them, then match origin again. (${done.refused})`;
     // The runs stay set aside: a person who confirmed it learns it happened although nothing moved.
-    const runs = done.setAside === 1 ? '1 run was' : `${done.setAside} runs were`;
+    const runs = setAsideCount(done.setAside);
     return record(db, projectId, {
       state: 'workspace_dirty',
       branch,
@@ -1123,6 +1133,9 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
     message: `${branch} now matches origin. Its old tip is kept as ${done.backup}.`,
   });
 }
+
+/** "1 run was" / "N runs were", for a message after Match origin set runs aside. */
+const setAsideCount = (n: number) => (n === 1 ? '1 run was' : `${n} runs were`);
 
 /** The reason on the run events of a run Match origin set aside, and how its ticket's note starts. */
 export const SET_ASIDE_REASON = 'Set aside by Match origin';

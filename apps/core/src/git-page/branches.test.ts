@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
 import type { HttpError } from '../errors.js';
-import { holdMergesInto, withMainWorkspaceLock } from '../factory/merge.js';
+import { holdMergesInto, runsMergingInto, withMainWorkspaceLock } from '../factory/merge.js';
 import type { RepositoryService } from '../repository/service.js';
 import { prepareWorkspace } from '../runs/git.js';
 import { doneStarting, startingWorktrees } from '../runs/starting.js';
@@ -433,7 +433,8 @@ describe('a working branch the factory merges into', () => {
     let release!: () => void;
     const held = withMainWorkspaceLock(projectPath, () => new Promise<void>((r) => (release = r)));
     const waiting = send('POST', `/api/projects/${projectId}/sync-worktree`, { runId: 'pb' });
-    await new Promise((r) => setTimeout(r, 300));
+    // Past the route's own check: the merge has started and waits for the lock held above.
+    await expect.poll(() => runsMergingInto(projectPath)).toContain('pb');
     await t.runs.setAside('pb', 'Set aside by Match origin');
     release();
     await held;
