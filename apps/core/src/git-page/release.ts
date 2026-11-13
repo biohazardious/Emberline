@@ -36,6 +36,7 @@ import { writeResolved } from '../factory/conflict-heal.js';
 import { buildWorkspaceDemo } from '../factory/demo.js';
 import { runsMergingInto, withMainWorkspaceLock } from '../factory/merge.js';
 import { parseForgeRemote, type ForgeService } from '../forge/service.js';
+import { redactGitText } from '../git-gateway/gateway.js';
 import { execGitFile } from '../git-exec.js';
 import {
   isAncestorCommit,
@@ -143,11 +144,14 @@ const ORIGIN_MOVED_AFTER_CHECKS = "Origin's main moved after the checks; Retry c
 const mainMoved = (main: string) =>
   `${main} moved during the release (something else changed it here), so Emberline stopped. Start the release again once ${main} is where you want it.`;
 
-/** A step's failure as a sentence for the page. */
+/**
+ * A step's failure as a sentence for the page, and for the page sent to ntfy or a webhook: never with
+ * an address's credentials or a capability in it (the forge masks its own token in its errors).
+ */
 function failureText(error: unknown): string {
   if (isRunnerUnavailable(error)) return 'The runner did not answer; Retry once it is back.';
-  if (error instanceof HttpError) return error.message;
-  return gitMessage(error) || 'The step failed.';
+  if (error instanceof HttpError) return redactGitText(error.message);
+  return redactGitText(gitMessage(error)) || 'The step failed.';
 }
 
 /**

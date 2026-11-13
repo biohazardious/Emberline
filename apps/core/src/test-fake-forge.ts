@@ -24,6 +24,8 @@ export interface FakeForge {
   canCreate: boolean;
   orgs: string[];
   releases: { owner: string; repo: string; tag_name: string; name: string; body: string }[];
+  /** Set: creating a release answers this status, with the request's Authorization header in the body. */
+  releaseFailure: number | null;
   bare(owner: string, name: string): string;
   close(): Promise<void>;
 }
@@ -122,6 +124,7 @@ export async function startFakeForge(
     canCreate: true,
     orgs: ['acme'],
     releases: [],
+    releaseFailure: null,
     bare,
     close: async () => undefined,
   };
@@ -195,6 +198,11 @@ export async function startFakeForge(
           return json(res, 400, { message: 'invalid JSON' });
         }
         const [, owner, repo] = release as unknown as [string, string, string];
+        // A proxy that quotes the request back, credential and all.
+        if (forge.releaseFailure)
+          return json(res, forge.releaseFailure, {
+            message: `upstream refused: authorization=${req.headers.authorization ?? ''}`,
+          });
         if (forge.releases.some((r) => r.owner === owner && r.repo === repo && r.tag_name === body.tag_name))
           return json(res, 409, { message: 'release tag already exists' });
         forge.releases.push({ owner, repo, tag_name: body.tag_name, name: body.name, body: body.body });

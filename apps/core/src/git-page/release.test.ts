@@ -506,6 +506,23 @@ describe('release', () => {
     expect(readFileSync(path.join(projectPath, 'CHANGELOG.md')).equals(latin1)).toBe(true);
   });
 
+  it('a forge error that quotes the token is stored and paged with the token masked', async () => {
+    const head = await developWithTickets();
+    const bodies: string[] = [];
+    const jobs = jobsWith({ notify: (_p, _o, m) => bodies.push(m.body) });
+    forge.releaseFailure = 502;
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const job = storedJob();
+    expect(job.state).toBe('failed');
+    const step = job.steps.find((s) => s.name === 'forge_release')!;
+    expect(step.status).toBe('failed');
+    expect(step.detail).toContain('Gitea release failed (502)');
+    expect(step.detail).toContain('authorization=token [redacted]');
+    for (const text of [step.detail, job.error, ...bodies]) expect(text).not.toContain('rl-token');
+    expect(bodies).toHaveLength(1);
+  });
+
   it('without a forge account the tag is pushed and the release step is skipped with the reason', async () => {
     const head = await developWithTickets();
     const jobs = jobsWith({

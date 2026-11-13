@@ -23,6 +23,7 @@ import {
   usableAccountForRemote,
 } from './account-store.js';
 import { remoteUrlForDisplay, sameForgeServer } from './hosts.js';
+import { redactGitText } from '../git-gateway/gateway.js';
 import { type FetchLike, type ForgeTarget, forgeFetch, IssuesClient, readJson } from './issues.js';
 
 export interface ParsedForgeRemote {
@@ -168,6 +169,15 @@ interface ForgeServiceEvents {
   pullRequest: [runId: string, pr: ForgePullRequest];
 }
 
+/**
+ * A forge's error body as a person (and a page sent to ntfy or a webhook) may read it: the token the
+ * call sent masked wherever the forge or a proxy quoted it, then any address's credentials and any
+ * capability, at most 300 characters.
+ */
+function forgeErrorText(text: string, serverUrl: string, token: string): string {
+  return redactGitText(text, { credential: { serverUrl, username: '', token } }).slice(0, 300);
+}
+
 export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   private readonly fetch: FetchLike;
   /** Issue reads and write-back, sharing this service's fetch. */
@@ -263,12 +273,8 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
   ): Promise<{ url: string }> {
     const { remote, token } = await this.projectRemote(projectId);
     const fail = async (label: string, res: Response): Promise<never> => {
-      const text = await res.text().catch(() => '');
-      throw new HttpError(
-        res.status,
-        'forge_error',
-        `${label} release failed (${res.status}): ${text.slice(0, 300)}`,
-      );
+      const text = forgeErrorText(await res.text().catch(() => ''), remote.apiBaseUrl, token);
+      throw new HttpError(res.status, 'forge_error', `${label} release failed (${res.status}): ${text}`);
     };
 
     if (remote.provider === 'gitlab') {
@@ -331,12 +337,12 @@ export class ForgeService extends EventEmitter<ForgeServiceEvents> {
     });
     if (res.status === 404) return null;
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
+      const text = forgeErrorText(await res.text().catch(() => ''), remote.apiBaseUrl, token);
       const label = gitlab ? 'GitLab' : github ? 'GitHub' : 'Gitea';
       throw new HttpError(
         res.status,
         'forge_error',
-        `${label} release lookup failed (${res.status}): ${text.slice(0, 300)}`,
+        `${label} release lookup failed (${res.status}): ${text}`,
       );
     }
     const data = await readJson<{ html_url?: string; _links?: { self?: string } }>(res);
