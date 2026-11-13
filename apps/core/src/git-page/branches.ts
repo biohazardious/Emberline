@@ -9,7 +9,7 @@ import {
   workingBranchOf,
   writeRepositorySettings,
 } from '../db/project-settings.js';
-import { projects, runs } from '../db/schema.js';
+import { projects, runs, tickets } from '../db/schema.js';
 import { badRequest, conflict, HttpError, notFound } from '../errors.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { execGitFile } from '../git-exec.js';
@@ -58,6 +58,24 @@ interface LiveRun {
   branch: string | null;
 }
 
+/** The newest run of each of `ticketIds` (by creation; a later run supersedes the ones before it). */
+function latestRunOfTickets(db: Db, projectId: string, ticketIds: string[]): Map<string, string> {
+  const latest = new Map<string, { id: string; at: number }>();
+  if (ticketIds.length === 0) return new Map();
+  const all = db
+    .select({ id: runs.id, ticketId: runs.ticketId, createdAt: runs.createdAt })
+    .from(runs)
+    .where(and(eq(runs.projectId, projectId), inArray(runs.ticketId, [...new Set(ticketIds)])))
+    .all();
+  for (const r of all) {
+    if (!r.ticketId) continue;
+    const at = r.createdAt.getTime();
+    const seen = latest.get(r.ticketId);
+    if (!seen || at > seen.at || (at === seen.at && r.id > seen.id)) latest.set(r.ticketId, { id: r.id, at });
+  }
+  return new Map([...latest].map(([ticketId, { id }]) => [ticketId, id]));
+}
+
 async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
   const working = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
   const rows = db
@@ -67,8 +85,12 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       state: runs.state,
       branch: runs.branch,
       worktreePath: runs.worktreePath,
+      ticketId: runs.ticketId,
+      ticketStatus: tickets.status,
+      createdAt: runs.createdAt,
     })
     .from(runs)
+    .leftJoin(tickets, eq(tickets.id, runs.ticketId))
     .where(
       and(
         eq(runs.projectId, project.id),
@@ -79,12 +101,21 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       ),
     )
     .all();
+  const latest = latestRunOfTickets(
+    db,
+    project.id,
+    rows.flatMap((r) => (r.ticketId ? [r.ticketId] : [])),
+  );
   const live: LiveRun[] = [];
   for (const run of rows) {
     if (ACTIVE_RUN_STATES.has(run.state as Run['state'])) {
       live.push({ id: run.id, title: run.title, branch: run.branch });
       continue;
     }
+    // A finished run of a ticket merges only as that ticket's latest run, and only while the ticket
+    // is open: the pipeline finalizes a ticket by its latest run, and a done ticket is finished.
+    // What an older or a closed ticket's run left in its worktree is an attempt nothing will merge.
+    if (run.ticketId && (run.ticketStatus === 'done' || latest.get(run.ticketId) !== run.id)) continue;
     // A finished run waits to merge while its worktree holds commits the working branch lacks. A
     // pruned worktree has nothing left to merge (worktreeHasUnmergedCommits answers false without
     // running git), and a row whose "worktree" is the main workspace itself is no run worktree.
@@ -115,7 +146,8 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
 
 /**
  * The project's runs that are live (queued, starting, working, waiting for input or rate limited)
- * or waiting to merge (done, not stopped, with commits the working branch does not have yet).
+ * or waiting to merge (done, not stopped, with commits the working branch does not have yet, and,
+ * for a ticket's run, the latest run of a ticket that is not done).
  */
 export async function liveRunsOf(db: Db, projectId: string): Promise<{ id: string; title: string | null }[]> {
   const project = db.select().from(projects).where(eq(projects.id, projectId)).get();

@@ -66,9 +66,11 @@ const seedRun = (
     state,
     branch,
     worktreePath = path.join(t.dir, `wt-${id}`),
-  }: { state: string; branch: string; worktreePath?: string },
+    ticketId = null,
+    createdAt = new Date(),
+  }: { state: string; branch: string; worktreePath?: string; ticketId?: string | null; createdAt?: Date },
 ) => {
-  const now = new Date();
+  const now = createdAt;
   t.db
     .insert(runs)
     .values({
@@ -78,6 +80,7 @@ const seedRun = (
       state,
       worktreePath,
       branch,
+      ticketId,
       hookTokenHash: 'h',
       stateChangedAt: now,
       createdAt: now,
@@ -207,6 +210,60 @@ describe('git branches', () => {
     // A stopped run never merges.
     t.db.update(runs).set({ cancelledAt: new Date() }).run();
     expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
+
+  it('a finished run waits to merge only while it can: not once its ticket is done or a newer run took over', async () => {
+    git(projectPath, 'branch', 'develop');
+    /** A finished run of `ticketId` with one commit the working branch lacks, made `at` ms after the first. */
+    const unmerged = (id: string, ticketId: string | null, at: number) => {
+      const dir = path.join(t.dir, `wt-${id}`);
+      git(projectPath, 'worktree', 'add', '-q', '-b', `emberline/${id}`, dir);
+      commit(dir, `${id}.txt`);
+      seedRun(id, {
+        state: 'done',
+        branch: `emberline/${id}`,
+        worktreePath: dir,
+        ticketId,
+        createdAt: new Date(Date.UTC(2026, 10, 13) + at),
+      });
+    };
+    // EMB-9's shape: the ticket is done; its first run left a superseded attempt behind.
+    const done = t.tickets.create(projectId, { title: 'Split runs', status: 'review' });
+    unmerged('first', done.id, 0);
+    seedRun('second', {
+      state: 'done',
+      branch: 'emberline/second',
+      ticketId: done.id,
+      createdAt: new Date(Date.UTC(2026, 10, 13) + 1000),
+    });
+    t.tickets.update(done.id, { status: 'done' });
+    // A ticket still in review whose first run was superseded by a second that has nothing left.
+    const review = t.tickets.create(projectId, { title: 'Tidy', status: 'review' });
+    unmerged('old', review.id, 0);
+    seedRun('new', {
+      state: 'done',
+      branch: 'emberline/new',
+      ticketId: review.id,
+      createdAt: new Date(Date.UTC(2026, 10, 13) + 1000),
+    });
+    // A done ticket's only run, with work never merged: the ticket was closed by hand, nothing merges.
+    const closed = t.tickets.create(projectId, { title: 'Closed by hand', status: 'done' });
+    unmerged('closed', closed.id, 0);
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+    expect((await send('POST', workingUrl(), { branch: 'main' })).statusCode).toBe(200);
+
+    // The latest run of a ticket in review still waits, as does a run with no ticket.
+    const waiting = t.tickets.create(projectId, { title: 'Waits', status: 'review' });
+    unmerged('latest', waiting.id, 2000);
+    unmerged('loose', null, 0);
+    const refused = await send('POST', workingUrl(), { branch: 'develop' });
+    expect(refused.statusCode).toBe(409);
+    expect(
+      refused
+        .json()
+        .runs.map((r: { id: string }) => r.id)
+        .sort(),
+    ).toEqual(['latest', 'loose']);
   });
 
   it('a dirty tree that blocks the switch is refused with git’s reason, and the edit is kept', async () => {

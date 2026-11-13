@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- A finished run no longer holds back **Match origin…**, a working-branch switch or a branch deletion when its ticket is done or a newer run of the same ticket took over: only a run that can still merge waits to merge.
+
 ## [0.9.1] - 2026-11-13
 
 ### Fixed
