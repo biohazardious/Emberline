@@ -221,6 +221,20 @@ describe('pull from origin', () => {
     });
   });
 
+  it('fast-forwards a working branch with nothing of its own to main, with no empty merge commit', async () => {
+    git(projectPath, 'branch', 'develop');
+    git(projectPath, 'push', '-q', bare, 'develop');
+    expect((await send('POST', gitUrl('/working-branch'), { branch: 'develop' })).statusCode).toBe(200);
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'pr.txt', 'pr\n', 'feat: merged on the forge');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    expect(await pullNow()).toMatchObject({ state: 'pulled', branch: 'develop' });
+    expect(git(projectPath, 'rev-parse', 'develop')).toBe(git(elsewhere, 'rev-parse', 'main'));
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(git(elsewhere, 'rev-parse', 'main'));
+    expect(git(projectPath, 'log', '--merges', '--format=%s', 'develop')).toBe('');
+    expect(git(projectPath, 'status', '--porcelain')).toBe('');
+  });
+
   it('stops on a real conflict, leaves the branch as it was, and lists the files', async () => {
     const elsewhere = cloneOf(bare);
     commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');

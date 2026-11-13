@@ -576,8 +576,15 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
           sourceTip: mainTip,
           message: `${main} no longer shares history with ${working} (one of them was rewritten), so ${main} was not merged into ${working}. Match origin on ${working} takes origin's history, or merge them in a terminal.`,
         });
-      const merged = await mergeInto(ctx, mainTip, main);
-      if (merged) return merged;
+      // The working branch has nothing main lacks (a tick between a release's main push and its
+      // sync of the working branch, say): a fast-forward, not an empty merge commit.
+      if (await isAncestorCommit(ws.path, workingTip, mainTip)) {
+        const failed = await fastForward(ctx, mainTip, workingTip);
+        if (failed) return stop(failed);
+      } else {
+        const merged = await mergeInto(ctx, mainTip, main);
+        if (merged) return merged;
+      }
     }
   }
   return stop({
