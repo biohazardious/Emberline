@@ -68,21 +68,39 @@ async function refsUnder(mainPath: string, prefix: string): Promise<Map<string, 
   return refs;
 }
 
+/** Tags of tags peeled by a git call each, at most this many per read (they are rare). */
+const NESTED_PEELS = 20;
+
 /**
- * The commit each local tag names (an annotated tag's peeled one level, `%(*objectname)`, as
- * origin's `^{}` line peels it), by name.
+ * The commit each local tag finally names, by name, as origin's `^{}` line peels it: a lightweight
+ * tag's own object, an annotated one's `%(*objectname)`. A git that peels `%(*…)` one level only
+ * leaves a tag of a tag naming the inner tag (`%(*objecttype)` is `tag` then): those are peeled to
+ * their commit one git call each, up to {@link NESTED_PEELS}; any beyond are left out, so they are
+ * never reported as differing.
  */
-async function tagCommitsHere(mainPath: string): Promise<Map<string, string>> {
+export async function tagCommitsHere(mainPath: string): Promise<Map<string, string>> {
   const out = (
     await realGit(
-      ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)', 'refs/tags/'],
+      ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)%00%(*objecttype)', 'refs/tags/'],
       mainPath,
     )
   ).stdout;
   const commits = new Map<string, string>();
+  let peels = NESTED_PEELS;
   for (const line of out.split('\n')) {
-    const [ref, oid, peeled] = line.split('\0');
-    if (ref?.startsWith('refs/tags/') && oid) commits.set(ref.slice('refs/tags/'.length), peeled || oid);
+    const [ref, oid, peeled, peeledType] = line.split('\0');
+    if (!ref?.startsWith('refs/tags/') || !oid) continue;
+    const name = ref.slice('refs/tags/'.length);
+    if (peeledType !== 'tag') {
+      commits.set(name, peeled || oid);
+      continue;
+    }
+    if (peels-- <= 0) continue;
+    const commit = await realGit(
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${oid}^{commit}`],
+      mainPath,
+    ).then((r) => r.stdout.trim(), unlessRunnerUnavailable(''));
+    if (commit) commits.set(name, commit);
   }
   return commits;
 }

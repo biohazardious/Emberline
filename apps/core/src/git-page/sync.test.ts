@@ -787,6 +787,7 @@ describe('reading all of origin', () => {
     // v0.6.0: lightweight here, annotated on origin, on the same commit: the same tag.
     git(projectPath, 'tag', 'v0.6.0', shared);
     git(elsewhere, 'tag', '-a', '-m', 'v0.6.0', 'v0.6.0', shared);
+
     git(elsewhere, 'push', '-q', 'origin', '12112026_backup', 'emberline/run-on-origin', '--tags');
 
     await refresh();
@@ -810,6 +811,16 @@ describe('reading all of origin', () => {
     const before = refsCalls();
     await refresh();
     expect(refsCalls() - before).toBe(1);
+
+    // v0.5.0: here a tag of an annotated tag (a nested tag), on origin a lightweight one, both on the
+    // same commit in the end: the same tag too.
+    git(projectPath, 'tag', '-a', '-m', 'inner', 'inner', backupTip);
+    git(projectPath, '-c', 'advice.nestedTag=false', 'tag', '-a', '-m', 'v0.5.0', 'v0.5.0', 'inner');
+    git(projectPath, 'tag', '-d', 'inner');
+    git(elsewhere, 'tag', 'v0.5.0', backupTip);
+    git(elsewhere, 'push', '-q', 'origin', 'v0.5.0');
+    await refresh();
+    expect((await send('GET', gitUrl())).json().tagsDifferFromOrigin).toEqual(['v0.7.0']);
 
     // A branch gone from origin loses its tracking ref; a tag gone from origin stays here.
     git(elsewhere, 'push', '-q', 'origin', '--delete', '12112026_backup', 'v0.9.0');
