@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BuildDemoResponse, GitPageStatus, ReleaseJob, StartReleaseBody } from '@emberline/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { projectWorktreeConfig } from '../db/schema.js';
 import { HttpError } from '../errors.js';
@@ -889,6 +889,61 @@ describe('release', () => {
     expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(head);
     expect((await merging).ok).toBe(true);
     expect(git(projectPath, 'rev-parse', 'main^1')).toBe(head);
+  });
+
+  it("the startup sweep never takes the worktree of a Retry pressed while it runs (the stopped job's leftover is swept)", async () => {
+    approveChecks();
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    let red = true;
+    let checking!: (dir: string) => void;
+    const inChecks = new Promise<string>((r) => (checking = r));
+    let green!: () => void;
+    const checked = new Promise<void>((r) => (green = r));
+    const jobs = jobsWith({
+      build: async (p) => {
+        if (red) return { ...okBuild(), ok: false, output: 'the build broke' };
+        checking(p.workspacePath);
+        await checked;
+        return okBuild();
+      },
+    });
+    await jobs.start(projectId, publish(head));
+    await jobs.idle();
+    const stopped = storedJob();
+    expect(stopped.state).toBe('failed');
+    // What a crash during those checks leaves: the job's worktree.
+    const parent = path.join(t.config.workspacesDir, '.worktrees', projectSlug);
+    const leftover = path.join(parent, `release-${stopped.id.replace(/-/g, '').slice(0, 8)}`);
+    git(projectPath, 'worktree', 'add', '-q', '--detach', leftover, 'main');
+    // The sweep's teardown of the leftover is slow; a job's own teardowns are not.
+    let sweepTearing!: () => void;
+    const tearing = new Promise<void>((r) => (sweepTearing = r));
+    let tornDown!: () => void;
+    const torn = new Promise<void>((r) => (tornDown = r));
+    let first = true;
+    const teardown = vi.spyOn(t.runs, 'teardownJobWorktree').mockImplementation(async () => {
+      if (!first) return;
+      first = false;
+      sweepTearing();
+      await torn;
+    });
+    const engine = vi.spyOn(t.runs, 'downLeftoverJobProjects').mockResolvedValue([]);
+    const sweeping = serviceWith(jobs).sweepLeftovers();
+    await tearing;
+    red = false;
+    await jobs.retry(projectId);
+    const dir = await inChecks;
+    tornDown();
+    await sweeping;
+    // The Retry's checks still have their worktree, the leftover is gone.
+    expect(git(dir, 'rev-parse', 'HEAD')).toBe(head);
+    expect(existsSync(leftover)).toBe(false);
+    green();
+    await jobs.idle();
+    expect(storedJob().state).toBe('done');
+    teardown.mockRestore();
+    engine.mockRestore();
   });
 
   it('is refused while a run is merging into the working branch', async () => {

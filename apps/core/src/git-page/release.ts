@@ -1259,7 +1259,9 @@ export class ReleaseJobs {
     for (const name of (await readdir(parent).catch(() => [] as string[])).filter((n) => RELEASE_DIR.test(n)))
       await this.removeDir(project, path.join(parent, name));
     await mkdir(parent, { recursive: true });
-    const dir = path.join(parent, `release-${ctx.job.id.replace(/-/g, '').slice(0, 8)}`);
+    // A name of its own each time, not the job's: a Retry's worktree is never the folder (or compose
+    // project) a crash of the same job left, which a sweep of leftovers may be taking down right now.
+    const dir = path.join(parent, `release-${randomUUID().replace(/-/g, '').slice(0, 8)}`);
     // Claimed before it exists, so a sweep of leftovers that lists it never takes it.
     this.dirs.add(path.resolve(dir));
     try {
