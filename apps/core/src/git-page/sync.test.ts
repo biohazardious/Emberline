@@ -554,6 +554,47 @@ describe('pull from origin', () => {
     await svc.idle();
   });
 
+  it('core stopping during the sweep waits for the leftover being taken down and leaves the rest', async () => {
+    const parent = path.join(t.config.workspacesDir, '.worktrees', projectSlug);
+    mkdirSync(parent, { recursive: true });
+    for (const name of ['pull-deadbeef', 'release-0a1b2c3d'])
+      git(projectPath, 'worktree', 'add', '-q', '--detach', path.join(parent, name));
+    const torn: string[] = [];
+    let tearing!: () => void;
+    const inTeardown = new Promise<void>((r) => (tearing = r));
+    let goOn!: () => void;
+    const slow = new Promise<void>((r) => (goOn = r));
+    const teardown = vi
+      .spyOn(t.runs, 'teardownJobWorktree')
+      .mockImplementation(async (_p, _dir, composeProject) => {
+        torn.push(composeProject);
+        tearing();
+        await slow;
+      });
+    const engine = vi.spyOn(t.runs, 'downLeftoverJobProjects').mockResolvedValue([]);
+    const svc = service();
+    let swept = false;
+    const sweeping = svc.sweepLeftovers().then(() => {
+      swept = true;
+    });
+    await inTeardown;
+    let sweptWhenStopped: boolean | null = null;
+    const stopping = svc.stop(60_000).then(() => {
+      sweptWhenStopped = swept;
+    });
+    goOn();
+    await stopping;
+    await sweeping;
+    // stop waited for the leftover under way; the next one and the engine's were left alone.
+    expect(sweptWhenStopped).toBe(true);
+    expect(torn).toEqual(['emberline-pull-deadbeef']);
+    expect(existsSync(path.join(parent, 'pull-deadbeef'))).toBe(false);
+    expect(existsSync(path.join(parent, 'release-0a1b2c3d'))).toBe(true);
+    expect(engine).not.toHaveBeenCalled();
+    teardown.mockRestore();
+    engine.mockRestore();
+  });
+
   it("a deleted project's heal and release leftovers are torn down with it", async () => {
     const parent = path.join(t.config.workspacesDir, '.worktrees', projectSlug);
     mkdirSync(parent, { recursive: true });

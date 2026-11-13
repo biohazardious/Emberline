@@ -58,6 +58,7 @@ import { hasChangelog, latestVersionTag, ReleaseJobs } from './release.js';
 import {
   fetchOrigin,
   type GitNotify,
+  HEAL_STOP_TIMEOUT_MS,
   HealJobs,
   JOB_WORKTREE,
   jobComposeProject,
@@ -66,6 +67,7 @@ import {
   pull,
   pullTicketText,
   type SyncDeps,
+  within,
 } from './sync.js';
 
 const IDLE_SYNC: GitSync = { state: 'idle', at: null, branch: null, files: [], message: null };
@@ -102,6 +104,8 @@ export class GitPageService {
   private readonly drafts = new DraftJobs();
   /** Promote and release jobs that run in the background. */
   private readonly releases: ReleaseJobs;
+  /** The sweeps of leftovers under way: stop waits for them. */
+  private readonly sweeps = new Set<Promise<void>>();
 
   constructor(
     private readonly db: Db,
@@ -212,9 +216,16 @@ export class GitPageService {
    * worktree.yml teardown and compose project, and (for every project, at startup) their compose
    * projects left in the engine. A heal's or release's that runs now is never touched: each run of
    * one makes its worktree under a name of its own, claimed before the folder exists, so a name
-   * listed here and not in use is a leftover. Best effort.
+   * listed here and not in use is a leftover. Best effort. Core stopping ends it before its next
+   * leftover; stop waits for the one under way.
    */
-  async sweepLeftovers(projectId?: string): Promise<void> {
+  sweepLeftovers(projectId?: string): Promise<void> {
+    const sweep = this.sweep(projectId).finally(() => this.sweeps.delete(sweep));
+    this.sweeps.add(sweep);
+    return sweep;
+  }
+
+  private async sweep(projectId?: string): Promise<void> {
     if (this.heals.stopped) return;
     const rows = projectId
       ? [this.project(projectId)]
@@ -224,13 +235,14 @@ export class GitPageService {
       const parent = path.join(this.deps.workspacesDir, '.worktrees', row.slug);
       const names = (await readdir(parent).catch(() => [] as string[])).filter((n) => JOB_WORKTREE.test(n));
       for (const name of names) {
+        if (this.heals.stopped) return;
         const dir = path.join(parent, name);
         if (inUse(dir)) continue;
         await this.deps.runs.teardownJobWorktree(row.id, dir, jobComposeProject(dir)).catch(() => undefined);
         await withMainWorkspaceLock(row.path, () => pruneWorktree(row.path, dir)).catch(() => undefined);
       }
     }
-    if (projectId) return;
+    if (projectId || this.heals.stopped) return;
     // The engine's leftovers: a job project whose worktree is in use now stays (asked after the
     // engine was listed, so a job that started meanwhile keeps its own).
     await this.deps.runs.downLeftoverJobProjects(
@@ -244,14 +256,15 @@ export class GitPageService {
   }
 
   /**
-   * Makes the background heals and drafts give up and a release job end at its next step, and
-   * waits for them at most `timeoutMs`.
+   * Makes the background heals and drafts give up, a release job end at its next step and a sweep
+   * of leftovers end before its next one, and waits for them at most `timeoutMs`.
    */
   async stop(timeoutMs?: number): Promise<void> {
     await Promise.all([
       this.heals.stop(timeoutMs),
       this.drafts.stop(timeoutMs),
       this.releases.stop(timeoutMs),
+      within(Promise.all([...this.sweeps]), timeoutMs ?? HEAL_STOP_TIMEOUT_MS),
     ]);
   }
 
