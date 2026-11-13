@@ -79,10 +79,12 @@ export function GitStatusStrip({
     }
   };
 
+  // A branch only on origin is offered too: picking it checks it out here first.
   const local = splitBranches(branches.data ?? []).shown.filter((b) => b.kind !== 'backup');
   const names = local.some((b) => b.name === status.workingBranch)
     ? local.map((b) => b.name)
     : [status.workingBranch, ...local.map((b) => b.name)];
+  const onOrigin = new Set(local.filter((b) => b.kind === 'origin').map((b) => b.name));
   const detached = status.checkedOut === null;
   const mismatch = !detached && status.workingMismatch;
   const banner = syncText(status.sync);
@@ -107,7 +109,7 @@ export function GitStatusStrip({
           >
             {names.map((n) => (
               <option key={n} value={n}>
-                {n}
+                {onOrigin.has(n) ? `${n} (on origin)` : n}
               </option>
             ))}
           </select>

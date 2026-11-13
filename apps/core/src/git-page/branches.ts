@@ -177,11 +177,14 @@ export async function classify(
 const kindOf = (name: string, working: string, main: string): GitBranchKind =>
   name === working ? 'working' : name === main ? 'main' : name.startsWith(RUN_PREFIX) ? 'run' : 'person';
 
-/** The branches whose tip is in `target`'s history, in one call. */
+/** The branches (local, and origin's as last read) whose tip is in `target`'s history, in one call. */
 async function mergedInto(mainPath: string, target: string | null): Promise<Set<string>> {
   if (!target) return new Set();
   const out = (
-    await realGit(['for-each-ref', `--merged=${target}`, '--format=%(refname)', 'refs/heads/'], mainPath)
+    await realGit(
+      ['for-each-ref', `--merged=${target}`, '--format=%(refname)', 'refs/heads/', 'refs/remotes/origin/'],
+      mainPath,
+    )
   ).stdout;
   return new Set(out.split('\n').filter(Boolean));
 }
@@ -213,14 +216,21 @@ export async function listBranches(
   ).stdout;
   const fields = out.split('\0');
   const local: { name: string; tip: string; subject: string }[] = [];
-  const tracking = new Map<string, string>();
+  const tracking = new Map<string, { tip: string; subject: string }>();
   for (let i = 0; i + 2 < fields.length; i += 3) {
     const ref = (fields[i] as string).replace(/^\n/, '');
     const oid = fields[i + 1] as string;
+    const subject = fields[i + 2] as string;
     if (ref.startsWith('refs/heads/'))
-      local.push({ name: ref.slice('refs/heads/'.length), tip: oid, subject: fields[i + 2] as string });
-    else tracking.set(ref.slice('refs/remotes/origin/'.length), oid);
+      local.push({ name: ref.slice('refs/heads/'.length), tip: oid, subject });
+    else tracking.set(ref.slice('refs/remotes/origin/'.length), { tip: oid, subject });
   }
+  // origin's HEAD (a clone's symbolic ref) is no branch of origin's.
+  tracking.delete('HEAD');
+  const here = new Set(local.map((b) => b.name));
+  const onlyOnOrigin = [...tracking]
+    .filter(([name]) => !here.has(name))
+    .map(([name, { tip, subject }]) => ({ name, tip, subject }));
   const mainTip = local.find((b) => b.name === main)?.tip ?? null;
   const workingTip = local.find((b) => b.name === working)?.tip ?? null;
   const [hasOrigin, inMain, inWorking, live] = await Promise.all([
@@ -237,7 +247,7 @@ export async function listBranches(
       vsMain = { ahead, behind };
     }
     let vsOrigin: GitBranch['vsOrigin'] = null;
-    const remote = tracking.get(name);
+    const remote = tracking.get(name)?.tip;
     if (hasOrigin && !remote) vsOrigin = { state: 'unknown', ahead: null, behind: null };
     if (hasOrigin && remote) {
       const state = await classify(project.path, tip, remote);
@@ -256,21 +266,78 @@ export async function listBranches(
       liveRuns: live.filter((r) => r.branch === name).map((r) => r.id),
     };
   };
+  // A branch only on origin: against main, merged or not; it has no local side to compare with origin.
+  const readOriginOnly = async ({
+    name,
+    tip,
+    subject,
+  }: (typeof onlyOnOrigin)[number]): Promise<GitBranch> => {
+    let vsMain: GitBranch['vsMain'] = null;
+    if (mainTip) {
+      const [ahead, behind] = await counts(project.path, tip, mainTip);
+      vsMain = { ahead, behind };
+    }
+    const ref = `refs/remotes/origin/${name}`;
+    return {
+      name,
+      kind: 'origin',
+      tip,
+      subject,
+      vsMain,
+      vsOrigin: null,
+      mergedIntoMain: inMain.has(ref),
+      mergedIntoWorking: inWorking.has(ref),
+      liveRuns: [],
+    };
+  };
   const branches: GitBranch[] = [];
   for (let i = 0; i < local.length; i += BRANCH_READS_AT_ONCE) {
     branches.push(...(await Promise.all(local.slice(i, i + BRANCH_READS_AT_ONCE).map(read))));
   }
+  for (let i = 0; i < onlyOnOrigin.length; i += BRANCH_READS_AT_ONCE) {
+    branches.push(
+      ...(await Promise.all(onlyOnOrigin.slice(i, i + BRANCH_READS_AT_ONCE).map(readOriginOnly))),
+    );
+  }
   return branches;
 }
 
-/** A new branch at main's or the working branch's tip; nothing is checked out. */
+/**
+ * Under the lock: the local branch `name` at origin's `name` as last read (a compare-and-set
+ * create). Nothing is checked out.
+ */
+async function createFromOrigin(mainPath: string, name: string): Promise<void> {
+  const theirs = await refTip(mainPath, `refs/remotes/origin/${name}`);
+  if (!theirs) throw notFound(`There is no branch ${name} here or on origin (as last read).`);
+  // The empty old value makes this a create: git refuses it if the branch appeared meanwhile.
+  await execGitFile(['update-ref', '-m', 'emberline: branch from origin', `refs/heads/${name}`, theirs, ''], {
+    cwd: mainPath,
+  }).catch((error: unknown) => {
+    if (isRunnerUnavailable(error)) throw error;
+    throw conflict(`Could not create ${name}: ${gitMessage(error)}`, 'branch_exists');
+  });
+}
+
+/**
+ * A new branch at main's or the working branch's tip, or (`origin`) a branch only on origin checked
+ * out here under its own name, at origin's tip as last read; nothing is checked out.
+ */
 export async function createBranch(
   project: BranchProject,
   rawName: unknown,
-  from: 'main' | 'working',
+  from: 'main' | 'working' | 'origin',
   working: string,
 ): Promise<void> {
   const name = await validBranchName(project.path, rawName);
+  if (from === 'origin') {
+    // origin's run branches too: the name is origin's, not one made up here.
+    await withMainWorkspaceLock(project.path, async () => {
+      if (await localTip(project.path, name))
+        throw conflict(`There is a branch ${name} already.`, 'branch_exists');
+      await createFromOrigin(project.path, name);
+    });
+    return;
+  }
   if (name.startsWith(RUN_PREFIX))
     throw badRequest(`Branches under ${RUN_PREFIX} are the factory's run branches; choose another name.`);
   const source = from === 'main' ? project.defaultBranch : working;
@@ -322,13 +389,7 @@ async function mergedSomewhere(mainPath: string, oid: string, main: string, work
  */
 async function deletable(db: Db, project: BranchProject, name: string): Promise<string> {
   const working = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
-  if (name === project.defaultBranch)
-    throw conflict(`${name} is the default branch; Emberline never deletes it.`, 'branch_protected');
-  if (name === working)
-    throw conflict(
-      `${name} is the working branch; choose another working branch before deleting it.`,
-      'branch_protected',
-    );
+  protectedBranch(db, project, name);
   const tip = await localTip(project.path, name);
   if (!tip) throw notFound(`There is no branch ${name}.`);
   if ((await checkedOutBranches(project.path)).has(name))
@@ -352,11 +413,65 @@ export interface DeleteBranchResult {
   message: string;
 }
 
+/** Never the default branch or the working branch, here or on origin. */
+function protectedBranch(db: Db, project: BranchProject, name: string): void {
+  const working = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
+  if (name === project.defaultBranch)
+    throw conflict(`${name} is the default branch; Emberline never deletes it.`, 'branch_protected');
+  if (name === working)
+    throw conflict(
+      `${name} is the working branch; choose another working branch before deleting it.`,
+      'branch_protected',
+    );
+}
+
+/**
+ * origin's `name` deleted, only as the commit Emberline reads there now, and only when that commit
+ * is in main or the working branch here; then the tracking ref goes too.
+ */
+function deleteOnOrigin(
+  db: Db,
+  project: BranchProject,
+  name: string,
+  repository: Pick<RepositoryService, 'remoteAction'>,
+): Promise<'deleted' | 'already_gone'> {
+  return repository.remoteAction(project.id, async (ws) => {
+    const ref = `refs/heads/${name}`;
+    const theirs = await remoteRefHead(ws.path, ws.access, ref);
+    let outcome: 'deleted' | 'already_gone' = 'already_gone';
+    if (theirs !== null) {
+      const working = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
+      if (!(await mergedSomewhere(ws.path, theirs, project.defaultBranch, working)))
+        throw conflict(
+          `origin's ${name} has commits that are not in ${project.defaultBranch} or ${working} here, so Emberline deleted nothing (here or on origin). Bring them in first, or delete it on the forge.`,
+          'remote_unmerged',
+        );
+      const pushed = await pushRef(ws.path, ws.access, { ref, newOid: null, expectOld: theirs });
+      if (pushed === 'rejected') {
+        // Gone meanwhile is what was asked; moved on is not deleted.
+        if ((await remoteRefHead(ws.path, ws.access, ref)) !== null)
+          throw conflict(
+            `origin's ${name} changed while Emberline was deleting it, so nothing was deleted (here or on origin). Look again and retry.`,
+            'remote_moved',
+          );
+      } else outcome = 'deleted';
+    }
+    // What Emberline last read of it no longer stands.
+    await withMainWorkspaceLock(ws.path, () =>
+      execGitFile(['update-ref', '-d', `refs/remotes/origin/${name}`], { cwd: ws.path }).catch(
+        unlessRunnerUnavailable(undefined),
+      ),
+    );
+    return outcome;
+  });
+}
+
 /**
  * Deletes a fully merged branch here and, only with `remote` (the person's tick), on origin too.
  * Origin goes first, so a refusal there leaves both as they were. Origin's branch is deleted only
  * as the commit Emberline read, and only when that commit is in main or the working branch here.
- * The local delete is a compare-and-delete of the commit checked under the lock.
+ * The local delete is a compare-and-delete of the commit checked under the lock. A branch only on
+ * origin (as last read) is deleted there alone, and only with the tick.
  */
 export async function deleteBranch(
   db: Db,
@@ -366,39 +481,28 @@ export async function deleteBranch(
   repository: Pick<RepositoryService, 'remoteAction'>,
 ): Promise<DeleteBranchResult> {
   const name = await validBranchName(project.path, rawName);
-  const tip = await withMainWorkspaceLock(project.path, () => deletable(db, project, name));
-  let onOrigin: DeleteBranchResult['remote'] = null;
-  if (remote) {
-    onOrigin = await repository.remoteAction(project.id, async (ws) => {
-      const ref = `refs/heads/${name}`;
-      const theirs = await remoteRefHead(ws.path, ws.access, ref);
-      let outcome: 'deleted' | 'already_gone' = 'already_gone';
-      if (theirs !== null) {
-        const working = workingBranchOf(readRepositorySettings(db, project.id), project.defaultBranch);
-        if (!(await mergedSomewhere(ws.path, theirs, project.defaultBranch, working)))
-          throw conflict(
-            `origin's ${name} has commits that are not in ${project.defaultBranch} or ${working} here, so Emberline deleted nothing (here or on origin). Bring them in first, or delete it on the forge.`,
-            'remote_unmerged',
-          );
-        const pushed = await pushRef(ws.path, ws.access, { ref, newOid: null, expectOld: theirs });
-        if (pushed === 'rejected') {
-          // Gone meanwhile is what was asked; moved on is not deleted.
-          if ((await remoteRefHead(ws.path, ws.access, ref)) !== null)
-            throw conflict(
-              `origin's ${name} changed while Emberline was deleting it, so nothing was deleted (here or on origin). Look again and retry.`,
-              'remote_moved',
-            );
-        } else outcome = 'deleted';
-      }
-      // What Emberline last read of it no longer stands.
-      await withMainWorkspaceLock(ws.path, () =>
-        execGitFile(['update-ref', '-d', `refs/remotes/origin/${name}`], { cwd: ws.path }).catch(
-          unlessRunnerUnavailable(undefined),
-        ),
+  const onlyOnOrigin = await withMainWorkspaceLock(project.path, async () => {
+    if (await localTip(project.path, name)) return false;
+    protectedBranch(db, project, name);
+    if (!(await refTip(project.path, `refs/remotes/origin/${name}`)))
+      throw notFound(`There is no branch ${name}.`);
+    if (!remote)
+      throw notFound(
+        `There is no branch ${name} here; it is only on origin. Tick "Also delete on origin" to delete it there.`,
       );
-      return outcome;
-    });
+    return true;
+  });
+  if (onlyOnOrigin) {
+    const outcome = await deleteOnOrigin(db, project, name, repository);
+    return {
+      remote: outcome,
+      message: outcome === 'deleted' ? `Deleted ${name} on origin.` : `${name} was already gone on origin.`,
+    };
   }
+  const tip = await withMainWorkspaceLock(project.path, () => deletable(db, project, name));
+  const onOrigin: DeleteBranchResult['remote'] = remote
+    ? await deleteOnOrigin(db, project, name, repository)
+    : null;
   // Whatever stops the local delete now, origin's outcome stands and is said with it.
   const onOriginText =
     onOrigin === 'deleted'
@@ -462,14 +566,7 @@ export async function setWorkingBranch(
         { runs: live.map(({ id, title }) => ({ id, title })) },
       );
     }
-    if (!(await localTip(project.path, branch))) {
-      const theirs = await refTip(project.path, `refs/remotes/origin/${branch}`);
-      if (!theirs) throw notFound(`There is no branch ${branch} here or on origin (as last read).`);
-      await execGitFile(
-        ['update-ref', '-m', 'emberline: branch from origin', `refs/heads/${branch}`, theirs, ''],
-        { cwd: project.path },
-      );
-    }
+    if (!(await localTip(project.path, branch))) await createFromOrigin(project.path, branch);
     const { branch: checkedOut } = await mainBranchState(project.path);
     if (checkedOut !== branch) {
       try {

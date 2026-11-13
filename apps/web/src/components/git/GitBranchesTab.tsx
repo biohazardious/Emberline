@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { trapTab } from '../../focusTrap';
-import { remoteStateText, splitBranches } from '../../gitPage';
+import { isRunBranch, remoteStateText, splitBranches } from '../../gitPage';
 import { SectionState } from '../SectionState';
 import { GitDiffView } from './GitDiffView';
 import { GitProblemBanner, type Problem, problemOf } from './GitStatusStrip';
@@ -15,12 +15,17 @@ const KIND_LABEL: Record<GitBranch['kind'], string> = {
   person: 'yours',
   run: 'run',
   backup: 'backup',
+  origin: 'on origin',
 };
 
-/** Only merged branches go, never the working branch, main, or a run branch a live run still uses. */
-function canDelete(b: GitBranch, workingBranch: string): boolean {
+/**
+ * Only merged branches go, never the working branch, main, or a run branch a live run still uses. A
+ * branch only on origin goes there alone (core needs the tick for it).
+ */
+function canDelete(b: GitBranch, workingBranch: string, hasOrigin: boolean): boolean {
   if (b.kind === 'working' || b.kind === 'main' || b.name === workingBranch) return false;
   if (b.liveRuns.length > 0) return false;
+  if (b.kind === 'origin' && !hasOrigin) return false;
   return b.mergedIntoMain || b.mergedIntoWorking;
 }
 
@@ -41,6 +46,7 @@ function DeleteDialog({
   onConfirm: (alsoOnOrigin: boolean) => Promise<void>;
   onClose: () => void;
 }) {
+  const onlyOnOrigin = branch.kind === 'origin';
   const [remote, setRemote] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -96,17 +102,31 @@ function DeleteDialog({
           </button>
         </header>
         <p className="small">
-          <span className="mono">{branch.name}</span> is fully merged, so its commits stay in the history.
+          {onlyOnOrigin ? (
+            <>
+              <span className="mono">{branch.name}</span> is only on origin, and fully merged, so its commits
+              stay in the history. Deleting it removes it from origin; nothing here changes.
+            </>
+          ) : (
+            <>
+              <span className="mono">{branch.name}</span> is fully merged, so its commits stay in the history.
+            </>
+          )}
         </p>
         {hasOrigin && (
           <label className="review-checkbox-label small">
             <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} />
-            Also delete on origin
+            {onlyOnOrigin ? 'Delete it on origin' : 'Also delete on origin'}
           </label>
         )}
         {problem && <GitProblemBanner problem={problem} />}
         <div className="request-dialog-actions">
-          <button type="button" className="btn danger" disabled={busy} onClick={() => void confirm()}>
+          <button
+            type="button"
+            className="btn danger"
+            disabled={busy || (onlyOnOrigin && !remote)}
+            onClick={() => void confirm()}
+          >
             {busy ? 'Deleting…' : 'Delete'}
           </button>
           <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onClose}>
@@ -249,11 +269,13 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
         </td>
         <td className="small">{vs(b)}</td>
         <td className="small">
-          {b.vsOrigin
-            ? remoteStateText(b.vsOrigin.state, b.vsOrigin.ahead, b.vsOrigin.behind)
-            : status.hasOrigin
-              ? '—'
-              : 'No origin'}
+          {b.kind === 'origin'
+            ? 'Only on origin'
+            : b.vsOrigin
+              ? remoteStateText(b.vsOrigin.state, b.vsOrigin.ahead, b.vsOrigin.behind)
+              : status.hasOrigin
+                ? '—'
+                : 'No origin'}
         </td>
         <td className="git-branch-actions">
           <CompareSelect
@@ -261,7 +283,20 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
             options={compareOptions}
             onPick={(other) => setPair({ base: other, head: b.name })}
           />
-          {!isWorking && b.kind !== 'run' && (
+          {b.kind === 'origin' && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy}
+              title="Creates the branch here at origin's commit; the working branch stays as it is"
+              onClick={() =>
+                void act(() => api(`${base}/branches`, 'POST', { name: b.name, from: 'origin' }))
+              }
+            >
+              Check out
+            </button>
+          )}
+          {!isWorking && !isRunBranch(b) && (
             <button
               type="button"
               className="btn btn-sm"
@@ -271,7 +306,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
               Make this the working branch
             </button>
           )}
-          {canDelete(b, status.workingBranch) && (
+          {canDelete(b, status.workingBranch, status.hasOrigin) && (
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setDeleting(b)}>
               Delete
             </button>

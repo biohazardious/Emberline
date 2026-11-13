@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { GitBranch } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
@@ -473,6 +474,99 @@ describe('git branches on origin', () => {
     expect(error?.message).toBe('old is checked out in a worktree, so it stays. On origin it is deleted.');
     expect(has(bare, 'refs/heads/old')).toBe('');
     expect(has(projectPath, 'refs/heads/old')).not.toBe('');
+  });
+
+  /** origin gets `name` from a clone elsewhere, with one commit of its own; Refresh reads it. */
+  const onOriginOnly = async (name: string, file: string) => {
+    const elsewhere = path.join(t.dir, `elsewhere-${file}`);
+    execFileSync('git', ['clone', '-q', bare, elsewhere]);
+    git(elsewhere, 'switch', '-q', '-c', name);
+    commit(elsewhere, file);
+    git(elsewhere, 'push', '-q', 'origin', name);
+    expect((await send('POST', `/api/projects/${projectId}/git/fetch`)).statusCode).toBe(200);
+    return git(elsewhere, 'rev-parse', 'HEAD');
+  };
+
+  it('lists a branch only on origin, compares it, and checks it out without switching', async () => {
+    const tip = await onOriginOnly('12112026_backup', 'backup.txt');
+    const runTip = await onOriginOnly('emberline/run-elsewhere', 'run.txt');
+    const list = (await send('GET', branchesUrl())).json() as GitBranch[];
+    const only = list.find((b) => b.name === '12112026_backup');
+    expect(only).toMatchObject({
+      kind: 'origin',
+      tip,
+      subject: 'feat: backup.txt',
+      vsMain: { ahead: 1, behind: 0 },
+      vsOrigin: null,
+      mergedIntoMain: false,
+      mergedIntoWorking: false,
+      liveRuns: [],
+    });
+    // A run branch on origin is listed like any other branch of origin's.
+    expect(list.find((b) => b.name === 'emberline/run-elsewhere')).toMatchObject({
+      kind: 'origin',
+      tip: runTip,
+    });
+    // origin's HEAD and main (here too) are not listed as origin-only.
+    expect(list.filter((b) => b.name === 'main').map((b) => b.kind)).toEqual(['working']);
+    expect(list.some((b) => b.name === 'HEAD')).toBe(false);
+
+    const compare = await send(
+      'GET',
+      `/api/projects/${projectId}/git/compare?base=main&head=12112026_backup`,
+    );
+    expect(compare.statusCode).toBe(200);
+    expect(compare.json()).toMatchObject({ ahead: 1, behind: 0 });
+    expect(compare.json().files.map((f: { path: string }) => f.path)).toEqual(['backup.txt']);
+
+    const checkedOut = await send('POST', branchesUrl(), { name: '12112026_backup', from: 'origin' });
+    expect(checkedOut.statusCode).toBe(200);
+    expect(git(projectPath, 'rev-parse', 'refs/heads/12112026_backup')).toBe(tip);
+    expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
+    const after = (await send('GET', branchesUrl())).json() as GitBranch[];
+    expect(after.filter((b) => b.name === '12112026_backup')).toMatchObject([
+      { kind: 'person', vsOrigin: { state: 'up_to_date' } },
+    ]);
+    // Again: it is here now.
+    const again = await send('POST', branchesUrl(), { name: '12112026_backup', from: 'origin' });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('branch_exists');
+    const nowhere = await send('POST', branchesUrl(), { name: 'nowhere', from: 'origin' });
+    expect(nowhere.statusCode).toBe(404);
+  });
+
+  it('a branch only on origin becomes the working branch from what origin has', async () => {
+    const tip = await onOriginOnly('develop', 'dev.txt');
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+    expect(git(projectPath, 'rev-parse', 'refs/heads/develop')).toBe(tip);
+    expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('develop');
+  });
+
+  it('deletes a branch only on origin only with the tick, and only when it is fully merged', async () => {
+    const tip = await onOriginOnly('unmerged', 'u.txt');
+    // Nothing here to delete: without the tick it is refused, and origin keeps it.
+    const local = await del('unmerged');
+    expect(local.statusCode).toBe(404);
+    expect(local.json().message).toContain('Also delete on origin');
+    expect(git(bare, 'rev-parse', 'refs/heads/unmerged')).toBe(tip);
+    // With the tick, its commit is in neither main nor the working branch: refused.
+    const refused = await del('unmerged', true);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('remote_unmerged');
+    expect(git(bare, 'rev-parse', 'refs/heads/unmerged')).toBe(tip);
+
+    // Fully merged into main: deleted on origin, with its tracking ref; nothing here changes.
+    git(projectPath, 'push', '-q', bare, 'main:refs/heads/merged');
+    expect((await send('POST', `/api/projects/${projectId}/git/fetch`)).statusCode).toBe(200);
+    const listed = (await send('GET', branchesUrl())).json() as GitBranch[];
+    expect(listed.find((b) => b.name === 'merged')).toMatchObject({ kind: 'origin', mergedIntoMain: true });
+    const gone = await del('merged', true);
+    expect(gone.statusCode).toBe(200);
+    expect(gone.json()).toMatchObject({ remote: 'deleted', message: 'Deleted merged on origin.' });
+    expect(has(bare, 'refs/heads/merged')).toBe('');
+    expect(has(projectPath, 'refs/remotes/origin/merged')).toBe('');
+    // origin's default branch is never deleted this way either.
+    expect((await del('main', true)).statusCode).toBe(409);
   });
 
   it('a branch already gone on origin counts as deleted there', async () => {

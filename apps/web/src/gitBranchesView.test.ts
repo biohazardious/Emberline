@@ -155,6 +155,69 @@ describe('GitBranchesTab', () => {
     await waitFor(() => expect(container.textContent).toContain('3 ahead, 2 behind'));
   });
 
+  it('lists a branch only on origin: Compare with…, Check out, Make this the working branch', async () => {
+    list.push(branch('12112026_backup', { kind: 'origin' }));
+    list.push(branch('emberline/run-on-origin', { kind: 'origin' }));
+    vi.mocked(api).mockImplementation(
+      apiRoutes({
+        [`GET ${B}/branches`]: () => list,
+        [`POST ${B}/branches`]: (body) => void calls.push(`create ${JSON.stringify(body)}`),
+        [`POST ${B}/working-branch`]: (body) => void calls.push(`working ${JSON.stringify(body)}`),
+        [`GET ${B}/compare?base=main&head=12112026_backup`]: () => ({
+          base: 'main',
+          head: '12112026_backup',
+          mergeBase: null,
+          ahead: 4,
+          behind: 0,
+          files: [],
+        }),
+      }),
+    );
+    const { container } = await render();
+    await waitFor(() => expect(container.textContent).toContain('12112026_backup'));
+    const row = rowOf(container, '12112026_backup');
+    expect(row?.textContent).toContain('on origin');
+    expect(row?.textContent).toContain('Only on origin');
+    expect(has(row, 'Delete')).toBe(false);
+    // An origin-only run branch stays under the run branches' fold.
+    expect(container.textContent).not.toContain('emberline/run-on-origin');
+    expect(getButton('3 run branches')).toBeDefined();
+
+    await click(getButton('Check out', row));
+    await waitFor(() => expect(calls).toEqual(['create {"name":"12112026_backup","from":"origin"}']));
+    await click(getButton('Make this the working branch', rowOf(container, '12112026_backup')));
+    await waitFor(() => expect(calls).toContain('working {"branch":"12112026_backup"}'));
+
+    const select = rowOf(container, '12112026_backup')!.querySelector('select') as HTMLSelectElement;
+    select.value = 'main';
+    await act(async () => select.dispatchEvent(new Event('change', { bubbles: true })));
+    await waitFor(() => expect(container.textContent).toContain('4 ahead, 0 behind'));
+  });
+
+  it('deletes a merged branch only on origin there alone, and only with the tick', async () => {
+    list.push(branch('old-on-origin', { kind: 'origin', mergedIntoMain: true }));
+    vi.mocked(api).mockImplementation(
+      apiRoutes({
+        [`GET ${B}/branches`]: () => list,
+        [`DELETE ${B}/branches/old-on-origin?remote=1`]: () => {
+          calls.push('delete remote');
+          return { ok: true };
+        },
+      }),
+    );
+    const { container } = await render();
+    await waitFor(() => expect(container.textContent).toContain('old-on-origin'));
+    await click(getButton('Delete', rowOf(container, 'old-on-origin')));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('only on origin');
+    const confirm = getButton('Delete', dialog);
+    expect(confirm.disabled).toBe(true);
+    await click(dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+    expect(getButton('Delete', dialog).disabled).toBe(false);
+    await click(getButton('Delete', dialog));
+    await waitFor(() => expect(calls).toEqual(['delete remote']));
+  });
+
   it('keeps the dialog focus through a re-render and closes on Escape', async () => {
     const { container, rerender } = await render();
     await waitFor(() => expect(container.textContent).toContain('feature/done'));

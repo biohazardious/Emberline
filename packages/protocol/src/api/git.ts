@@ -102,7 +102,8 @@ export const GitCompare = z.object({
 });
 export type GitCompare = z.infer<typeof GitCompare>;
 
-export const GitBranchKind = z.enum(['working', 'main', 'person', 'run', 'backup']);
+/** `origin`: a branch only on origin (as last read), with no local branch of that name. */
+export const GitBranchKind = z.enum(['working', 'main', 'person', 'run', 'backup', 'origin']);
 export type GitBranchKind = z.infer<typeof GitBranchKind>;
 
 export const GitBranch = z.object({
@@ -222,7 +223,8 @@ export type UpdateGitSettingsBody = z.infer<typeof UpdateGitSettingsBody>;
 export const SetWorkingBranchBody = z.object({ branch: z.string() });
 export type SetWorkingBranchBody = z.infer<typeof SetWorkingBranchBody>;
 
-export const CreateBranchBody = z.object({ name: z.string(), from: z.enum(['main', 'working']) });
+/** `origin`: the local branch `name` at origin's `name` (as last read), for a branch only on origin. */
+export const CreateBranchBody = z.object({ name: z.string(), from: z.enum(['main', 'working', 'origin']) });
 export type CreateBranchBody = z.infer<typeof CreateBranchBody>;
 
 export const MatchOriginBody = z.object({ branch: z.string().min(1) });

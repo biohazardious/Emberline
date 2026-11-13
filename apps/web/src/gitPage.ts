@@ -88,11 +88,15 @@ export function releaseBlockedText(status: GitPageStatus): string | null {
   return status.release.reason ?? 'A release is not possible right now.';
 }
 
+/** A run branch of the factory's (`emberline/…`), here or only on origin. */
+export const isRunBranch = (b: GitBranch): boolean =>
+  b.kind === 'run' || (b.kind === 'origin' && b.name.startsWith('emberline/'));
+
 /** The branches the Branches tab lists, and the run branches (`emberline/…`) kept behind a count. */
 export function splitBranches(branches: GitBranch[]): { shown: GitBranch[]; runBranches: GitBranch[] } {
   return {
-    shown: branches.filter((b) => b.kind !== 'run'),
-    runBranches: branches.filter((b) => b.kind === 'run'),
+    shown: branches.filter((b) => !isRunBranch(b)),
+    runBranches: branches.filter(isRunBranch),
   };
 }
 

@@ -69,6 +69,8 @@ function serve(s: GitPageStatus, extra: Record<string, (body: unknown) => unknow
         branch('develop', 'working'),
         branch('main', 'main'),
         branch('emberline/x', 'run'),
+        branch('12112026_backup', 'origin'),
+        branch('emberline/on-origin', 'origin'),
       ],
       'PATCH /api/projects/p1/git': log('PATCH'),
       'POST /api/projects/p1/git/fetch': log('fetch'),
@@ -96,9 +98,16 @@ describe('Git page', () => {
     expect(text).toContain('Up to date with origin');
     const tabs = [...view.container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
     expect(tabs).toEqual(['Commits', 'Branches', 'Release']);
-    // Run branches stay out of the picker.
+    // Run branches stay out of the picker; a branch only on origin is offered (picking it checks it out).
     await waitFor(() =>
-      expect([...view.container.querySelectorAll('option')].map((o) => o.value)).toEqual(['develop', 'main']),
+      expect([...view.container.querySelectorAll('option')].map((o) => o.value)).toEqual([
+        'develop',
+        'main',
+        '12112026_backup',
+      ]),
+    );
+    expect(view.container.querySelector('option[value="12112026_backup"]')?.textContent).toBe(
+      '12112026_backup (on origin)',
     );
   });
 
@@ -156,7 +165,7 @@ describe('Git page', () => {
       },
     });
     const view = await open();
-    await waitFor(() => expect(view.container.querySelectorAll('option')).toHaveLength(2));
+    await waitFor(() => expect(view.container.querySelectorAll('option')).toHaveLength(3));
     const select = view.container.querySelector('select') as HTMLSelectElement;
     select.value = 'main';
     await act(async () => select.dispatchEvent(new Event('change', { bubbles: true })));

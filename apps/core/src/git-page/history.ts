@@ -59,12 +59,13 @@ export const absentWhen =
     throw error;
   };
 
-/** The branches a ref may be given as, in the order they are tried. */
-const REF_NAMESPACES = ['refs/heads/', 'refs/tags/', 'refs/emberline/backup/'];
+/** The refs a short name may be, in the order they are tried: a local branch wins over origin's. */
+const REF_NAMESPACES = ['refs/heads/', 'refs/tags/', 'refs/emberline/backup/', 'refs/remotes/origin/'];
 
 /**
- * The commit a ref names: a local branch, a tag, a backup ref or a full commit id. Anything else
- * (an abbreviation, `HEAD~3`, `main^`, `main@{1}`, an option) is not a ref the Git page reads.
+ * The commit a ref names: a local branch, a tag, a backup ref, origin's branch as last read or a
+ * full commit id. Anything else (an abbreviation, `HEAD~3`, `main^`, `main@{1}`, an option) is not
+ * a ref the Git page reads.
  */
 export async function resolveRef(mainPath: string, ref: string): Promise<string> {
   if (!ref || ref.startsWith('-') || (!FULL_OID.test(ref) && !isPlainRefName(ref))) {
