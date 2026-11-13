@@ -158,7 +158,8 @@ export function releasePlan(
   const names: ReleaseStepName[] = [
     ...(separate ? (['promote'] as const) : []),
     'checks',
-    ...(publish ? (['changelog'] as const) : []),
+    // Only a project with a CHANGELOG.md gets the notes in it.
+    ...(publish && status.releaseSummary.hasChangelog ? (['changelog'] as const) : []),
     'push_main',
     ...(publish ? (['tag', 'push_tag', 'forge_release'] as const) : []),
     ...(separate ? (['sync_working'] as const) : []),

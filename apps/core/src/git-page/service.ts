@@ -54,7 +54,7 @@ import {
   ticketKeyOf,
 } from './history.js';
 import { currentReleaseDraft, DraftJobs, draftReleaseNotes } from './release-notes.js';
-import { latestVersionTag, ReleaseJobs } from './release.js';
+import { hasChangelog, latestVersionTag, ReleaseJobs } from './release.js';
 import {
   fetchOrigin,
   type GitNotify,
@@ -301,7 +301,7 @@ export class GitPageService {
       release: { ok: false, reason: 'The project folder is not a git repository.' },
       releaseJob: this.releases.current(projectId),
       releaseDraft: this.releaseDraft(projectId),
-      releaseSummary: { head: null, commits: 0, tickets: 0, checks: [] },
+      releaseSummary: { head: null, commits: 0, tickets: 0, checks: [], hasChangelog: false },
       backups: [],
     };
     const dir = project.path;
@@ -371,7 +371,12 @@ export class GitPageService {
     const checks = Object.entries(approvedChecks(this.db, projectId) ?? {})
       .filter(([, command]) => command)
       .map(([name]) => name);
-    if (!workingTip) return { head: null, commits: 0, tickets: 0, checks };
+    // The release commit writes on main as the promote leaves it: main's own CHANGELOG.md, or the
+    // working branch's, which the promote brings in.
+    const changelog =
+      (await hasChangelog(dir, `refs/heads/${main}`)) ||
+      (working !== main && workingTip !== null && (await hasChangelog(dir, workingTip)));
+    if (!workingTip) return { head: null, commits: 0, tickets: 0, checks, hasChangelog: changelog };
     let range = workingTip;
     if (working !== main) range = `${main}..${working}`;
     else {
@@ -391,6 +396,7 @@ export class GitPageService {
       commits: Number.isSafeInteger(commits) ? commits : 0,
       tickets: keys.size,
       checks,
+      hasChangelog: changelog,
     };
   }
 

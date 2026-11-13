@@ -1199,7 +1199,14 @@ describe('the release summary', () => {
     const tip = git(projectPath, 'rev-parse', 'develop');
     expect(tip).not.toBe(head);
     let status = (await send('GET', gitUrl())).json() as GitPageStatus;
-    expect(status.releaseSummary).toEqual({ head: tip, commits: 3, tickets: 2, checks: [] });
+    // developWithTickets gives main a CHANGELOG.md.
+    expect(status.releaseSummary).toEqual({
+      head: tip,
+      commits: 3,
+      tickets: 2,
+      checks: [],
+      hasChangelog: true,
+    });
     approveChecks();
     status = (await send('GET', gitUrl())).json() as GitPageStatus;
     expect(status.releaseSummary.checks).toEqual(['build']);
@@ -1215,11 +1222,32 @@ describe('the release summary', () => {
       commits: 2,
       tickets: 1,
       checks: [],
+      hasChangelog: false,
     });
     // Without a tag, all of main counts.
     git(projectPath, 'tag', '-d', '0.1.0');
     status = (await send('GET', gitUrl())).json() as GitPageStatus;
     expect(status.releaseSummary.commits).toBe(Number(git(projectPath, 'rev-list', '--count', 'main')));
+  });
+});
+
+describe('the release summary and CHANGELOG.md', () => {
+  it('says whether the release commit would have a CHANGELOG.md to add the notes to', async () => {
+    const summary = async () => ((await send('GET', gitUrl())).json() as GitPageStatus).releaseSummary;
+    expect((await summary()).hasChangelog).toBe(false);
+    // On the working branch only: the promote brings it into main.
+    git(projectPath, 'switch', '-q', '-c', 'develop');
+    expect((await send('POST', gitUrl('/working-branch'), { branch: 'develop' })).statusCode).toBe(200);
+    commit(projectPath, 'CHANGELOG.md', '# Changelog\n', 'docs: changelog');
+    expect((await summary()).hasChangelog).toBe(true);
+    // A CHANGELOG.md that is no regular file does not count.
+    git(projectPath, 'rm', '-q', 'CHANGELOG.md');
+    git(projectPath, 'commit', '-q', '-m', 'docs: no changelog');
+    execFileSync('mkdir', [path.join(projectPath, 'CHANGELOG.md')]);
+    writeFileSync(path.join(projectPath, 'CHANGELOG.md', 'x'), 'x\n');
+    git(projectPath, 'add', 'CHANGELOG.md/x');
+    git(projectPath, 'commit', '-q', '-m', 'chore: a folder');
+    expect((await summary()).hasChangelog).toBe(false);
   });
 });
 

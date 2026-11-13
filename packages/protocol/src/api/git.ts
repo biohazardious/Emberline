@@ -207,6 +207,8 @@ export const GitPageStatus = z.object({
     commits: z.number().int(),
     tickets: z.number().int(),
     checks: z.array(z.string()),
+    /** Whether the release commit would add the notes to a CHANGELOG.md (main has one, or gets one by the promote). */
+    hasChangelog: z.boolean(),
   }),
   backups: z.array(z.string()),
 });

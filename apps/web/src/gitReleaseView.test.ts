@@ -25,7 +25,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     release: { ok: true, reason: null },
     releaseJob: null,
     releaseDraft: null,
-    releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: ['build', 'test'] },
+    releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: ['build', 'test'], hasChangelog: true },
     ...over,
   }) as GitPageStatus;
 const NAMES = [
@@ -122,7 +122,7 @@ describe('the release tab', () => {
       status({
         workingBranch: 'main',
         forgeRelease: false,
-        releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: [] },
+        releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: [], hasChangelog: true },
       }),
     );
     expect(container.textContent).toContain('Release main as it is');
@@ -137,6 +137,14 @@ describe('the release tab', () => {
     ]);
     expect(container.textContent).not.toContain('Promote only');
     expect(container.textContent).toContain('Factory merges into main wait while the release runs.');
+  });
+
+  it('leaves the CHANGELOG step out when the project has no CHANGELOG.md', async () => {
+    const { container } = await show(
+      status({ releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: [], hasChangelog: false } }),
+    );
+    expect(lines(container)).not.toContain('Add the notes to CHANGELOG.md in the release commit');
+    expect(lines(container)).toContain('Tag v0.8.1');
   });
 
   it('plans a promote only without the tag, the notes and the release, and sends that mode', async () => {
@@ -169,7 +177,9 @@ describe('the release tab', () => {
     await rerender(
       createElement(GitReleaseTab, {
         projectId: 'p1',
-        status: status({ releaseSummary: { head: NEW, commits: 5, tickets: 2, checks: [] } }),
+        status: status({
+          releaseSummary: { head: NEW, commits: 5, tickets: 2, checks: [], hasChangelog: true },
+        }),
       }),
     );
     await click(getButton('Approve and publish'));

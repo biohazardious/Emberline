@@ -880,14 +880,11 @@ export class ReleaseJobs {
     job.releaseCommit = null;
     const expected = await this.checkedMain(ctx, mainTip);
     if (typeof expected !== 'string') return expected;
-    const entry = (await realGit(['ls-tree', '-z', expected, '--', 'CHANGELOG.md'], mainPath)).stdout.split(
-      '\0',
-    )[0];
-    if (!entry) return skipped(`${main} has no CHANGELOG.md.`);
-    const [meta = '', file] = entry.split('\t');
-    const [mode, type, blob] = meta.split(' ');
-    if (file !== 'CHANGELOG.md' || type !== 'blob' || (mode !== '100644' && mode !== '100755') || !blob)
+    const entry = await changelogEntry(mainPath, expected);
+    if (entry === 'missing') return skipped(`${main} has no CHANGELOG.md.`);
+    if (entry === 'irregular')
       return skipped(`CHANGELOG.md on ${main} is not a regular file, so it was left as it is.`);
+    const { blob } = entry;
     const version = job.version ?? '';
     const text = (await realGit(['cat-file', 'blob', blob], mainPath)).stdout;
     // Read as UTF-8 text, bytes that are not UTF-8 would come back as U+FFFD and be written so:
@@ -1249,6 +1246,26 @@ export class ReleaseJobs {
     await this.deps.runs.teardownJobWorktree(project.id, dir, composeProjectOf(dir)).catch(() => undefined);
     await withMainWorkspaceLock(project.path, () => pruneWorktree(project.path, dir)).catch(() => undefined);
   }
+}
+
+/** CHANGELOG.md at the top of `rev`'s tree: its blob when it is a regular file. */
+async function changelogEntry(
+  mainPath: string,
+  rev: string,
+): Promise<{ blob: string } | 'missing' | 'irregular'> {
+  const entry = (await realGit(['ls-tree', '-z', rev, '--', 'CHANGELOG.md'], mainPath)).stdout.split('\0')[0];
+  if (!entry) return 'missing';
+  const [meta = '', file] = entry.split('\t');
+  const [mode, type, blob] = meta.split(' ');
+  if (file !== 'CHANGELOG.md' || type !== 'blob' || (mode !== '100644' && mode !== '100755') || !blob)
+    return 'irregular';
+  return { blob };
+}
+
+/** Whether `rev` has a CHANGELOG.md the release commit would add the notes to. */
+export async function hasChangelog(mainPath: string, rev: string): Promise<boolean> {
+  const entry = await changelogEntry(mainPath, rev).catch(unlessRunnerUnavailable('missing' as const));
+  return typeof entry === 'object';
 }
 
 const refExists = (mainPath: string, ref: string) =>
