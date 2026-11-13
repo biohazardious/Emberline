@@ -115,6 +115,7 @@ export async function releaseRange(mainPath: string, main: string, working: stri
  * below.
  */
 export const MAX_PROMPT_BYTES = 100_000;
+/** What the commit lines and the ticket lines together may take. */
 const COMMIT_BUDGET_BYTES = 80_000;
 const MAX_TICKET_LINES = 100;
 const oneLine = (text: string, max = 300) => text.replace(/\s+/g, ' ').trim().slice(0, max);
@@ -156,9 +157,16 @@ export function buildReleaseNotesPrompt(
     ...(bodiesDropped ? ['(Commit bodies were left out to keep this short.)'] : []),
     ...(omitted > 0 ? [`(${omitted} older commits omitted.)`] : []),
   ];
-  const tickets = ticketTitles
-    .slice(0, MAX_TICKET_LINES)
-    .map((t) => `- ${oneLine(t.key, 40)}: ${oneLine(t.title)}`);
+  // The tickets share the commits' budget, after them: a title in a wide script takes up to four
+  // bytes a character too. The ones that do not fit are left out, and that is said.
+  const tickets: string[] = [];
+  for (const t of ticketTitles.slice(0, MAX_TICKET_LINES)) {
+    const line = `- ${oneLine(t.key, 40)}: ${oneLine(t.title)}`;
+    if (used + bytes(line) + 1 > COMMIT_BUDGET_BYTES) break;
+    used += bytes(line) + 1;
+    tickets.push(line);
+  }
+  const ticketsOmitted = ticketTitles.length - tickets.length;
   const head = [
     'You write the release notes of the next release of this software, from the changes since the last release.',
     'Do NOT modify any files or run commands. You may read files in the repository for context.',
@@ -171,7 +179,14 @@ export function buildReleaseNotesPrompt(
     'Commits since then (newest first):',
     ...lines.slice(0, kept),
     ...notes,
-    ...(tickets.length > 0 ? ['', 'Tickets named in the commits:', ...tickets] : []),
+    ...(ticketTitles.length > 0
+      ? [
+          '',
+          'Tickets named in the commits:',
+          ...tickets,
+          ...(ticketsOmitted > 0 ? [`(${ticketsOmitted} more tickets omitted.)`] : []),
+        ]
+      : []),
     '',
     'Files changed:',
   ];

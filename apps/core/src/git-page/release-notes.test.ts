@@ -249,6 +249,27 @@ describe('buildReleaseNotesPrompt', () => {
     expect(prompt).not.toContain('\uFFFD');
   });
 
+  it('counts ticket lines in the same byte budget: long titles in a wide script are cut, and the cut is said', () => {
+    const wide = '変'.repeat(300);
+    const commits = Array.from({ length: 40 }, (_, i) => ({
+      sha: String(i),
+      subject: `feat: ${wide} ${i}`,
+      body: '',
+    }));
+    const titles = Array.from({ length: 100 }, (_, i) => ({ key: `EMB-${i}`, title: wide }));
+    const prompt = buildReleaseNotesPrompt(
+      { baseTag: 'v1.0.0', head: 'h', commits, diffstat: 'd'.repeat(20_000) },
+      titles,
+    );
+    expect(Buffer.byteLength(prompt)).toBeLessThan(MAX_PROMPT_BYTES);
+    // The commits come first and all fit; the tickets after them only as far as the budget goes.
+    expect(prompt).not.toContain('older commits omitted');
+    expect(prompt).toContain('- EMB-0: 変');
+    expect(prompt).not.toContain('- EMB-99: ');
+    expect(prompt).toMatch(/\(\d+ more tickets omitted\.\)/);
+    expect(prompt).not.toContain('�');
+  });
+
   it('truncateBytes never cuts a character in two', () => {
     expect(truncateBytes('ab', 5)).toBe('ab');
     expect(truncateBytes('a変b', 3)).toBe('a');
