@@ -832,6 +832,65 @@ describe('release', () => {
     await jobs.idle();
   });
 
+  it('working = default: a factory merge during the preflight waits for the release too', async () => {
+    approveChecks();
+    const head = commit(projectPath, 'b.txt', 'b\n', 'feat(EMB-1): b');
+    git(projectPath, 'push', '-q', bare, 'main');
+    const worktree = path.join(t.dir, 'run-wt');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/r1', worktree, 'main');
+    writeFileSync(path.join(worktree, 'run.txt'), 'run\n');
+    const merge = () =>
+      syncWorktreeToMainWorkspace({
+        worktreePath: worktree,
+        mainWorkspacePath: projectPath,
+        ticketKey: 'EMB-9',
+        runId: 'r1',
+      });
+    // The preflight's read of origin stalls until the merge has been asked for.
+    let reading!: () => void;
+    const inPreflight = new Promise<void>((r) => (reading = r));
+    let goOn!: () => void;
+    const stalled = new Promise<void>((r) => (goOn = r));
+    let first = true;
+    const repo = t.repository;
+    const jobs = jobsWith({
+      repository: {
+        remoteAction: async (id, fn) => {
+          if (first) {
+            first = false;
+            reading();
+            await stalled;
+          }
+          return repo.remoteAction(id, fn);
+        },
+        readOrigin: (id, ws) => repo.readOrigin(id, ws),
+        recordPush: (...args) => repo.recordPush(...args),
+      },
+    });
+    // A start refused before its preflight holds nothing back.
+    expect((await refusal(jobs.start(projectId, publish(head, { version: 'nope' })))).code).toBe(
+      'version_invalid',
+    );
+    const starting = jobs.start(projectId, publish(head));
+    await inPreflight;
+    let landed = false;
+    const merging = merge().then((r) => {
+      landed = true;
+      return r;
+    });
+    await Promise.race([merging, sleep(300)]);
+    // It waits: main is what the release was approved on.
+    expect(landed).toBe(false);
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(head);
+    goOn();
+    await starting;
+    await jobs.idle();
+    expect(storedJob().state).toBe('done');
+    expect(git(bare, 'rev-parse', 'refs/tags/v0.2.0^{commit}')).toBe(head);
+    expect((await merging).ok).toBe(true);
+    expect(git(projectPath, 'rev-parse', 'main^1')).toBe(head);
+  });
+
   it('is refused while a run is merging into the working branch', async () => {
     const head = await developWithTickets();
     const worktree = path.join(t.dir, 'run-wt');

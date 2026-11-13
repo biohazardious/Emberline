@@ -221,6 +221,9 @@ const PULL_FIRST: Partial<Record<string, (b: string) => string>> = {
     `origin's ${b} no longer shares history with ${b} here (it was rewritten); use Match origin on the Git page first.`,
 };
 
+/** A job's hold on factory merges into main (holdMergesInto). */
+type MergeHold = ReturnType<typeof holdMergesInto>;
+
 /** The background release jobs, at most one per project. */
 export class ReleaseJobs {
   private readonly running = new Map<string, Promise<void>>();
@@ -229,7 +232,7 @@ export class ReleaseJobs {
   /** The jobs' own worktrees while they exist: a sweep of leftovers never takes one of these. */
   private readonly dirs = new Set<string>();
   /** The jobs' holds on merges into main (a release with main as its working branch). */
-  private readonly holds = new Set<ReturnType<typeof holdMergesInto>>();
+  private readonly holds = new Set<MergeHold>();
   private stopping = false;
 
   constructor(
@@ -330,50 +333,69 @@ export class ReleaseJobs {
     const body = parsed.data;
     const project = this.project(projectId);
     return this.exclusive(projectId, async () => {
-      const refused = await this.localRefusal(project, body);
-      if (refused) throw refused;
-      const checked = await this.remotePreflight(project, body);
       const main = project.defaultBranch;
       const working = workingBranchOf(readRepositorySettings(this.db, projectId), main);
-      // With no working branch of its own, main is what the factory merges into: the release is
-      // exactly the approved head, and a merge landing since stops it (the steps check main is there).
-      const mainTip = working === main ? body.head : checked;
-      const workingInMain =
-        working !== main && mainTip !== null && (await isAncestorCommit(project.path, body.head, mainTip));
-      const job: ReleaseJob = {
-        id: randomUUID(),
-        mode: body.mode,
-        version: body.mode === 'publish' ? (body.version ?? null) : null,
-        notes: body.mode === 'publish' ? (body.notes ?? '') : null,
-        head: body.head,
-        working,
-        state: 'running',
-        steps: ReleaseStepName.options.map((name) => ({ name, status: 'pending', detail: null })),
-        startedAt: new Date().toISOString(),
-        finishedAt: null,
-        previousMain: mainTip,
-        checked: null,
-        promoteOid: null,
-        releaseCommit: null,
-        releaseUrl: null,
-        error: null,
-      };
-      const skip = (name: ReleaseStepName, detail: string) =>
-        Object.assign(stepOf(job, name), { status: 'skipped', detail });
-      if (working === main) {
-        skip('promote', `The working branch is ${main} itself: there is nothing to promote.`);
-        skip('sync_working', `The working branch is ${main} itself.`);
-      } else if (workingInMain) {
-        skip('promote', `${main} already has everything on ${working}.`);
+      // From the first check on: a factory merge landing during the preflight would move main too.
+      const hold = this.holdFor(project, working);
+      try {
+        return await this.started(project, body, working, hold);
+      } catch (error) {
+        this.letGo(hold);
+        throw error;
       }
-      if (body.mode === 'promote_only') {
-        for (const name of ['changelog', 'tag', 'push_tag', 'forge_release'] as const)
-          skip(name, 'Promote only makes no tag and no release.');
-      }
-      this.write(projectId, job);
-      this.launch(project, job, false);
-      return job;
     });
+  }
+
+  /** start once its hold is taken: checked, then launched with the hold. */
+  private async started(
+    project: ReleaseProject,
+    body: StartReleaseBody,
+    working: string,
+    hold: MergeHold | null,
+  ): Promise<ReleaseJob> {
+    const projectId = project.id;
+    const main = project.defaultBranch;
+    const refused = await this.localRefusal(project, body);
+    if (refused) throw refused;
+    const checked = await this.remotePreflight(project, body);
+    // With no working branch of its own, main is what the factory merges into: the release is
+    // exactly the approved head, and a merge landing since stops it (the steps check main is there).
+    const mainTip = working === main ? body.head : checked;
+    const workingInMain =
+      working !== main && mainTip !== null && (await isAncestorCommit(project.path, body.head, mainTip));
+    const job: ReleaseJob = {
+      id: randomUUID(),
+      mode: body.mode,
+      version: body.mode === 'publish' ? (body.version ?? null) : null,
+      notes: body.mode === 'publish' ? (body.notes ?? '') : null,
+      head: body.head,
+      working,
+      state: 'running',
+      steps: ReleaseStepName.options.map((name) => ({ name, status: 'pending', detail: null })),
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      previousMain: mainTip,
+      checked: null,
+      promoteOid: null,
+      releaseCommit: null,
+      releaseUrl: null,
+      error: null,
+    };
+    const skip = (name: ReleaseStepName, detail: string) =>
+      Object.assign(stepOf(job, name), { status: 'skipped', detail });
+    if (working === main) {
+      skip('promote', `The working branch is ${main} itself: there is nothing to promote.`);
+      skip('sync_working', `The working branch is ${main} itself.`);
+    } else if (workingInMain) {
+      skip('promote', `${main} already has everything on ${working}.`);
+    }
+    if (body.mode === 'promote_only') {
+      for (const name of ['changelog', 'tag', 'push_tag', 'forge_release'] as const)
+        skip(name, 'Promote only makes no tag and no release.');
+    }
+    this.write(projectId, job);
+    this.launch(project, job, false, hold);
+    return job;
   }
 
   /** Goes on from the first step that is not done, with the version and notes stored. */
@@ -385,36 +407,43 @@ export class ReleaseJobs {
         throw conflict('There is no stopped release to retry.', 'nothing_to_retry');
       if (stepOf(stopped, 'push_main').detail === ORIGIN_MAIN_MOVED_START_AGAIN)
         throw conflict(ORIGIN_MAIN_MOVED_START_AGAIN, 'restart_needed');
-      const job: ReleaseJob = {
-        ...stopped,
-        state: 'running',
-        error: null,
-        finishedAt: null,
-        steps: stopped.steps.map((s) =>
-          s.status === 'failed' ? { ...s, status: 'pending', detail: null } : s,
-        ),
-      };
-      // Checks that ran on another commit than main names now say nothing about it: they run again,
-      // but only while nothing after them took effect. A step after them that is done, or that core
-      // stopped during (a push may have landed), fixes what the release is: Retry finishes it on the
-      // commits recorded, whatever main took in since.
-      const after = stopped.steps.slice(stopped.steps.findIndex((s) => s.name === 'checks') + 1);
-      const untouched = after.every(
-        (s) =>
-          s.status === 'pending' ||
-          s.status === 'skipped' ||
-          (s.status === 'failed' && s.detail !== INTERRUPTED),
-      );
-      const checks = stepOf(job, 'checks');
-      if (
-        untouched &&
-        (checks.status === 'done' || checks.status === 'skipped') &&
-        (await localTip(project.path, project.defaultBranch)) !== job.checked
-      )
-        Object.assign(checks, { status: 'pending', detail: null });
-      this.write(projectId, job);
-      this.launch(project, job, true);
-      return job;
+      // Before main is looked at: a factory merge landing meanwhile would move it under the Retry.
+      const hold = this.holdFor(project, stopped.working);
+      try {
+        const job: ReleaseJob = {
+          ...stopped,
+          state: 'running',
+          error: null,
+          finishedAt: null,
+          steps: stopped.steps.map((s) =>
+            s.status === 'failed' ? { ...s, status: 'pending', detail: null } : s,
+          ),
+        };
+        // Checks that ran on another commit than main names now say nothing about it: they run again,
+        // but only while nothing after them took effect. A step after them that is done, or that core
+        // stopped during (a push may have landed), fixes what the release is: Retry finishes it on the
+        // commits recorded, whatever main took in since.
+        const after = stopped.steps.slice(stopped.steps.findIndex((s) => s.name === 'checks') + 1);
+        const untouched = after.every(
+          (s) =>
+            s.status === 'pending' ||
+            s.status === 'skipped' ||
+            (s.status === 'failed' && s.detail !== INTERRUPTED),
+        );
+        const checks = stepOf(job, 'checks');
+        if (
+          untouched &&
+          (checks.status === 'done' || checks.status === 'skipped') &&
+          (await localTip(project.path, project.defaultBranch)) !== job.checked
+        )
+          Object.assign(checks, { status: 'pending', detail: null });
+        this.write(projectId, job);
+        this.launch(project, job, true, hold);
+        return job;
+      } catch (error) {
+        this.letGo(hold);
+        throw error;
+      }
     });
   }
 
@@ -636,20 +665,32 @@ export class ReleaseJobs {
     }
   }
 
-  private launch(project: ReleaseProject, job: ReleaseJob, resumed: boolean): void {
+  /**
+   * On main itself, a factory merge would move main under the checks (and stop the release): the
+   * merges wait from a start's or Retry's first check until the job ends (or letGo, when it never
+   * starts). Core stopping lets them go, unmerged. Null when the working branch is another branch.
+   */
+  private holdFor(project: ReleaseProject, working: string): MergeHold | null {
+    if (working !== project.defaultBranch) return null;
+    const hold = holdMergesInto(project.path);
+    this.holds.add(hold);
+    return hold;
+  }
+
+  private letGo(hold: MergeHold | null): void {
+    if (!hold) return;
+    this.holds.delete(hold);
+    hold.end();
+  }
+
+  /** Runs the job in the background; `hold` (holdFor) ends with it. */
+  private launch(project: ReleaseProject, job: ReleaseJob, resumed: boolean, hold: MergeHold | null): void {
     const ctx: JobContext = { project, main: project.defaultBranch, job, resumed, worktree: null };
-    // On main itself, a factory merge would move main under the checks (and stop the release): the
-    // merges wait until the job ends. Core stopping lets them go, unmerged.
-    const hold = job.working === project.defaultBranch ? holdMergesInto(project.path) : null;
-    if (hold) this.holds.add(hold);
     const running = this.run(ctx)
       .catch(() => undefined)
       .finally(() => {
         this.running.delete(project.id);
-        if (hold) {
-          this.holds.delete(hold);
-          hold.end();
-        }
+        this.letGo(hold);
       });
     this.running.set(project.id, running);
   }
