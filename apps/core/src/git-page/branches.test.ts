@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GitBranch } from '@emberline/protocol';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
 import { runEvents, runs } from '../db/schema.js';
@@ -266,6 +267,38 @@ describe('git branches', () => {
         .runs.map((r: { id: string }) => r.id)
         .sort(),
     ).toEqual(['latest', 'loose']);
+  });
+
+  it("a successor on the same worktree supersedes nothing: the worktree's work still waits, listed once", async () => {
+    git(projectPath, 'branch', 'develop');
+    const ticket = t.tickets.create(projectId, { title: 'Handed off', status: 'review' });
+    const dir = path.join(t.dir, 'wt-orig');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/orig', dir);
+    commit(dir, 'orig.txt');
+    const at = (ms: number) => new Date(Date.UTC(2026, 10, 13) + ms);
+    seedRun('orig', {
+      state: 'done',
+      branch: 'emberline/orig',
+      worktreePath: dir,
+      ticketId: ticket.id,
+      createdAt: at(0),
+    });
+    // Its successor (a handoff, a resolver run) works in the same worktree, and failed.
+    seedRun('succ', {
+      state: 'failed',
+      branch: 'emberline/orig',
+      worktreePath: dir,
+      ticketId: ticket.id,
+      createdAt: at(1000),
+    });
+    const refused = await send('POST', workingUrl(), { branch: 'develop' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().runs.map((r: { id: string }) => r.id)).toEqual(['orig']);
+
+    // A successor that finished too stands for the worktree: one run is listed, the newest.
+    t.db.update(runs).set({ state: 'done' }).where(eq(runs.id, 'succ')).run();
+    const again = await send('POST', workingUrl(), { branch: 'develop' });
+    expect(again.json().runs.map((r: { id: string }) => r.id)).toEqual(['succ']);
   });
 
   it('a dirty tree that blocks the switch is refused with git’s reason, and the edit is kept', async () => {

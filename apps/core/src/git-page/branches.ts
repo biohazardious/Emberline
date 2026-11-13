@@ -64,22 +64,62 @@ export interface LiveRun extends GitBlockingRun {
 export const blockingRuns = (list: LiveRun[]): GitBlockingRun[] =>
   list.map(({ id, ticketId, ticketKey, title, status }) => ({ id, ticketId, ticketKey, title, status }));
 
-/** The newest run of each of `ticketIds` (by creation; a later run supersedes the ones before it). */
-function latestRunOfTickets(db: Db, projectId: string, ticketIds: string[]): Map<string, string> {
-  if (ticketIds.length === 0) return new Map();
-  const latest = new Map<string, { id: string; at: number }>();
-  const all = db
-    .select({ id: runs.id, ticketId: runs.ticketId, createdAt: runs.createdAt })
+/** One run of a ticket, as supersededRun weighs it. */
+interface TicketRun {
+  id: string;
+  /** Its worktree, resolved. */
+  worktree: string;
+  createdAt: number;
+  /** Live, or finished and not stopped: what its worktree holds is (still) its work. */
+  standsFor: boolean;
+}
+
+/** The runs of each of `ticketIds`. */
+function runsOfTickets(db: Db, projectId: string, ticketIds: string[]): Map<string, TicketRun[]> {
+  const byTicket = new Map<string, TicketRun[]>();
+  if (ticketIds.length === 0) return byTicket;
+  const rows = db
+    .select({
+      id: runs.id,
+      ticketId: runs.ticketId,
+      worktreePath: runs.worktreePath,
+      createdAt: runs.createdAt,
+      state: runs.state,
+      cancelledAt: runs.cancelledAt,
+    })
     .from(runs)
     .where(and(eq(runs.projectId, projectId), inArray(runs.ticketId, [...new Set(ticketIds)])))
     .all();
-  for (const r of all) {
+  for (const r of rows) {
     if (!r.ticketId) continue;
-    const at = r.createdAt.getTime();
-    const seen = latest.get(r.ticketId);
-    if (!seen || at > seen.at || (at === seen.at && r.id > seen.id)) latest.set(r.ticketId, { id: r.id, at });
+    const list = byTicket.get(r.ticketId) ?? [];
+    list.push({
+      id: r.id,
+      worktree: path.resolve(r.worktreePath),
+      createdAt: r.createdAt.getTime(),
+      standsFor:
+        ACTIVE_RUN_STATES.has(r.state as Run['state']) || (r.state === 'done' && r.cancelledAt === null),
+    });
+    byTicket.set(r.ticketId, list);
   }
-  return new Map([...latest].map(([ticketId, { id }]) => [ticketId, id]));
+  return byTicket;
+}
+
+/**
+ * Whether a finished run of a ticket can no longer merge, so nothing waits for it: a newer run of
+ * the ticket started over in a worktree of its own (it superseded this attempt), or a newer run in
+ * the same worktree (a handoff, a resolver run) stands for that worktree's work and is listed
+ * instead. A successor in the same worktree that failed or was stopped supersedes nothing: the
+ * worktree still holds this run's work. Newer is by creation, as RunService.latestRunForTicket
+ * orders a ticket's runs; two made in the same millisecond supersede neither.
+ */
+function supersededRun(
+  list: TicketRun[],
+  run: { id: string; worktreePath: string; createdAt: Date },
+): boolean {
+  const worktree = path.resolve(run.worktreePath);
+  const at = run.createdAt.getTime();
+  return list.some((r) => r.id !== run.id && r.createdAt > at && (r.worktree !== worktree || r.standsFor));
 }
 
 async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
@@ -94,6 +134,7 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       ticketId: runs.ticketId,
       ticketKey: tickets.key,
       ticketStatus: tickets.status,
+      createdAt: runs.createdAt,
     })
     .from(runs)
     .leftJoin(tickets, eq(tickets.id, runs.ticketId))
@@ -107,7 +148,7 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       ),
     )
     .all();
-  const latest = latestRunOfTickets(
+  const ticketRuns = runsOfTickets(
     db,
     project.id,
     rows.flatMap((r) => (r.ticketId ? [r.ticketId] : [])),
@@ -127,10 +168,14 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       live.push(of(run, 'live'));
       continue;
     }
-    // A finished run of a ticket merges only as that ticket's latest run, and only while the ticket
-    // is open: the pipeline finalizes a ticket by its latest run, and a done ticket is finished.
-    // What an older or a closed ticket's run left in its worktree is an attempt nothing will merge.
-    if (run.ticketId && (run.ticketStatus === 'done' || latest.get(run.ticketId) !== run.id)) continue;
+    // A finished run of a ticket merges only while the ticket is open (a done ticket is finished)
+    // and while no newer run of it took over (supersededRun): what is left is an attempt nothing
+    // will merge.
+    if (
+      run.ticketId &&
+      (run.ticketStatus === 'done' || supersededRun(ticketRuns.get(run.ticketId) ?? [], run))
+    )
+      continue;
     // A finished run waits to merge while its worktree holds commits the working branch lacks. A
     // pruned worktree has nothing left to merge (worktreeHasUnmergedCommits answers false without
     // running git), and a row whose "worktree" is the main workspace itself is no run worktree.
