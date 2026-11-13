@@ -5,7 +5,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
-import { FILES_NAMED, remoteStateText, splitBranches, syncText, tagsDifferText } from '../../gitPage';
+import {
+  FILES_NAMED,
+  remoteStateText,
+  splitBranches,
+  syncText,
+  tagsDifferText,
+  tagsLikeBranchesText,
+} from '../../gitPage';
 import { timeAgo } from '../../time';
 
 type Action = 'branch' | 'autopull' | 'fetch' | 'pull' | 'match' | 'ticket';
@@ -163,6 +170,7 @@ export function GitStatusStrip({
   const banner = syncText(status.sync);
   // A status read from a core before this field (a page left open across an upgrade) has none.
   const tagsNote = tagsDifferText(status.tagsDifferFromOrigin ?? []);
+  const tagsLikeBranchesNote = tagsLikeBranchesText(status.tagsNamedLikeBranches ?? []);
   const matchBranch = status.sync.branch ?? status.workingBranch;
   // How that branch stands against origin's as last read: Match origin helps only when its history
   // no longer fits (a conflict merging origin's branch in is the case besides the two stops).
@@ -262,6 +270,7 @@ export function GitStatusStrip({
       )}
 
       {tagsNote && <p className="muted small">{tagsNote}</p>}
+      {tagsLikeBranchesNote && <p className="muted small">{tagsLikeBranchesNote}</p>}
 
       {detached && (
         <div className="banner banner-warn" role="status">

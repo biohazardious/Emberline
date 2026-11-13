@@ -315,6 +315,19 @@ describe('a working branch the factory merges into', () => {
     expect(git(projectPath, 'rev-parse', 'develop')).not.toBe(mainBefore);
   });
 
+  it('a tag named like the working branch never hides it: the merge goes into it', async () => {
+    git(projectPath, 'switch', '-q', '-c', 'develop');
+    git(projectPath, 'tag', 'develop'); // a local actor's tag of the same name
+    writeRepositorySettings(t.db, projectId, { workingBranch: 'develop' });
+    finishedRun('m4');
+    const before = git(projectPath, 'rev-parse', 'refs/heads/develop');
+    expect(await pipelineMerge('m4')).toMatchObject({ ok: true });
+    expect(failures('m4')).toEqual([]);
+    expect(git(projectPath, 'rev-parse', 'refs/heads/develop')).not.toBe(before);
+    const status = (await send('GET', `/api/projects/${projectId}/git`)).json();
+    expect(status).toMatchObject({ checkedOut: 'develop', workingMismatch: false });
+  });
+
   it("while a release holds main, a person's merge is refused at once and the pipeline's waits", async () => {
     finishedRun('m3');
     const mainBefore = git(projectPath, 'rev-parse', 'main');

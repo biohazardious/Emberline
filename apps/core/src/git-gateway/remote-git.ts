@@ -175,12 +175,15 @@ export async function gatewayRemoteRef(
 /**
  * `ls-remote` output as a list of the branches and tags it names, each with exactly what it names
  * (an annotated tag's own object; its peeled `^{}` line is left out). A ref whose name git would
- * refuse or a git argument could misread ({@link refKind}) is dropped: Emberline never writes one.
+ * refuse or a git argument could misread ({@link refKind}), or one named `HEAD`, is dropped:
+ * Emberline never writes one.
  */
 export function parseRemoteRefs(out: string): { ref: string; oid: string }[] {
   const refs: { ref: string; oid: string }[] = [];
   for (const line of out.split('\n')) {
     const [oid, name] = line.split('\t').map((part) => part.trim());
+    // `HEAD` as a branch or tag name would make git's own `HEAD` ambiguous: never read as one.
+    if (name === 'refs/heads/HEAD' || name === 'refs/tags/HEAD') continue;
     if (oid && name && FULL_OID.test(oid) && refKind(name)) refs.push({ ref: name, oid });
   }
   return refs;

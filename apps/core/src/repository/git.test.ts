@@ -12,10 +12,12 @@ import { HttpError } from '../errors.js';
 import { addressSecrets, hostOf, remoteCompareKey, type ScanMeter } from '../forge/hosts.js';
 import { GitGateway } from '../git-gateway/gateway.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
+import { mainWorkspaceBranchStrict } from '../factory/merge.js';
 import {
   fetchBranchObjects,
   fetchRefObjects,
   listOriginRefs,
+  mainBranchState,
   passwordGitWouldShow,
   pushBranch,
   pushRef,
@@ -513,6 +515,26 @@ describe('remoteUrlForDisplay', () => {
       display: 'https://GitHub.com/o/r.git',
       hadCredentials: false,
     });
+  });
+});
+
+describe('the checked-out branch beside a tag of the same name', () => {
+  it('is read as the branch, never as heads/<b> or an ambiguous HEAD', async () => {
+    const repo = path.join(dir, 'tagged');
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'one');
+    // What a person or an agent may make in the repository: a tag `main`, and a ref refs/tags/HEAD.
+    git(repo, 'tag', 'main');
+    git(repo, 'update-ref', 'refs/tags/HEAD', 'main');
+    expect((await mainBranchState(repo)).branch).toBe('main');
+    expect(await mainWorkspaceBranchStrict(repo)).toBe('main');
+    git(repo, 'switch', '-q', '-c', 'develop', 'refs/heads/main');
+    git(repo, 'tag', 'develop');
+    expect((await mainBranchState(repo)).branch).toBe('develop');
+    expect(await mainWorkspaceBranchStrict(repo)).toBe('develop');
+    git(repo, 'switch', '-q', '--detach', 'refs/heads/develop');
+    expect((await mainBranchState(repo)).branch).toBeNull();
+    expect(await mainWorkspaceBranchStrict(repo)).toBeNull();
   });
 });
 

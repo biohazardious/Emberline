@@ -49,6 +49,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     releaseSummary: { head: null, commits: 0, tickets: 0, checks: [], hasChangelog: false },
     backups: [],
     tagsDifferFromOrigin: [],
+    tagsNamedLikeBranches: [],
     ...over,
   }) as GitPageStatus;
 const branch = (name: string, kind: GitBranch['kind']) =>
@@ -108,6 +109,14 @@ describe('Git page', () => {
     );
     expect(view.container.querySelector('option[value="12112026_backup"]')?.textContent).toBe(
       '12112026_backup (on origin)',
+    );
+  });
+
+  it("says which of origin's tags are named like a branch", async () => {
+    serve(status({ tagsNamedLikeBranches: ['main'] }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.textContent).toContain('origin has a tag named like a branch (main)'),
     );
   });
 

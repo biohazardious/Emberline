@@ -612,9 +612,9 @@ export class RepositoryService {
         stale = true; // origin changed meanwhile: its own read counts
         return;
       }
-      let tagsDiffer: string[] | null = null;
+      let tags: { tagsDiffer: string[]; tagsNamedLikeBranches: string[] } | null = null;
       try {
-        if (read) tagsDiffer = (await writeOriginRefs(ws.path, read.refs, read.objects, needed)).tagsDiffer;
+        if (read) tags = await writeOriginRefs(ws.path, read.refs, read.objects, needed);
       } catch (error) {
         if (isRunnerUnavailable(error)) throw error;
         check = { ...check, published: false, error: describeGitError(error, known) };
@@ -622,7 +622,9 @@ export class RepositoryService {
       try {
         writeRepositorySettings(this.db, projectId, {
           lastRemoteCheck: check,
-          ...(tagsDiffer ? { tagsDifferFromOrigin: tagsDiffer } : {}),
+          ...(tags
+            ? { tagsDifferFromOrigin: tags.tagsDiffer, tagsNamedLikeBranches: tags.tagsNamedLikeBranches }
+            : {}),
         });
       } catch {
         // the project was deleted meanwhile
@@ -662,7 +664,11 @@ export class RepositoryService {
       this.db.update(projects).set({ repoUrl: url }).where(eq(projects.id, projectId)).run();
       // A read of the origin before is no read of this one, whatever both look like.
       if (current !== url)
-        writeRepositorySettings(this.db, projectId, { lastRemoteCheck: null, tagsDifferFromOrigin: [] });
+        writeRepositorySettings(this.db, projectId, {
+          lastRemoteCheck: null,
+          tagsDifferFromOrigin: [],
+          tagsNamedLikeBranches: [],
+        });
     });
   }
 }

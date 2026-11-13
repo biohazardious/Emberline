@@ -2,9 +2,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type CommitIdentity, type SyncWorktreeResponse } from '@emberline/protocol';
-import { execFileChecked, isRunnerUnavailable, RUNNER_BIN, systemCommand } from '../command-exec.js';
+import { execFileChecked, RUNNER_BIN, systemCommand } from '../command-exec.js';
 import { HttpError } from '../errors.js';
-import { execGitFile, runGit } from '../git-exec.js';
+import { checkedOutBranch, execGitFile, runGit } from '../git-exec.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { gitIdentityArgs, runOutputSubject } from './commit-identity.js';
 
@@ -423,14 +423,7 @@ function gitLines(stdout: string): string[] {
  * could not run git is thrown (isRunnerUnavailable), never read as "not on a branch".
  */
 export async function mainWorkspaceBranchStrict(mainWorkspacePath: string): Promise<string | null> {
-  const res = await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainWorkspacePath }).catch(
-    (error: unknown) => {
-      if (isRunnerUnavailable(error)) throw error;
-      return { stdout: '' };
-    },
-  );
-  const branch = res.stdout.trim();
-  return branch && branch !== 'HEAD' ? branch : null;
+  return checkedOutBranch(mainWorkspacePath);
 }
 
 /** The branch checked out in the main workspace (what runs are merged into); null when detached or unknown. */
@@ -586,12 +579,7 @@ async function mergeRunIntoMainWorkspace(params: {
 
     const working = params.workingBranch?.() ?? null;
     if (working) {
-      const checkedOut = (
-        await execGitFile(['symbolic-ref', '--quiet', '--short', 'HEAD'], inMain).catch((error: unknown) => {
-          if (isRunnerUnavailable(error)) throw error;
-          return { stdout: '' }; // detached
-        })
-      ).stdout.trim();
+      const checkedOut = (await checkedOutBranch(mainWorkspacePath)) ?? ''; // '': detached
       if (checkedOut !== working) {
         beforeMerge?.();
         const on = checkedOut ? `is on ${checkedOut}` : 'is not on a branch';
@@ -620,7 +608,8 @@ async function mergeRunIntoMainWorkspace(params: {
     }
     const output = await buildRunOutputCommit(worktreePath, head, { identity, subject }, pending);
     const tip = output ?? head;
-    const branch = (await execGitFile(['rev-parse', '--abbrev-ref', 'HEAD'], inWorktree)).stdout.trim();
+    // Named in the merge commit's subject; `HEAD` for a detached worktree, as git's own short name.
+    const branch = (await checkedOutBranch(worktreePath)) ?? 'HEAD';
     const shortHead = async () =>
       (await execGitFile(['rev-parse', '--short', 'HEAD'], inMain)).stdout.trim() || null;
 

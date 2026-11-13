@@ -8,6 +8,7 @@ import {
   syncText,
   tabFromHash,
   tagsDifferText,
+  tagsLikeBranchesText,
 } from './gitPage';
 
 const sync = (over: Partial<GitSync>): GitSync => ({
@@ -134,6 +135,18 @@ describe('tagsDifferText', () => {
     );
     expect(tagsDifferText(['v7', 'v6', 'v5', 'v4', 'v3', 'v2', 'v1'])).toBe(
       "7 tags here are not the same as origin's tags of the same name: v7, v6, v5, v4, v3 and 2 more. Emberline never moves a local tag, so they stay as they are.",
+    );
+  });
+});
+
+describe('tagsLikeBranchesText', () => {
+  it("names origin's tags that are named like a branch", () => {
+    expect(tagsLikeBranchesText([])).toBeNull();
+    expect(tagsLikeBranchesText(['main'])).toBe(
+      "origin has a tag named like a branch (main), so Emberline did not create it here: beside a branch of the same name, git's short names turn ambiguous.",
+    );
+    expect(tagsLikeBranchesText(['a', 'b', 'c', 'd', 'e', 'f'])).toBe(
+      "origin has 6 tags named like branches (a, b, c, d, e and 1 more), so Emberline did not create them here: beside a branch of the same name, git's short names turn ambiguous.",
     );
   });
 });

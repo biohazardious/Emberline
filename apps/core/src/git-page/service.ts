@@ -319,6 +319,7 @@ export class GitPageService {
       releaseSummary: { head: null, commits: 0, tickets: 0, checks: [], hasChangelog: false },
       backups: [],
       tagsDifferFromOrigin: settings.tagsDifferFromOrigin,
+      tagsNamedLikeBranches: settings.tagsNamedLikeBranches,
     };
     const dir = project.path;
     if (!(await isGitRepo(dir))) return base;

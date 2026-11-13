@@ -94,6 +94,20 @@ export function tagsDifferText(names: readonly string[]): string | null {
   return `${names.length} tags here are not the same as origin's tags of the same name: ${shown}${more}. Emberline never moves a local tag, so they stay as they are.`;
 }
 
+/**
+ * The note about origin's tags named like a branch, which core never creates here (git's short
+ * names would turn ambiguous). Null when there are none.
+ */
+export function tagsLikeBranchesText(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  const why = "beside a branch of the same name, git's short names turn ambiguous.";
+  if (names.length === 1)
+    return `origin has a tag named like a branch (${names[0]}), so Emberline did not create it here: ${why}`;
+  const shown = names.slice(0, 5).join(', ');
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : '';
+  return `origin has ${names.length} tags named like branches (${shown}${more}), so Emberline did not create them here: ${why}`;
+}
+
 /** Why a release cannot start right now, or null when it can. */
 export function releaseBlockedText(status: GitPageStatus): string | null {
   if (!status.isGitRepo) return 'This project folder is not a git repository.';

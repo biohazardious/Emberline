@@ -893,10 +893,10 @@ describe('runs', () => {
       fillRecent(project);
       const live: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
       await tokenFor(live.id);
-      // The merge target is the main workspace's branch: `git rev-parse --abbrev-ref HEAD` there.
+      // The merge target is the main workspace's branch: `git symbolic-ref --quiet HEAD` there.
       let branchLookups = 0;
       setCommandExecutor(async (request: ExecRequest) => {
-        if (request.cwd === project.path && request.args.includes('--abbrev-ref')) branchLookups += 1;
+        if (request.cwd === project.path && request.args.includes('symbolic-ref')) branchLookups += 1;
         return localCommandExecutor(request);
       });
       const autoGc = async () => {

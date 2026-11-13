@@ -2,7 +2,7 @@ import { isRunnerUnavailable } from '../command-exec.js';
 import { badRequest, conflict, HttpError } from '../errors.js';
 import { remoteUrlForDisplay, scpUserInfoBeforePath } from '../forge/hosts.js';
 import { parseForgeRemote } from '../forge/service.js';
-import { execGitFile, NO_SUBMODULES } from '../git-exec.js';
+import { checkedOutBranch, execGitFile, NO_SUBMODULES } from '../git-exec.js';
 import { describeGitError, type KnownSecrets } from '../git-gateway/gateway.js';
 import { GitGatewayError } from '../git-gateway/upstream.js';
 import {
@@ -212,13 +212,11 @@ export const unlessRunnerUnavailable =
 export async function mainBranchState(
   mainPath: string,
 ): Promise<{ branch: string | null; hasCommits: boolean }> {
-  const ref = await execGitFile(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: mainPath }).catch(
-    unlessRunnerUnavailable({ stdout: '' }),
-  );
+  const branch = await checkedOutBranch(mainPath);
   const head = await execGitFile(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: mainPath }).catch(
     unlessRunnerUnavailable({ stdout: '' }),
   );
-  return { branch: ref.stdout.trim() || null, hasCommits: Boolean(head.stdout.trim()) };
+  return { branch, hasCommits: Boolean(head.stdout.trim()) };
 }
 
 /**
@@ -397,8 +395,8 @@ export interface OriginRefs {
 
 /**
  * Every branch and tag of the remote in one `ls-remote --heads --tags`, through the gateway or
- * straight to the URL as the other remote reads go. `HEAD` as a branch name is left out (it would
- * read as origin's HEAD), as is any name {@link refKind} refuses.
+ * straight to the URL as the other remote reads go. A branch or tag named `HEAD` is left out (git's
+ * own `HEAD` would turn ambiguous), as is any name {@link refKind} refuses.
  */
 export async function listOriginRefs(mainPath: string, access: RemoteAccess): Promise<OriginRefs> {
   let refs: { ref: string; oid: string }[];
@@ -416,8 +414,7 @@ export async function listOriginRefs(mainPath: string, access: RemoteAccess): Pr
   const tags = new Map<string, string>();
   for (const { ref, oid } of refs) {
     if (ref.startsWith('refs/heads/')) {
-      const name = ref.slice('refs/heads/'.length);
-      if (name !== 'HEAD') branches.set(name, oid);
+      branches.set(ref.slice('refs/heads/'.length), oid);
     } else tags.set(ref.slice('refs/tags/'.length), oid);
   }
   return { branches, tags };

@@ -54,6 +54,14 @@ async function refsUnder(mainPath: string, prefix: string): Promise<Map<string, 
 const hasRealObject = (mainPath: string, oid: string) =>
   realGit(['cat-file', '-e', oid], mainPath).then(() => true, unlessRunnerUnavailable(false));
 
+/**
+ * A tag named like a branch here or on origin is never created: beside a branch of the same name,
+ * git's short names turn ambiguous (`main` reads as `heads/main`), which every reader of a branch
+ * name would trip over.
+ */
+const namedLikeBranch = (name: string, refs: OriginRefs, localBranches: Map<string, string>) =>
+  refs.branches.has(name) || localBranches.has(name);
+
 /** Version-like names newest first (v0.10.0 before v0.9.0), so a capped read takes the latest tags. */
 const newestFirst = (a: string, b: string) => b.localeCompare(a, 'en', { numeric: true });
 
@@ -70,9 +78,10 @@ export async function bringOriginObjects(
   refs: OriginRefs,
   needed: readonly string[],
 ): Promise<OriginObjects> {
-  const [tracked, localTags] = await Promise.all([
+  const [tracked, localTags, localBranches] = await Promise.all([
     refsUnder(mainPath, 'refs/remotes/origin/'),
     refsUnder(mainPath, 'refs/tags/'),
+    refsUnder(mainPath, 'refs/heads/'),
   ]);
   const branches = new Map<string, string>();
   const newTags = new Map<string, string>();
@@ -94,7 +103,7 @@ export async function bringOriginObjects(
     else missing.push({ ref: `refs/heads/${name}`, name, oid, tag: false });
   }
   for (const name of [...refs.tags.keys()].sort(newestFirst)) {
-    if (localTags.has(name) || budget-- <= 0) continue;
+    if (localTags.has(name) || namedLikeBranch(name, refs, localBranches) || budget-- <= 0) continue;
     const oid = refs.tags.get(name)!;
     if (await hasRealObject(mainPath, oid)) newTags.set(name, oid);
     else missing.push({ ref: `refs/tags/${name}`, name, oid, tag: true });
@@ -133,14 +142,15 @@ export async function bringOriginObjects(
  * named, the tracking refs of branches origin no longer has removed, and the new tags created
  * (compare-and-set: one that appeared meanwhile is left as it is). A write of `needed` that fails is
  * the read's failure; any other is skipped (a name that clashes with another ref, say). Returns the
- * tags here that name something other than origin's tag of the same name.
+ * tags here that name something other than origin's tag of the same name, and origin's tags that
+ * are named like a branch (never created here).
  */
 export async function writeOriginRefs(
   mainPath: string,
   refs: OriginRefs,
   objects: OriginObjects,
   needed: readonly string[],
-): Promise<{ tagsDiffer: string[] }> {
+): Promise<{ tagsDiffer: string[]; tagsNamedLikeBranches: string[] }> {
   const inMain = { cwd: mainPath };
   const tracked = await refsUnder(mainPath, 'refs/remotes/origin/');
   for (const [name, oid] of objects.branches) {
@@ -162,9 +172,13 @@ export async function writeOriginRefs(
       inMain,
     ).catch(unlessRunnerUnavailable(undefined));
   }
-  const localTags = await refsUnder(mainPath, 'refs/tags/');
+  const [localTags, localBranches] = await Promise.all([
+    refsUnder(mainPath, 'refs/tags/'),
+    refsUnder(mainPath, 'refs/heads/'),
+  ]);
   for (const [name, oid] of objects.newTags) {
-    if (localTags.has(name)) continue;
+    // A branch of that name made since the objects were brought in counts too.
+    if (localTags.has(name) || namedLikeBranch(name, refs, localBranches)) continue;
     // The empty old value makes this a create: a tag made here meanwhile is never moved.
     const made = await execGitFile(
       ['update-ref', '-m', 'emberline: tag from origin', `refs/tags/${name}`, oid, ''],
@@ -172,10 +186,16 @@ export async function writeOriginRefs(
     ).then(() => true, unlessRunnerUnavailable(false));
     if (made) localTags.set(name, oid);
   }
+  const likeBranches = [...refs.tags.keys()]
+    .filter((name) => namedLikeBranch(name, refs, localBranches))
+    .sort()
+    .slice(0, DIFFERING_KEPT);
   const tagsDiffer = [...refs.tags]
-    .filter(([name, oid]) => localTags.has(name) && localTags.get(name) !== oid)
+    .filter(
+      ([name, oid]) => !likeBranches.includes(name) && localTags.has(name) && localTags.get(name) !== oid,
+    )
     .map(([name]) => name)
     .sort(newestFirst)
     .slice(0, DIFFERING_KEPT);
-  return { tagsDiffer };
+  return { tagsDiffer, tagsNamedLikeBranches: likeBranches };
 }

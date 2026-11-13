@@ -13,7 +13,7 @@
 import path from 'node:path';
 import type { CommitIdentity } from '@emberline/protocol';
 import { CommandFailedError, execFileChecked, RUNNER_BIN, systemCommand } from '../command-exec.js';
-import { execGitFile } from '../git-exec.js';
+import { checkedOutBranch, execGitFile } from '../git-exec.js';
 import { isLockfile } from '../lockfiles.js';
 import { gitIdentityArgs } from './commit-identity.js';
 import { NOT_REGULAR, readGitDirFile } from './merge.js';
@@ -323,8 +323,9 @@ export async function healConflicts(params: HealParams): Promise<HealResult> {
       );
     }
     previous = await head(worktreePath);
-    branch =
-      params.branch ?? (await execGitFile(['symbolic-ref', '--short', 'HEAD'], inWorktree)).stdout.trim();
+    const onBranch = params.branch ?? (await checkedOutBranch(worktreePath));
+    if (!onBranch) throw new Error(`${label}'s worktree is not on a branch.`);
+    branch = onBranch;
     const tipRev = params.mainTip ?? `refs/heads/${mainBranch}`;
     mainTip = (
       await execGitFile(['rev-parse', '--verify', '--quiet', `${tipRev}^{commit}`], inWorktree)

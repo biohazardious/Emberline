@@ -214,6 +214,8 @@ export const GitPageStatus = z.object({
   backups: z.array(z.string()),
   /** Tags here that name something other than origin's tag of that name (never moved by Emberline). */
   tagsDifferFromOrigin: z.array(z.string()),
+  /** origin's tags named like a branch, which Emberline does not create here. */
+  tagsNamedLikeBranches: z.array(z.string()),
 });
 export type GitPageStatus = z.infer<typeof GitPageStatus>;
 

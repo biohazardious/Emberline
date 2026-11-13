@@ -175,6 +175,11 @@ export interface RepositorySettings {
    * origin found them. Emberline never moves a local tag; the Git page says which ones differ.
    */
   tagsDifferFromOrigin: string[];
+  /**
+   * origin's tags named like a branch here or on origin, as the last read found them: never created
+   * here, since a tag beside a branch of the same name makes git's short names ambiguous.
+   */
+  tagsNamedLikeBranches: string[];
   releaseDraft: ReleaseDraft | null;
   releaseJob: ReleaseJob | null;
 }
@@ -214,6 +219,7 @@ const RepositorySettingsSchema = z.object({
   pulledOids: z.array(z.string()).max(500).catch([]).default([]),
   syncStop: SyncStopSchema.nullable().catch(null).default(null),
   tagsDifferFromOrigin: z.array(z.string()).max(100).catch([]).default([]),
+  tagsNamedLikeBranches: z.array(z.string()).max(100).catch([]).default([]),
   releaseDraft: ReleaseDraft.nullable().catch(null).default(null),
   releaseJob: ReleaseJob.nullable().catch(null).default(null),
 });

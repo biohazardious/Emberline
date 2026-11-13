@@ -816,6 +816,23 @@ describe('reading all of origin', () => {
     expect(git(projectPath, 'rev-parse', 'refs/remotes/origin/emberline/run-on-origin')).toBe(runTip);
   });
 
+  it("origin's tags named like a branch, or HEAD, are never created here, and the branch names stay plain", async () => {
+    git(projectPath, 'branch', 'mine');
+    const elsewhere = cloneOf(bare);
+    git(elsewhere, 'switch', '-q', '-c', 'feature');
+    commit(elsewhere, 'feature.txt');
+    git(elsewhere, 'push', '-q', 'origin', 'feature');
+    const tip = git(bare, 'rev-parse', 'refs/heads/main');
+    for (const tag of ['main', 'feature', 'mine', 'HEAD', 'v1.0.0'])
+      git(bare, 'update-ref', `refs/tags/${tag}`, tip);
+    await refresh();
+    expect(git(projectPath, 'for-each-ref', '--format=%(refname)', 'refs/tags/')).toBe('refs/tags/v1.0.0');
+    const status = (await send('GET', gitUrl())).json();
+    expect(status.tagsNamedLikeBranches).toEqual(['feature', 'main', 'mine']);
+    expect(status.checkedOut).toBe('main');
+    expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
+  });
+
   it('a branch origin drops between the listing and the fetch fails no read; the others come in the next one', async () => {
     const elsewhere = cloneOf(bare);
     git(elsewhere, 'switch', '-q', '-c', 'gone-soon');

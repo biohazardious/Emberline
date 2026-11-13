@@ -1,4 +1,11 @@
-import { execCommand, execFileChecked, RUNNER_BIN, SYSTEM_PATH, systemCommand } from './command-exec.js';
+import {
+  execCommand,
+  execFileChecked,
+  isRunnerUnavailable,
+  RUNNER_BIN,
+  SYSTEM_PATH,
+  systemCommand,
+} from './command-exec.js';
 
 /**
  * Core runs git inside repositories that agents control: worktrees share the main repo's
@@ -289,4 +296,23 @@ export async function execGitFile(
     }),
   );
   return { stdout: options.encoding === 'buffer' ? Buffer.from(stdout, 'base64') : stdout, stderr };
+}
+
+/**
+ * The branch `cwd` has checked out, from the full ref HEAD names (`refs/heads/` stripped); null when
+ * HEAD is detached or git cannot tell. Never `--short` or `--abbrev-ref`: beside a tag of the same
+ * name they answer `heads/main`, and a ref `refs/tags/HEAD` makes them fail as ambiguous. A runner
+ * that could not run git is thrown, never read as "not on a branch".
+ */
+export async function checkedOutBranch(cwd: string): Promise<string | null> {
+  const out = await execGitFile(['symbolic-ref', '--quiet', 'HEAD'], { cwd }).then(
+    (r) => r.stdout.trim(),
+    (error: unknown) => {
+      if (isRunnerUnavailable(error)) throw error;
+      return '';
+    },
+  );
+  return out.startsWith('refs/heads/') && out.length > 'refs/heads/'.length
+    ? out.slice('refs/heads/'.length)
+    : null;
 }
