@@ -237,7 +237,26 @@ export type SetWorkingBranchBody = z.infer<typeof SetWorkingBranchBody>;
 export const CreateBranchBody = z.object({ name: z.string(), from: z.enum(['main', 'working', 'origin']) });
 export type CreateBranchBody = z.infer<typeof CreateBranchBody>;
 
-export const MatchOriginBody = z.object({ branch: z.string().min(1) });
+/**
+ * A run that keeps the working branch as it is (a `runs_live` refusal lists them): `live` while it
+ * works or waits, `waiting` once it finished with work that waits to merge. A run that is starting
+ * has no row yet: its id is its worktree's name and it has no ticket.
+ */
+export const GitBlockingRun = z.object({
+  id: z.string(),
+  ticketId: z.string().nullable(),
+  ticketKey: z.string().nullable(),
+  title: z.string().nullable(),
+  status: z.enum(['live', 'waiting']),
+});
+export type GitBlockingRun = z.infer<typeof GitBlockingRun>;
+
+/**
+ * `setAside`: the runs that would merge the branch's old history back (GitBlockingRun) are set
+ * aside first, so they never merge: live ones stopped, finished ones marked stopped, their tickets
+ * back in Backlog. Their branches and worktrees stay.
+ */
+export const MatchOriginBody = z.object({ branch: z.string().min(1), setAside: z.boolean().optional() });
 export type MatchOriginBody = z.infer<typeof MatchOriginBody>;
 
 /** A release version as a person types it: an optional "v", three numbers, an optional pre-release. */

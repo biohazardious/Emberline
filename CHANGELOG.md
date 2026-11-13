@@ -7,6 +7,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 ### Fixed
 
 - A finished run no longer holds back **Match origin…**, a working-branch switch or a branch deletion when its ticket is done or a newer run of the same ticket took over: only a run that can still merge waits to merge.
+- **Match origin…** can set aside the runs that would merge the old history back: live ones are stopped, finished ones are marked stopped so they never merge, and their tickets go back to Backlog with a note saying why. Their branches and worktrees stay as they are.
 
 ## [0.9.1] - 2026-11-13
 

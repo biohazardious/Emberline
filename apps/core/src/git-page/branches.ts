@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { BranchRemoteState, GitBranch, GitBranchKind, Run } from '@emberline/protocol';
+import type { BranchRemoteState, GitBlockingRun, GitBranch, GitBranchKind, Run } from '@emberline/protocol';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { isRunnerUnavailable } from '../command-exec.js';
 import type { Db } from '../db/index.js';
@@ -51,12 +51,18 @@ async function worktreeList(mainPath: string): Promise<{ path: string; branch: s
 /** The factory's own branches: one per run, never made or chosen by a person. */
 const RUN_PREFIX = 'emberline/';
 
-/** A run that a working-branch switch would strand: live, or done with work not merged yet. */
-interface LiveRun {
-  id: string;
-  title: string | null;
+/**
+ * A run that a working-branch switch (or Match origin) would strand: live, or done with work not
+ * merged yet. `starting`: its worktree is there but its row is not yet, so nothing can stop it.
+ */
+export interface LiveRun extends GitBlockingRun {
   branch: string | null;
+  starting: boolean;
 }
+
+/** The runs as a `runs_live` refusal lists them. */
+export const blockingRuns = (list: LiveRun[]): GitBlockingRun[] =>
+  list.map(({ id, ticketId, ticketKey, title, status }) => ({ id, ticketId, ticketKey, title, status }));
 
 /** The newest run of each of `ticketIds` (by creation; a later run supersedes the ones before it). */
 function latestRunOfTickets(db: Db, projectId: string, ticketIds: string[]): Map<string, string> {
@@ -86,6 +92,7 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
       branch: runs.branch,
       worktreePath: runs.worktreePath,
       ticketId: runs.ticketId,
+      ticketKey: tickets.key,
       ticketStatus: tickets.status,
       createdAt: runs.createdAt,
     })
@@ -107,9 +114,18 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
     rows.flatMap((r) => (r.ticketId ? [r.ticketId] : [])),
   );
   const live: LiveRun[] = [];
+  const of = (run: (typeof rows)[number], status: LiveRun['status']): LiveRun => ({
+    id: run.id,
+    ticketId: run.ticketId,
+    ticketKey: run.ticketKey,
+    title: run.title,
+    status,
+    branch: run.branch,
+    starting: false,
+  });
   for (const run of rows) {
     if (ACTIVE_RUN_STATES.has(run.state as Run['state'])) {
-      live.push({ id: run.id, title: run.title, branch: run.branch });
+      live.push(of(run, 'live'));
       continue;
     }
     // A finished run of a ticket merges only as that ticket's latest run, and only while the ticket
@@ -120,8 +136,7 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
     // pruned worktree has nothing left to merge (worktreeHasUnmergedCommits answers false without
     // running git), and a row whose "worktree" is the main workspace itself is no run worktree.
     if (!run.branch || path.resolve(run.worktreePath) === path.resolve(project.path)) continue;
-    if (await worktreeHasUnmergedCommits(run.worktreePath, working))
-      live.push({ id: run.id, title: run.title, branch: run.branch });
+    if (await worktreeHasUnmergedCommits(run.worktreePath, working)) live.push(of(run, 'waiting'));
   }
   // A run that is starting has its worktree before its row (RunService.enqueue tracks it until the
   // insert): it counts as live, under its worktree's directory name. A worktree left behind with no
@@ -138,7 +153,15 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
     );
     for (const w of starting) {
       if (!known.has(w.path))
-        live.push({ id: path.basename(w.path), title: 'A run is starting', branch: w.branch });
+        live.push({
+          id: path.basename(w.path),
+          ticketId: null,
+          ticketKey: null,
+          title: 'A run is starting',
+          status: 'live',
+          branch: w.branch,
+          starting: true,
+        });
     }
   }
   return live;
@@ -149,10 +172,10 @@ async function liveRunRows(db: Db, project: BranchProject): Promise<LiveRun[]> {
  * or waiting to merge (done, not stopped, with commits the working branch does not have yet, and,
  * for a ticket's run, the latest run of a ticket that is not done).
  */
-export async function liveRunsOf(db: Db, projectId: string): Promise<{ id: string; title: string | null }[]> {
+export async function liveRunsOf(db: Db, projectId: string): Promise<LiveRun[]> {
   const project = db.select().from(projects).where(eq(projects.id, projectId)).get();
   if (!project) throw notFound('no such project');
-  return (await liveRunRows(db, project)).map(({ id, title }) => ({ id, title }));
+  return liveRunRows(db, project);
 }
 
 /** A branch name a person typed: a plain name by git's own rules, never an option or `HEAD`. */
@@ -495,7 +518,7 @@ async function deletable(db: Db, project: BranchProject, name: string): Promise<
   const users = (await liveRunRows(db, project)).filter((r) => r.branch === name);
   if (users.length > 0)
     throw new HttpError(409, 'branch_in_use', `${name} is used by a run that is live or waiting to merge.`, {
-      runs: users.map(({ id, title }) => ({ id, title })),
+      runs: blockingRuns(users),
     });
   if (!(await mergedSomewhere(project.path, tip, project.defaultBranch, working)))
     throw conflict(
@@ -661,7 +684,7 @@ export async function setWorkingBranch(
         409,
         'runs_live',
         `The working branch stays ${current} while runs are live or waiting to merge: ${names}. Let them finish and merge, or stop them, then switch.`,
-        { runs: live.map(({ id, title }) => ({ id, title })) },
+        { runs: blockingRuns(live) },
       );
     }
     if (!(await localTip(project.path, branch))) await createFromOrigin(project.path, branch);

@@ -44,9 +44,11 @@ import type { ReleaseJobs } from './release.js';
 import { pruneWorktree } from '../runs/git.js';
 import { verifyBuildIn } from '../runs/gates.js';
 import {
+  blockingRuns,
   checkedOutBranches,
   classify,
   gitMessage,
+  type LiveRun,
   liveRunsOf,
   localTip,
   type PatchesOnOrigin,
@@ -111,6 +113,11 @@ export interface SyncDeps {
   workspacesDir: string;
   /** Runs the checks on a healed merge (tests inject it); default: buildWorkspaceDemo. */
   buildWorkspaceDemo?: typeof buildWorkspaceDemo;
+  /**
+   * Match origin's `setAside`: sets the runs aside (stopped or marked stopped, their tickets back in
+   * Backlog) before `branch` takes origin's history. Called under the main-workspace lock.
+   */
+  setAside?: (projectId: string, runs: LiveRun[], branch: string) => Promise<void>;
 }
 
 /** What one pull came to, before it is stored as the project's `sync`. */
@@ -983,6 +990,7 @@ const pullRunning = () =>
 export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknown): Promise<SyncRecord> {
   const parsed = MatchOriginBody.safeParse(raw ?? {});
   const branch = parsed.success ? parsed.data.branch : '';
+  const setAside = parsed.success && parsed.data.setAside === true;
   if (!branch || branch.startsWith('-') || !isPlainRefName(branch))
     throw badRequest('Name the branch to match with origin.');
   const { db } = deps;
@@ -1016,18 +1024,27 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
           `${branch} ${STATE_TEXT[state]}, so there is nothing to match: Match origin is only for a branch whose history no longer fits origin's.`,
           'nothing_to_match',
         );
-      // Runs based on the working branch's history would merge it back in.
+      // Runs based on the working branch's history would merge it back in. Set aside on request,
+      // before anything here moves: should that fail, the branch is still as it was.
       if (branch === working) {
         const live = await liveRunsOf(db, projectId);
-        if (live.length > 0) {
-          const names = live.map((r) => r.title ?? r.id).join(', ');
+        const names = live.map((r) => r.title ?? r.id).join(', ');
+        if (live.length > 0 && !(setAside && deps.setAside))
           throw new HttpError(
             409,
             'runs_live',
-            `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or stop them, then match origin.`,
-            { runs: live },
+            `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or set them aside (their tickets go back to Backlog), then match origin.`,
+            { runs: blockingRuns(live) },
           );
-        }
+        // A run that is starting has no row to stop yet.
+        if (live.some((r) => r.starting))
+          throw new HttpError(
+            409,
+            'runs_live',
+            `${branch} stays as it is while a run is starting, so nothing was set aside. Match origin again in a moment, once it has started.`,
+            { runs: blockingRuns(live) },
+          );
+        if (live.length > 0) await deps.setAside?.(projectId, live, branch);
       }
       const { branch: checkedOut } = await mainBranchState(ws.path);
       // A reset would end a merge someone has not concluded, and drop what it recorded.
@@ -1085,6 +1102,25 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
     branch,
     message: `${branch} now matches origin. Its old tip is kept as ${done.backup}.`,
   });
+}
+
+/** The reason on the run events of a run Match origin set aside. */
+export const SET_ASIDE_REASON = 'Set aside by Match origin';
+/** A ticket's body as UpdateTicketBody takes it, at most. */
+const TICKET_BODY_MAX = 20_000;
+
+/**
+ * `body` with the note of a ticket whose runs (on `runBranches`) Match origin set aside, at its end:
+ * what happened and what to do next. An overlong body loses its end to make room.
+ */
+export function setAsideNote(body: string, branch: string, runBranches: (string | null)[]): string {
+  const named = [...new Set(runBranches.filter((b): b is string => b !== null))];
+  const on = named.length === 0 ? '' : ` (on ${named.join(', ')})`;
+  const note = `${SET_ASIDE_REASON} on ${new Date().toISOString().slice(0, 10)}: ${branch} took origin's history, and this ticket's work${on} was based on its old history, so it was not merged. Its branch is kept as it is; start the ticket again to do the work on origin's history.`;
+  const kept = body.trimEnd();
+  if (!kept) return note;
+  const room = TICKET_BODY_MAX - note.length - 2;
+  return `${kept.length > room ? `${kept.slice(0, room - 1)}…` : kept}\n\n${note}`;
 }
 
 /** The body of "Resolve with a ticket": what conflicted, and how the run resolves it. */

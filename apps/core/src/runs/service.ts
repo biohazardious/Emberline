@@ -2109,9 +2109,14 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    * terminates the agent process (reconciliation records the end). A stopped run never resumes,
    * and hooks arriving after the stop do not change its state.
    */
-  async stop(id: string, opts: { source?: 'user' | 'system'; reason?: string } = {}): Promise<Run> {
+  async stop(
+    id: string,
+    opts: { source?: 'user' | 'system'; reason?: string; setAside?: boolean } = {},
+  ): Promise<Run> {
     const source = opts.source ?? 'user';
-    const reasonPayload = opts.reason ? { reason: opts.reason } : undefined;
+    const reasonPayload = opts.reason
+      ? { reason: opts.reason, ...(opts.setAside ? { setAside: true } : {}) }
+      : undefined;
     const row = this.row(id);
     const cancelledAt = row.cancelledAt ?? new Date();
     const transition = stopTransition(row, this.settingUp.has(id));
@@ -2173,6 +2178,35 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     }
     void this.reconcile();
     return run;
+  }
+
+  /**
+   * Sets a run aside for good, with `reason` (Match origin, before it replaces the history the run's
+   * work is based on): a live run is stopped as stop() does; a finished one, which stop() would leave
+   * as it is, is marked stopped all the same with a `cancelled` event. Either way it never merges
+   * (its pipeline stands down, see wasSetAside) and no longer waits to merge; its branch and its
+   * worktree stay as they are.
+   */
+  async setAside(id: string, reason: string): Promise<Run> {
+    const row = this.row(id);
+    if (stopTransition(row, this.settingUp.has(id)).kind !== 'ended')
+      return this.stop(id, { source: 'user', reason, setAside: true });
+    return this.record(id, {
+      source: 'user',
+      type: 'cancelled',
+      payload: { reason, setAside: true },
+      patch: { cancelledAt: row.cancelledAt ?? new Date() },
+    });
+  }
+
+  /** Whether the run was set aside (setAside): then nothing of it is merged any more. */
+  wasSetAside(id: string): boolean {
+    return this.db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, id), inArray(runEvents.type, ['stop_requested', 'cancelled'])))
+      .all()
+      .some((e) => (e.payload as { setAside?: unknown } | null)?.setAside === true);
   }
 
   /**

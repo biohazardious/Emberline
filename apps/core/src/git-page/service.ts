@@ -41,6 +41,7 @@ import {
   type DeleteBranchResult,
   deleteBranch,
   listBranches,
+  type LiveRun,
   localTip,
   patchesOnOrigin,
   refTip,
@@ -67,6 +68,8 @@ import {
   matchOrigin,
   pull,
   pullTicketText,
+  SET_ASIDE_REASON,
+  setAsideNote,
   type SyncDeps,
   within,
 } from './sync.js';
@@ -196,7 +199,28 @@ export class GitPageService {
       releases: this.releases,
       workspacesDir: this.deps.workspacesDir,
       ...(this.deps.buildWorkspaceDemo ? { buildWorkspaceDemo: this.deps.buildWorkspaceDemo } : {}),
+      setAside: (projectId, list, branch) => this.setAside(projectId, list, branch),
     };
+  }
+
+  /**
+   * Match origin's set-aside: every run through RunService.setAside, then each of their tickets back
+   * to Backlog through the ticket service, with a note on it saying why. Branches and worktrees stay.
+   */
+  private async setAside(projectId: string, list: LiveRun[], branch: string): Promise<void> {
+    const branchesOf = new Map<string, (string | null)[]>();
+    for (const run of list) {
+      await this.deps.runs.setAside(run.id, SET_ASIDE_REASON);
+      if (run.ticketId) branchesOf.set(run.ticketId, [...(branchesOf.get(run.ticketId) ?? []), run.branch]);
+    }
+    for (const [ticketId, branches] of branchesOf) {
+      const ticket = this.deps.tickets.find(ticketId);
+      if (!ticket || ticket.projectId !== projectId) continue;
+      this.deps.tickets.update(ticketId, {
+        status: 'backlog',
+        body: setAsideNote(ticket.body, branch, branches),
+      });
+    }
   }
 
   /**

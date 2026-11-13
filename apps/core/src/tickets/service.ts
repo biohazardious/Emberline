@@ -1343,8 +1343,10 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     turn: number | undefined,
   ): Promise<void> {
     if (!run.projectId) return;
-    // Checked right before each step that notes, asks or merges (see handleRunCompleted).
-    const stale = () => !this.turnIsCurrent(run.id, turn);
+    // Checked right before each step that notes, asks or merges (see handleRunCompleted). A run set
+    // aside (Match origin replaced the history its work is based on) has no turn left to finish.
+    const stale = () => !this.turnIsCurrent(run.id, turn) || this.runs.wasSetAside(run.id);
+    if (this.runs.wasSetAside(run.id)) return;
     let projectRow;
     try {
       projectRow = this.project(run.projectId);
@@ -1835,7 +1837,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       run,
       mainWorkspacePath,
       ticketKey,
-      stale,
+      // Also checked under the main-workspace lock, right before the merge: a run set aside while
+      // this pass waited for the lock merges nothing.
+      stale: () => stale() || this.runs.wasSetAside(run.id),
       heal,
       commit,
       workingBranch,

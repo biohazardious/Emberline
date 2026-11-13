@@ -4,8 +4,9 @@ import path from 'node:path';
 import type { BuildDemoResponse } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRepositorySettings, writeRepositorySettings } from '../db/project-settings.js';
-import { runs } from '../db/schema.js';
+import { runEvents, runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
+import { doneStarting, markStarting } from '../runs/starting.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
   authHeaders,
@@ -113,20 +114,31 @@ const service = (extra: Partial<GitPageDeps> = {}) =>
     workspacesDir: t.config.workspacesDir,
     ...extra,
   });
-const seedRun = (id: string, state: string) => {
-  const now = new Date();
+const seedRun = (
+  id: string,
+  state: string,
+  {
+    ticketId = null,
+    worktreePath = path.join(t.dir, `wt-${id}`),
+    createdAt = new Date(),
+    endedAt = null,
+  } = {} as { ticketId?: string | null; worktreePath?: string; createdAt?: Date; endedAt?: Date | null },
+) => {
+  const now = createdAt;
   t.db
     .insert(runs)
     .values({
       id,
       projectId,
+      ticketId,
       agent: 'claude',
       state,
-      worktreePath: path.join(t.dir, `wt-${id}`),
+      worktreePath,
       branch: `emberline/${id}`,
       hookTokenHash: 'h',
       stateChangedAt: now,
       createdAt: now,
+      endedAt,
       title: `Run ${id}`,
     })
     .run();
@@ -701,6 +713,90 @@ describe('pull from origin', () => {
     expect(refused.json()).toMatchObject({ error: 'runs_live', runs: [{ id: 'live1', title: 'Run live1' }] });
     expect(head()).toBe(oldTip);
     expect(await listBackups(projectPath)).toEqual([]);
+  });
+
+  it('Match origin sets the blocking runs aside on request: stopped or cancelled, their tickets back in Backlog', async () => {
+    const oldTip = head();
+    const rewritten = forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    const busy = t.tickets.create(projectId, { title: 'Live work', status: 'in_progress' });
+    seedRun('live1', 'working', { ticketId: busy.id });
+    const waits = t.tickets.create(projectId, { title: 'Waits', body: 'Do the thing.', status: 'review' });
+    const dir = path.join(t.dir, 'wt-wait1');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/wait1', dir);
+    commit(dir, 'w.txt');
+    // Finished, its session ended (EMB-38's shape): stop() would change nothing.
+    seedRun('wait1', 'done', { ticketId: waits.id, worktreePath: dir, endedAt: new Date() });
+
+    // Without setAside: refused, with the runs and their tickets; nothing changed.
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('runs_live');
+    expect(refused.json().message).toContain('set them aside');
+    const byId = (list: { id: string }[]) => [...list].sort((a, b) => a.id.localeCompare(b.id));
+    expect(byId(refused.json().runs)).toEqual([
+      { id: 'live1', ticketId: busy.id, ticketKey: busy.key, title: 'Run live1', status: 'live' },
+      { id: 'wait1', ticketId: waits.id, ticketKey: waits.key, title: 'Run wait1', status: 'waiting' },
+    ]);
+    expect(head()).toBe(oldTip);
+    expect(t.runs.getRun('wait1').cancelled).toBe(false);
+    expect(t.tickets.get(waits.id).status).toBe('review');
+
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+    expect(matched.statusCode).toBe(200);
+    expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
+    expect(head()).toBe(rewritten);
+    const backups = await listBackups(projectPath);
+    expect(git(projectPath, 'rev-parse', `refs/emberline/backup/${backups[0]}`)).toBe(oldTip);
+    // The live run was stopped, the finished one marked stopped all the same, each with the reason.
+    const stops = t.db
+      .select()
+      .from(runEvents)
+      .all()
+      .filter((e) => e.type === 'stop_requested' || e.type === 'cancelled')
+      .map((e) => [e.runId, e.type, e.source, (e.payload as { reason?: string } | null)?.reason]);
+    expect(stops).toEqual(
+      expect.arrayContaining([
+        ['live1', 'stop_requested', 'user', 'Set aside by Match origin'],
+        ['wait1', 'cancelled', 'user', 'Set aside by Match origin'],
+      ]),
+    );
+    expect(t.runs.getRun('live1').cancelled).toBe(true);
+    expect(t.runs.getRun('wait1')).toMatchObject({ cancelled: true, state: 'done' });
+    for (const ticket of [busy, waits]) {
+      const now = t.tickets.get(ticket.id);
+      expect(now.status).toBe('backlog');
+      expect(now.body).toContain('Set aside by Match origin');
+    }
+    expect(t.tickets.get(waits.id).body).toMatch(/^Do the thing\.\n\n/);
+    // Their branches and worktrees stay as they are.
+    expect(has(projectPath, 'refs/heads/emberline/wait1')).not.toBe('');
+    expect(existsSync(path.join(dir, 'w.txt'))).toBe(true);
+  });
+
+  it('a run that is still starting cannot be set aside: Match origin refuses and changes nothing', async () => {
+    const oldTip = head();
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    const waits = t.tickets.create(projectId, { title: 'Waits', status: 'review' });
+    const dir = path.join(t.dir, 'wt-wait2');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/wait2', dir);
+    commit(dir, 'w.txt');
+    seedRun('wait2', 'done', { ticketId: waits.id, worktreePath: dir, endedAt: new Date() });
+    const starting = path.join(t.dir, 'wt-starting');
+    markStarting(projectPath, starting, 'emberline/starting');
+    try {
+      const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error).toBe('runs_live');
+      expect(refused.json().message).toContain('starting');
+    } finally {
+      doneStarting(projectPath, starting);
+    }
+    expect(head()).toBe(oldTip);
+    expect(await listBackups(projectPath)).toEqual([]);
+    expect(t.runs.getRun('wait2').cancelled).toBe(false);
+    expect(t.tickets.get(waits.id).status).toBe('review');
   });
 
   it("pages once when an automatic pull stops, with origin's tip in the occurrence; a person's pull pages nothing", async () => {

@@ -206,7 +206,9 @@ describe('git branches', () => {
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error).toBe('runs_live');
     expect(refused.json().message).toContain('waiting to merge');
-    expect(refused.json().runs).toEqual([{ id: 'rw', title: 'Run rw' }]);
+    expect(refused.json().runs).toEqual([
+      { id: 'rw', ticketId: null, ticketKey: null, title: 'Run rw', status: 'waiting' },
+    ]);
     // A stopped run never merges.
     t.db.update(runs).set({ cancelledAt: new Date() }).run();
     expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
@@ -345,6 +347,19 @@ describe('a working branch the factory merges into', () => {
       .all()
       .filter((e) => e.runId === id && e.type === 'merge_failed')
       .map((e) => (e.payload as { summary: string }).summary);
+
+  it('a run set aside never merges, and no longer waits to merge', async () => {
+    git(projectPath, 'branch', 'develop');
+    finishedRun('sa');
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(409);
+    await t.runs.setAside('sa', 'Set aside by Match origin');
+    const mainBefore = git(projectPath, 'rev-parse', 'main');
+    // The pipeline's merge stands down: nothing merged, nothing noted.
+    expect(await pipelineMerge('sa')).toBeNull();
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(mainBefore);
+    expect(failures('sa')).toEqual([]);
+    expect((await send('POST', workingUrl(), { branch: 'develop' })).statusCode).toBe(200);
+  });
 
   it('a merge waits while the main workspace is off the working branch, and main is unchanged', async () => {
     git(projectPath, 'branch', 'develop');
