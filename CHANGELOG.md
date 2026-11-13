@@ -4,12 +4,30 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-15
+
 ### Fixed
 
 - A finished run no longer holds back **Match origin…**, a working-branch switch or a branch deletion when its ticket is done or a newer run of the same ticket took over: only a run that can still merge waits to merge.
 - **Match origin…** can set aside the runs that would merge the old history back: live ones are stopped, finished ones are marked stopped, and their tickets go back to Backlog with a note saying why and that their next run starts from the current main (with Backlog auto-pickup on, the factory may start them again, and the dialog says so). Their branches and worktrees stay as they are. A run set aside never merges: the factory skips it, and a person's merge (dragging its ticket to Done, **Merge to main**) is refused and offers to move the ticket without merging.
 - When runs keep **Match origin…** from going ahead, its dialog stays open and lists them, each with a link to its ticket and whether it is running or waiting to merge, and offers **Set them aside and match origin**, which sets aside only the runs it listed: a run that started blocking since then is listed first, and nothing is set aside while an unfinished merge in the main workspace, the branch checked out in another worktree or a backup that cannot be kept would stop Match origin anyway. A refused working-branch switch links the tickets of its runs too.
 - The ticket **Resolve with a ticket** makes names at most ten conflicting files, then how many more, instead of listing every one.
+- **Match origin…** no longer stops on a main workspace whose files were only copied, restored or touched: git's `reset --keep` read such a file as an edit. The same goes for taking main back after a release that was not pushed and for **Undo promote**.
+- Whatever in the main workspace matching origin would overwrite (an edit, or an untracked file where origin's history adds one) is found before any run is set aside or a backup kept, and the refusal names it; before, the runs could be set aside while main stayed as it was.
+- The ticket **Resolve with a ticket** made for a pull that stopped is closed by **Match origin…** on that branch, with a note, since nothing is left to merge; it no longer goes back to Backlog, where the factory could start it again. The dialog says so.
+- The Commits tab can show another history: **History of** offers the working branch, main, origin's branches as last read and the backups Match origin kept. When origin has commits the working branch lacks (new ones or a rewritten history), a line above the list says how many, with **Show origin/…**.
+- With main as the working branch, the Git page no longer says "main is not behind" (main against itself); the latest tag stays.
+- The secret and anti-slop guards judge only what a run wrote. The run of the ticket **Resolve with a ticket** made merges origin's history in, and its merge was held over lines origin already had (a fake key in a test fixture, marked `gitleaks:allow`); now the lines it brings in from the tip Emberline recorded when the pull stopped are not judged again.
+- The images build from a checkout made under a strict umask (folders 0770 or 0750, as on a NAS share): the runner's ptyd could not read its own files, and the check stage failed, so on such a host the factory's checks and every build of main failed. Only what lacks read access is changed.
+- A failed build or check ends its output with the command's own error and how it ended (an exit code, a timeout), instead of repeating the first lines of a long build after the real error.
+- The Code Explorer's file list starts right under its filter, not at the bottom of the column.
+- The overview shows each stack badge once, and none for a layer left to the agent.
+- A binary file in a commit's or a comparison's file list says "binary" instead of +0 −0.
+- When the latest read of origin failed, the Git page says "read failed" instead of "read … ago" beside origin's state as last read.
+- A project folder that was never a git repository (a shared project) no longer shows "couldn't read worktree.yml from the repository" on its board.
+- Core's start no longer warns that the `ops` service is missing while ops is only starting.
+- After **Refresh**, the Git page no longer keeps the last pull's notice ("Pulled …", "main now matches origin") beside origin's newer state; a stop that waits for you stays until you act on it.
+- The review page of a run that was merged into main says **Merged into main** instead of "Merge gate ready", while its branch has nothing main lacks.
 
 ## [0.9.1] - 2026-11-13
 
@@ -734,7 +752,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/biohazardious/emberline/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/biohazardious/emberline/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/biohazardious/emberline/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/biohazardious/emberline/compare/v0.7.0...v0.8.0
