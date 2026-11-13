@@ -192,7 +192,8 @@ interface HealRequest {
   conflicts: string[];
 }
 
-type Step = { outcome: Outcome } | { heal: HealRequest };
+/** `quiet`: an automatic pull that keeps out of a running release's way, and records nothing. */
+type Step = { outcome: Outcome } | { heal: HealRequest } | { quiet: true };
 
 /**
  * A pull of the working branch (and main, when it is another branch) from origin. `auto`: the
@@ -276,6 +277,7 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
     mode,
   };
   const step = await withMainWorkspaceLock(ws.path, () => advance(ctx, null));
+  if ('quiet' in step) return current();
   if ('outcome' in step) return finishPull(ctx, step.outcome);
   // The heal and its checks (minutes) run in the background: Refresh, pushes and the other
   // projects' pulls go on meanwhile. Its outcome is recorded when it ends.
@@ -355,7 +357,9 @@ async function healInBackground(ctx: PullContext, first: HealRequest): Promise<v
         heals.stopped ? Promise.resolve(null) : advance(ctx, result),
       );
       if (step === null) return;
-      if ('outcome' in step) outcome = step.outcome;
+      // A release started meanwhile: the healed merge waits for the next pull after it.
+      if ('quiet' in step) outcome = { state: 'idle', branch: ctx.working, message: null };
+      else if ('outcome' in step) outcome = step.outcome;
       else req = step.heal;
     }
   } catch (error) {
@@ -442,6 +446,9 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
   const stop = (outcome: Outcome): Step => ({ outcome });
   if (!(await deps.repository.originStill(projectId, ws)))
     return stop({ state: 'error', branch: null, message: ORIGIN_CHANGED });
+  // A release that is running moves main between its promote and its push (local main is ahead of
+  // origin's then, on purpose): the timer's pull leaves it alone, with no stop and no page.
+  if (ctx.mode === 'auto' && (await deps.releases?.standing(projectId)) === 'running') return { quiet: true };
   // A switch of the working branch takes this lock too: one made since the read is not pulled into.
   const nowWorking = workingBranchOf(readRepositorySettings(deps.db, projectId), main);
   if (nowWorking !== working)
@@ -490,10 +497,17 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
       );
       ctx.moves.push({ before: local, after: remote.main });
     } else if (state === 'ahead') {
+      // With a working branch of its own, main is pushed by the release alone (Push main is not offered).
+      const release = await deps.releases?.standing(projectId);
       return stop({
         state: 'main_unpushed',
         branch: main,
-        message: `${main} has commits origin's ${main} does not have (a promote that was not pushed yet), so nothing was pulled. Push ${main}, then pull again.`,
+        message:
+          release === 'running'
+            ? `${main} has commits of the release that is running, which pushes them itself, so nothing was pulled. Pull again once the release has finished.`
+            : release === 'unfinished'
+              ? `${main} has commits origin's ${main} does not have: the last release stopped before it pushed them, so nothing was pulled. Retry or Undo promote on the Release tab, then pull again.`
+              : `${main} has commits origin's ${main} does not have (a promote that was not pushed yet), so nothing was pulled. Push ${main}, then pull again.`,
       });
     } else if (state === 'diverged') {
       return stop({

@@ -190,9 +190,15 @@ export class GitPageService {
     };
   }
 
-  /** A person's Pull (`auto: false`), or auto-pull's. */
-  pull(projectId: string, opts: { auto: boolean }): Promise<GitSync> {
+  /**
+   * A person's Pull (`auto: false`), or auto-pull's. While a release runs, auto-pull only reads
+   * origin: main is ahead of origin's between the promote and the push on purpose, which is no stop
+   * to record or page.
+   */
+  async pull(projectId: string, opts: { auto: boolean }): Promise<GitSync> {
     this.project(projectId);
+    if (opts.auto && (await this.releases.standing(projectId)) === 'running')
+      return fetchOrigin(this.syncDeps(), projectId);
     return pull(this.syncDeps(), projectId, opts);
   }
 

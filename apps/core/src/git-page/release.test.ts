@@ -20,6 +20,7 @@ import {
 } from '../test-utils.js';
 import { ReleaseJobs, withReleaseSection } from './release.js';
 import { GitPageService } from './service.js';
+import { GitSync } from './sync.js';
 
 let t: TestApp;
 let cookie: string;
@@ -709,6 +710,46 @@ describe('release', () => {
     await jobs.undoPromote(projectId);
     await svc.setWorkingBranch(projectId, { branch: 'other' });
     expect(git(projectPath, 'symbolic-ref', '--short', 'HEAD')).toBe('other');
+  });
+
+  it('auto-pull only reads origin while a release runs (no stop, no page), and a stopped one says Retry or Undo', async () => {
+    approveChecks();
+    const head = await developWithTickets();
+    let red!: () => void;
+    const checking = new Promise<void>((r) => (red = r));
+    const jobs = jobsWith({
+      build: async () => {
+        await checking;
+        return { ...okBuild(), ok: false, output: 'red' };
+      },
+    });
+    const pages: string[] = [];
+    const svc = new GitPageService(t.db, t.repository, {
+      runs: t.runs,
+      forge: t.forge,
+      tickets: t.tickets,
+      workspacesDir: t.config.workspacesDir,
+      releases: jobs,
+      notify: (_p, _o, m) => pages.push(m.title),
+    });
+    const timer = new GitSync(t.db, svc, { log: () => undefined });
+    await jobs.start(projectId, publish(head));
+    await waitFor(() => storedJob().steps[1]!.status === 'running');
+    // main is promoted here and not pushed yet, on purpose.
+    expect(git(projectPath, 'rev-parse', 'main')).toBe(storedJob().promoteOid);
+    const before = readRepositorySettings(t.db, projectId).sync;
+    await timer.tick();
+    expect(readRepositorySettings(t.db, projectId).sync).toEqual(before);
+    expect(readRepositorySettings(t.db, projectId).syncStop).toBeNull();
+    expect(pages).toEqual([]);
+    red();
+    await jobs.idle();
+    expect(storedJob().state).toBe('failed');
+    // Stopped with main unpushed: the pull says what to do on the Release tab, not "Push main".
+    const sync = await svc.pull(projectId, { auto: false });
+    expect(sync.state).toBe('main_unpushed');
+    expect(sync.message).toContain('Retry or Undo promote on the Release tab');
+    expect(sync.message).not.toContain('Push main');
   });
 
   it('is refused while a run is merging into the working branch', async () => {
