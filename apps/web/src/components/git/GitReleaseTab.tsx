@@ -360,7 +360,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
 
           <section aria-label="What happens">
             <h3>What happens</h3>
-            <ol>
+            <ol className="git-release-plan">
               {releasePlan(status, separateMode, versionOk ? versionText : null).map((l) => (
                 <li key={l.name}>{l.text}</li>
               ))}
