@@ -218,6 +218,12 @@ export const GitPageStatus = z.object({
   tagsNamedLikeBranches: z.array(z.string()),
   /** Some of origin's branches or tags could not be fetched at the last read; Emberline tries again later. */
   originRefsUnread: z.boolean(),
+  /**
+   * The commits (merges left out) of the working branch and of main that origin has neither as they
+   * are nor as the same patch: what Match origin would keep only in the backup. Known (else null)
+   * when the branch has diverged from origin's or origin was rewritten.
+   */
+  notOnOrigin: z.object({ working: z.number().int().nullable(), main: z.number().int().nullable() }),
 });
 export type GitPageStatus = z.infer<typeof GitPageStatus>;
 

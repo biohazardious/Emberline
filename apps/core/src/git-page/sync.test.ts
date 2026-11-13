@@ -957,13 +957,17 @@ describe('a pull that cannot merge, and Match origin', () => {
     const sync = await pullNow();
     expect(sync).toMatchObject({ state: 'rewritten', branch: 'main', files: [] });
     expect(sync.message).toContain(
-      "10 of your 11 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.",
+      "10 of your 11 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup. 1 commit is not on origin; Match origin keeps it only in the backup.",
     );
     // No merge was tried.
     expect(head()).toBe(oldTip);
     expect(has(projectPath, 'MERGE_HEAD')).toBe('');
     expect(worktrees()).toHaveLength(1);
-    expect((await send('GET', gitUrl())).json()).toMatchObject({ main: 'rewritten', working: 'rewritten' });
+    expect((await send('GET', gitUrl())).json()).toMatchObject({
+      main: 'rewritten',
+      working: 'rewritten',
+      notOnOrigin: { main: 1, working: 1 },
+    });
 
     const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
     expect(matched.statusCode).toBe(200);
@@ -988,7 +992,7 @@ describe('a pull that cannot merge, and Match origin', () => {
     const sync = await settled();
     expect(sync).toMatchObject({ state: 'conflict', branch: 'main', files: ['a.txt'] });
     expect(sync.message).toContain(
-      "2 of your 3 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.",
+      "2 of your 3 commits are already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup. 1 commit is not on origin; Match origin keeps it only in the backup.",
     );
   });
 

@@ -42,6 +42,7 @@ import {
   deleteBranch,
   listBranches,
   localTip,
+  patchesOnOrigin,
   refTip,
   setWorkingBranch,
 } from './branches.js';
@@ -321,6 +322,7 @@ export class GitPageService {
       tagsDifferFromOrigin: settings.tagsDifferFromOrigin,
       tagsNamedLikeBranches: settings.tagsNamedLikeBranches,
       originRefsUnread: settings.originRefsUnread !== null,
+      notOnOrigin: { working: null, main: null },
     };
     const dir = project.path;
     if (!(await isGitRepo(dir))) return base;
@@ -351,6 +353,15 @@ export class GitPageService {
         return null;
       }
     };
+    // What Match origin would leave only in the backup, for a branch whose history no longer fits origin's.
+    const notOnOrigin = async (branch: string, local: string | null, state: BranchRemoteState) => {
+      if (!local || (state !== 'diverged' && state !== 'rewritten')) return null;
+      const remote = await refTip(dir, `refs/remotes/origin/${branch}`);
+      const patches = remote ? await patchesOnOrigin(dir, local, remote) : null;
+      return patches ? patches.total - patches.already : null;
+    };
+    const workingState = await against(working, workingTip);
+    const mainState = await against(main, mainTip);
     const reason = await this.releases.refusal(projectId);
     return {
       ...base,
@@ -361,8 +372,12 @@ export class GitPageService {
       latestTag: await latestVersionTag(dir, `refs/heads/${main}`),
       hasOrigin: origin !== null,
       originUrl: origin ? remoteUrlForDisplay(origin).display : null,
-      working: await against(working, workingTip),
-      main: await against(main, mainTip),
+      working: workingState,
+      main: mainState,
+      notOnOrigin: {
+        working: await notOnOrigin(working, workingTip, workingState),
+        main: await notOnOrigin(main, mainTip, mainState),
+      },
       workingCounts: await counts(working, workingTip),
       mainCounts: await counts(main, mainTip),
       forgeRelease:

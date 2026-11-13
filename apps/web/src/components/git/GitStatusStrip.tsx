@@ -53,10 +53,13 @@ export function GitProblemBanner({ problem }: { problem: Problem }) {
  */
 function MatchOriginDialog({
   branch,
+  notOnOrigin,
   onConfirm,
   onClose,
 }: {
   branch: string;
+  /** The branch's commits origin has in no form (only the backup keeps them); null when not known. */
+  notOnOrigin: number | null;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -104,6 +107,13 @@ function MatchOriginDialog({
           <span className="mono">refs/emberline/backup/{branch}-&lt;date&gt;-&lt;time&gt;</span> and listed
           under Backups on the Branches tab, so no commit is lost.
         </p>
+        {notOnOrigin !== null && notOnOrigin > 0 && (
+          <p className="small">
+            {notOnOrigin === 1
+              ? `1 commit of ${branch} is not on origin; Match origin keeps it only in the backup.`
+              : `${notOnOrigin} commits of ${branch} are not on origin; Match origin keeps them only in the backup.`}
+          </p>
+        )}
         <div className="request-dialog-actions">
           <button type="button" className="btn btn-primary" onClick={onConfirm}>
             Match origin
@@ -371,6 +381,13 @@ export function GitStatusStrip({
       {confirmMatch && (
         <MatchOriginDialog
           branch={matchBranch}
+          notOnOrigin={
+            (matchBranch === status.workingBranch
+              ? status.notOnOrigin?.working
+              : matchBranch === status.defaultBranch
+                ? status.notOnOrigin?.main
+                : null) ?? null
+          }
           onClose={() => setConfirmMatch(false)}
           onConfirm={() => {
             setConfirmMatch(false);

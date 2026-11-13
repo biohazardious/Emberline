@@ -171,7 +171,9 @@ const PATCH_CACHE_SIZE = 200;
 
 /**
  * Of `local`'s own commits (those `remote` lacks, merges left out), how many `remote` has as the same
- * patch under another hash, as `git cherry` tells; null when there are too many to compare.
+ * patch under another hash, as `git cherry` tells; null when there are too many to compare. It can
+ * run under the main-workspace lock (classify in a pull's advance), so it is bounded at
+ * PATCH_COMPARE_MAX commits and cached: once per pair of commits, never on every read.
  */
 export async function patchesOnOrigin(
   mainPath: string,

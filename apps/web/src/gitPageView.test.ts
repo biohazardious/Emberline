@@ -51,6 +51,7 @@ const status = (over: Partial<GitPageStatus> = {}): GitPageStatus =>
     tagsDifferFromOrigin: [],
     tagsNamedLikeBranches: [],
     originRefsUnread: false,
+    notOnOrigin: { working: null, main: null },
     ...over,
   }) as GitPageStatus;
 const branch = (name: string, kind: GitBranch['kind']) =>
@@ -248,14 +249,21 @@ describe('Git page', () => {
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     await cleanup();
 
-    // From a conflict whose branch has diverged from origin, too.
+    // From a conflict whose branch has diverged from origin, too; the dialog says what only the backup keeps.
     calls.length = 0;
     serve(
-      status({ working: 'diverged', sync: sync({ state: 'conflict', branch: 'develop', files: ['a.ts'] }) }),
+      status({
+        working: 'diverged',
+        notOnOrigin: { working: 2, main: null },
+        sync: sync({ state: 'conflict', branch: 'develop', files: ['a.ts'] }),
+      }),
     );
     await open();
     await waitFor(() => getButton('Match origin…'));
     await click(getButton('Match origin…'));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      '2 commits of develop are not on origin; Match origin keeps them only in the backup.',
+    );
     await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
     await waitFor(() => expect(calls).toContain('match {"branch":"develop"}'));
     await cleanup();

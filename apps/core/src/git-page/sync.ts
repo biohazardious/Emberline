@@ -625,7 +625,15 @@ async function advance(ctx: PullContext, healed: { before: string; commit: strin
 
 /** Says that `p` of the branch's commits are on origin under new hashes, and what Match origin does then. */
 const rewriteNote = (p: PatchesOnOrigin) =>
-  `${p.already} of your ${p.total} ${p.total === 1 ? 'commit is' : 'commits are'} already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.`;
+  `${p.already} of your ${p.total} ${p.total === 1 ? 'commit is' : 'commits are'} already on origin with new hashes, so origin was probably rewritten. Match origin takes origin's history and keeps yours as a backup.${onlyInBackup(p.total - p.already)}`;
+
+/** The commits Match origin would leave only in the backup, said when there are some. */
+const onlyInBackup = (n: number) =>
+  n <= 0
+    ? ''
+    : n === 1
+      ? ' 1 commit is not on origin; Match origin keeps it only in the backup.'
+      : ` ${n} commits are not on origin; Match origin keeps them only in the backup.`;
 
 /** More than half of the branch's own commits are on origin under new hashes: worth saying in a conflict. */
 const mostlyOnOrigin = (p: PatchesOnOrigin | null): p is PatchesOnOrigin =>
