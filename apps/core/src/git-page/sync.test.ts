@@ -742,7 +742,10 @@ describe('pull from origin', () => {
     expect(t.runs.getRun('wait1').cancelled).toBe(false);
     expect(t.tickets.get(waits.id).status).toBe('review');
 
-    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+    const matched = await send('POST', gitUrl('/match-origin'), {
+      branch: 'main',
+      setAside: ['live1', 'wait1'],
+    });
     expect(matched.statusCode).toBe(200);
     expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
     expect(head()).toBe(rewritten);
@@ -774,6 +777,70 @@ describe('pull from origin', () => {
     expect(existsSync(path.join(dir, 'w.txt'))).toBe(true);
   });
 
+  it('sets aside only the runs the person confirmed: one that blocks since then is refused with the fresh list', async () => {
+    const oldTip = head();
+    const rewritten = forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('seen', 'working');
+    expect((await send('POST', gitUrl('/match-origin'), { branch: 'main' })).json().runs).toHaveLength(1);
+    // Another run starts working before the person confirms.
+    seedRun('later', 'working');
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['seen'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('runs_live');
+    expect(
+      refused
+        .json()
+        .runs.map((r: { id: string }) => r.id)
+        .sort(),
+    ).toEqual(['later', 'seen']);
+    expect(t.runs.getRun('seen').cancelled).toBe(false);
+    expect(t.runs.getRun('later').cancelled).toBe(false);
+    expect(head()).toBe(oldTip);
+    // A confirmed run that no longer blocks (it merged meanwhile) is no reason to refuse.
+    const matched = await send('POST', gitUrl('/match-origin'), {
+      branch: 'main',
+      setAside: ['seen', 'later', 'merged-meanwhile'],
+    });
+    expect(matched.statusCode).toBe(200);
+    expect(head()).toBe(rewritten);
+    expect(t.runs.getRun('later').cancelled).toBe(true);
+  });
+
+  it('an unfinished merge in the main workspace refuses Match origin before any run is set aside', async () => {
+    const oldTip = head();
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('keep1', 'working');
+    writeFileSync(
+      path.join(git(projectPath, 'rev-parse', '--absolute-git-dir'), 'MERGE_HEAD'),
+      `${oldTip}\n`,
+    );
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['keep1'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('workspace_dirty');
+    expect(t.runs.getRun('keep1').cancelled).toBe(false);
+    expect(head()).toBe(oldTip);
+  });
+
+  it('a reset refused by an edit after the runs were set aside says they were, and main stays as it was', async () => {
+    const oldTip = head();
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('gone1', 'working');
+    // An edit to a file origin's history does not have: reset --keep refuses to drop it.
+    writeFileSync(path.join(projectPath, 'a.txt'), 'edited\n');
+    const answered = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['gone1'] });
+    expect(answered.statusCode).toBe(200);
+    expect(answered.json().state).toBe('workspace_dirty');
+    expect(answered.json().message).toMatch(
+      /^1 run was set aside; main stayed as it was, because the main workspace has changes that matching origin would overwrite/,
+    );
+    expect(t.runs.getRun('gone1').cancelled).toBe(true);
+    expect(head()).toBe(oldTip);
+    expect(readFileSync(path.join(projectPath, 'a.txt'), 'utf8')).toBe('edited\n');
+  });
+
   it('a run that is still starting cannot be set aside: Match origin refuses and changes nothing', async () => {
     const oldTip = head();
     forcePushUnrelated(cloneOf(bare));
@@ -786,7 +853,11 @@ describe('pull from origin', () => {
     const starting = path.join(t.dir, 'wt-starting');
     markStarting(projectPath, starting, 'emberline/starting');
     try {
-      const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+      // Even confirmed by the person, a run still starting has no row to stop yet.
+      const refused = await send('POST', gitUrl('/match-origin'), {
+        branch: 'main',
+        setAside: ['wait2', 'wt-starting'],
+      });
       expect(refused.statusCode).toBe(409);
       expect(refused.json().error).toBe('runs_live');
       expect(refused.json().message).toContain('starting');
@@ -1135,7 +1206,7 @@ describe('a pull that cannot merge, and Match origin', () => {
     expect(refused.json().runs).toHaveLength(1);
     expect(head()).toBe(oldTip);
 
-    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: true });
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['emb38'] });
     expect(matched.statusCode).toBe(200);
     expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
     expect(head()).toBe(originTip);

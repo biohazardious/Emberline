@@ -252,11 +252,15 @@ export const GitBlockingRun = z.object({
 export type GitBlockingRun = z.infer<typeof GitBlockingRun>;
 
 /**
- * `setAside`: the runs that would merge the branch's old history back (GitBlockingRun) are set
- * aside first, so they never merge: live ones stopped, finished ones marked stopped, their tickets
- * back in Backlog. Their branches and worktrees stay.
+ * `setAside`: the ids of the runs (GitBlockingRun) the person confirmed setting aside, so they never
+ * merge the branch's old history back: live ones stopped, finished ones marked stopped, their
+ * tickets back in Backlog. Their branches and worktrees stay. When a run blocks that is not among
+ * them, nothing is set aside and the refusal lists the runs again.
  */
-export const MatchOriginBody = z.object({ branch: z.string().min(1), setAside: z.boolean().optional() });
+export const MatchOriginBody = z.object({
+  branch: z.string().min(1),
+  setAside: z.array(z.string().min(1).max(200)).max(500).optional(),
+});
 export type MatchOriginBody = z.infer<typeof MatchOriginBody>;
 
 /** A release version as a person types it: an optional "v", three numbers, an optional pre-release. */

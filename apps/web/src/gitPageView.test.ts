@@ -301,7 +301,7 @@ describe('Match origin blocked by runs', () => {
   it('keeps the dialog open, lists the runs with their tickets, and sets them aside on request', async () => {
     serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }), {
       'POST /api/projects/p1/git/match-origin': (body) => {
-        if ((body as { setAside?: boolean }).setAside) return sync({ state: 'pulled' });
+        if ((body as { setAside?: string[] }).setAside) return sync({ state: 'pulled' });
         throw new ApiRequestError(409, 'runs_live', 'develop stays as it is while runs are live.', {
           runs: blocking,
         });
@@ -331,8 +331,42 @@ describe('Match origin blocked by runs', () => {
     expect(setAside.className).toContain('danger');
     await click(setAside);
     await waitFor(() =>
-      expect(calls).toContain('POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":true}'),
+      expect(calls).toContain(
+        'POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":["r38","r40"]}',
+      ),
     );
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  });
+
+  it('a run that blocks since the refusal comes back listed, and the button resends the ids shown then', async () => {
+    const later = { id: 'r41', ticketId: 't41', ticketKey: 'EMB-41', title: 'EMB-41 Later', status: 'live' };
+    serve(status({ sync: sync({ state: 'rewritten', branch: 'develop' }) }), {
+      'POST /api/projects/p1/git/match-origin': (body) => {
+        const ids = (body as { setAside?: string[] }).setAside;
+        if (ids?.includes('r41')) return sync({ state: 'pulled' });
+        throw new ApiRequestError(409, 'runs_live', 'develop stays as it is while runs are live.', {
+          runs: ids ? [blocking[0], later] : [blocking[0]],
+        });
+      },
+    });
+    await open();
+    await waitFor(() => getButton('Match origin…'));
+    await click(getButton('Match origin…'));
+    await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!),
+    );
+    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('EMB-41 Later (running)'),
+    );
+    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() =>
+      expect(calls).toContain(
+        'POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":["r38","r41"]}',
+      ),
+    );
+    expect(calls).toContain('POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":["r38"]}');
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   });
 });

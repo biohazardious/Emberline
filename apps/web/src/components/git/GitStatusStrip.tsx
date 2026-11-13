@@ -99,7 +99,8 @@ function MatchOriginDialog({
   /** Match origin's refusal because of runs: the dialog lists them and offers to set them aside. */
   blocked: Problem | null;
   busy: boolean;
-  onConfirm: (setAside: boolean) => void;
+  /** With the ids of the runs the person sets aside, or none (plain Match origin). */
+  onConfirm: (setAside: string[] | null) => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
@@ -164,16 +165,16 @@ function MatchOriginDialog({
         )}
         <div className="request-dialog-actions">
           {blocked ? (
-            <button type="button" className="btn danger" disabled={busy} onClick={() => onConfirm(true)}>
+            <button
+              type="button"
+              className="btn danger"
+              disabled={busy}
+              onClick={() => onConfirm(blocked.runs.map((r) => r.id))}
+            >
               Set them aside and match origin
             </button>
           ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => onConfirm(false)}
-            >
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onConfirm(null)}>
               Match origin
             </button>
           )}
@@ -234,7 +235,7 @@ export function GitStatusStrip({
     setMatchBlocked(null);
   };
   // Runs in the way keep the dialog open, listing them, so the person can set them aside from there.
-  const match = async (setAside: boolean) => {
+  const match = async (setAside: string[] | null) => {
     setBusy('match');
     setProblem(null);
     try {

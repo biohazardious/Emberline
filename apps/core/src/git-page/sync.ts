@@ -990,9 +990,10 @@ const pullRunning = () =>
 export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknown): Promise<SyncRecord> {
   const parsed = MatchOriginBody.safeParse(raw ?? {});
   const branch = parsed.success ? parsed.data.branch : '';
-  const setAside = parsed.success && parsed.data.setAside === true;
   if (!branch || branch.startsWith('-') || !isPlainRefName(branch))
     throw badRequest('Name the branch to match with origin.');
+  // The runs the person confirmed setting aside (the ones the refusal listed), by id.
+  const confirmed = new Set(parsed.data?.setAside ?? []);
   const { db } = deps;
   if (deps.heals.running(projectId)) throw pullRunning();
   // A release's checks and its sync of the working branch build on the history as it is now.
@@ -1024,16 +1025,32 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
           `${branch} ${STATE_TEXT[state]}, so there is nothing to match: Match origin is only for a branch whose history no longer fits origin's.`,
           'nothing_to_match',
         );
-      // Runs based on the working branch's history would merge it back in. Set aside on request,
-      // before anything here moves: should that fail, the branch is still as it was.
+      const { branch: checkedOut } = await mainBranchState(ws.path);
+      // The refusals that need no run set aside come first: should one apply, nothing was changed.
+      // A reset would end a merge someone has not concluded, and drop what it recorded.
+      if (checkedOut === branch && (await unfinishedOperation(ws.path)))
+        throw conflict(
+          `A merge, cherry-pick or revert in the main workspace is not finished, so ${branch} stayed as it was. Conclude or abort it, then try again.`,
+          'workspace_dirty',
+        );
+      if (checkedOut !== branch && (await checkedOutBranches(ws.path)).has(branch))
+        throw conflict(
+          `${branch} is checked out in another worktree, so Emberline did not move it.`,
+          'branch_checked_out',
+        );
+      // Runs based on the working branch's history would merge it back in. They are set aside only
+      // as the person confirmed them: a run that blocks since the refusal they saw is listed again,
+      // and nothing is set aside.
+      let setAside = 0;
       if (branch === working) {
         const live = await liveRunsOf(db, projectId);
         const names = live.map((r) => r.title ?? r.id).join(', ');
-        if (live.length > 0 && !(setAside && deps.setAside))
+        const allConfirmed = live.every((r) => confirmed.has(r.id));
+        if (live.length > 0 && !(allConfirmed && deps.setAside))
           throw new HttpError(
             409,
             'runs_live',
-            `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or set them aside (their tickets go back to Backlog), then match origin.`,
+            `${branch} stays as it is while runs are live or waiting to merge: ${names}. Their work is based on its current history; let them finish and merge, or set them aside, then match origin.`,
             { runs: blockingRuns(live) },
           );
         // A run that is starting has no row to stop yet.
@@ -1045,28 +1062,17 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
             { runs: blockingRuns(live) },
           );
         if (live.length > 0) await deps.setAside?.(projectId, live, branch);
+        setAside = live.length;
       }
-      const { branch: checkedOut } = await mainBranchState(ws.path);
-      // A reset would end a merge someone has not concluded, and drop what it recorded.
-      if (checkedOut === branch && (await unfinishedOperation(ws.path)))
-        throw conflict(
-          `A merge, cherry-pick or revert in the main workspace is not finished, so ${branch} stayed as it was. Conclude or abort it, then try again.`,
-          'workspace_dirty',
-        );
       const backup = await keepBackup(ws.path, branch, local);
       if (checkedOut === branch) {
         try {
           await execGitFile(['reset', '--keep', remote], { cwd: ws.path, timeout: 120_000 });
         } catch (error) {
           if (isRunnerUnavailable(error)) throw error;
-          return { backup, refused: gitMessage(error) };
+          return { backup, setAside, refused: gitMessage(error) };
         }
       } else {
-        if ((await checkedOutBranches(ws.path)).has(branch))
-          throw conflict(
-            `${branch} is checked out in another worktree, so Emberline did not move it (its tip is kept as ${backup}).`,
-            'branch_checked_out',
-          );
         await execGitFile(
           ['update-ref', '-m', 'emberline: match origin', `refs/heads/${branch}`, remote, local],
           { cwd: ws.path },
@@ -1086,15 +1092,22 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
         pulledOids: [...new Set([...pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT),
         syncStop: null,
       });
-      return { backup, refused: null };
+      return { backup, setAside, refused: null };
     });
   });
-  if (done.refused !== null)
+  if (done.refused !== null) {
+    const why = `the main workspace has changes that matching origin would overwrite (its tip is also kept as ${done.backup}). Commit or discard them, then match origin again. (${done.refused})`;
+    // The runs stay set aside: a person who confirmed it learns it happened although nothing moved.
+    const runs = done.setAside === 1 ? '1 run was' : `${done.setAside} runs were`;
     return record(db, projectId, {
       state: 'workspace_dirty',
       branch,
-      message: `The main workspace has changes that matching origin would overwrite, so ${branch} stayed as it was (its tip is also kept as ${done.backup}). Commit or discard them, then try again. (${done.refused})`,
+      message:
+        done.setAside > 0
+          ? `${runs} set aside; ${branch} stayed as it was, because ${why}`
+          : `${branch} stayed as it was, because ${why}`,
     });
+  }
   const after = await pull(deps, projectId, { auto: false });
   if (after.state !== 'up_to_date') return after;
   return record(db, projectId, {
