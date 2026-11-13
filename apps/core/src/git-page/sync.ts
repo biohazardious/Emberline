@@ -1129,8 +1129,11 @@ export function pullTicketText(
   branch: string,
   files: string[],
 ): { title: string; body: string } {
-  const listed = files.slice(0, 200).map((f) => `- ${f}`);
-  if (files.length > 200) listed.push(`- … and ${files.length - 200} more`);
+  // As the conflict's message: the first ten, then how many more (a rewrite conflicts in ninety;
+  // the run's merge lists every one anyway, and `sync.files` keeps them all).
+  const listed = files.slice(0, FILES_NAMED).map((f) => `- ${f}`);
+  const more = files.length - FILES_NAMED;
+  if (more > 0) listed.push(`- and ${more} more ${more === 1 ? 'file' : 'files'}`);
   return {
     title: `Merge ${source} into ${branch}`.slice(0, 200),
     body: [

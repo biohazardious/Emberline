@@ -1148,5 +1148,16 @@ describe('a conflict in many files', () => {
     expect(sync.files).toEqual(names);
     expect(sync.message).toContain(`${names.slice(0, 10).join(', ')} and 5 more files`);
     expect(sync.message).not.toContain('f11.txt');
+    // Resolve with a ticket: its body names the first ten too.
+    const res = await send('POST', gitUrl('/pull/ticket'));
+    const ticket = (await send('GET', `/api/tickets/${res.json().ticketId}`)).json();
+    expect(ticket.body).toContain(
+      `Conflicting files:\n${names
+        .slice(0, 10)
+        .map((n) => `- ${n}`)
+        .join('\n')}\n- and 5 more files\n`,
+    );
+    expect(ticket.body).not.toContain('f11.txt');
+    expect(storedSync()?.files).toEqual(names);
   });
 });
