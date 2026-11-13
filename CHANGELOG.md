@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-13
+
 ### Fixed
 
 - **Refresh** and auto-pull read all of origin: every branch, not only main and the working branch, and origin's tags. A tag origin has and the project lacks is created as origin has it, so main's latest tag, the suggested release version and "commits since the last tag" are right again; a local tag is never moved, and the Git page says which ones differ from origin's. A tag named like a branch is never created, and the branch checked out is read in full, so a tag such as `main` no longer makes Emberline misread the branch.
@@ -725,7 +727,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/biohazardious/emberline/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/biohazardious/emberline/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/biohazardious/emberline/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/biohazardious/emberline/compare/v0.6.2...v0.7.0
