@@ -47,6 +47,10 @@ describe('syncText', () => {
     [sync({ state: 'workspace_dirty' }), 'Pull waits: the main workspace has uncommitted changes'],
     [sync({ state: 'main_unpushed' }), 'Main has commits origin lacks; push or promote first'],
     [
+      sync({ state: 'main_unpushed', message: 'Retry or Undo promote on the Release tab, then pull again.' }),
+      'Retry or Undo promote on the Release tab, then pull again.',
+    ],
+    [
       sync({ state: 'rewritten' }),
       "Origin's history was rewritten. Match origin keeps your old commits under a backup.",
     ],

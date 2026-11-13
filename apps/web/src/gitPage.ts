@@ -47,7 +47,8 @@ export function syncText(sync: GitSync, pulledCount?: number): string | null {
     case 'workspace_dirty':
       return 'Pull waits: the main workspace has uncommitted changes';
     case 'main_unpushed':
-      return 'Main has commits origin lacks; push or promote first';
+      // Core says what to do: push main, or Retry / Undo promote after a release that stopped.
+      return sync.message ?? 'Main has commits origin lacks; push or promote first';
     case 'rewritten':
       return "Origin's history was rewritten. Match origin keeps your old commits under a backup.";
     case 'diverged':
