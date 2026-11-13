@@ -171,8 +171,9 @@ export interface RepositorySettings {
    */
   syncStop: SyncStop | null;
   /**
-   * Tags here that name something other than origin's tag of the same name, as the last read of
-   * origin found them. Emberline never moves a local tag; the Git page says which ones differ.
+   * Tags here on another commit than origin's tag of the same name (compared by the commit each
+   * names, so a lightweight and an annotated tag of one commit match), as the last read of origin
+   * found them. Emberline never moves a local tag; the Git page says which ones differ.
    */
   tagsDifferFromOrigin: string[];
   /**

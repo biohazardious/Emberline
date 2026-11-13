@@ -784,6 +784,9 @@ describe('reading all of origin', () => {
     git(elsewhere, 'tag', 'v0.9.0', runTip);
     // origin's v0.7.0 names another commit than the one here.
     git(elsewhere, 'tag', 'v0.7.0', backupTip);
+    // v0.6.0: lightweight here, annotated on origin, on the same commit: the same tag.
+    git(projectPath, 'tag', 'v0.6.0', shared);
+    git(elsewhere, 'tag', '-a', '-m', 'v0.6.0', 'v0.6.0', shared);
     git(elsewhere, 'push', '-q', 'origin', '12112026_backup', 'emberline/run-on-origin', '--tags');
 
     await refresh();

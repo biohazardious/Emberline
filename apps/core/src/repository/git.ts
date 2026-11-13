@@ -17,6 +17,7 @@ import {
   gatewayRemoteRefs,
   parseRemoteRefs,
   refKind,
+  type RemoteRef,
 } from '../git-gateway/remote-git.js';
 
 export const MAIN_MOVED_MESSAGE =
@@ -391,6 +392,8 @@ export async function fetchBranchObjects(
 export interface OriginRefs {
   branches: Map<string, string>;
   tags: Map<string, string>;
+  /** The commit each tag names, an annotated one's peeled: two tags on one commit are the same tag. */
+  tagCommits: Map<string, string>;
 }
 
 /**
@@ -399,7 +402,7 @@ export interface OriginRefs {
  * own `HEAD` would turn ambiguous), as is any name {@link refKind} refuses.
  */
 export async function listOriginRefs(mainPath: string, access: RemoteAccess): Promise<OriginRefs> {
-  let refs: { ref: string; oid: string }[];
+  let refs: RemoteRef[];
   if (access.remote) refs = await gatewayRemoteRefs(access.remote, mainPath);
   else {
     assertSupportedRemote(access.url);
@@ -412,12 +415,15 @@ export async function listOriginRefs(mainPath: string, access: RemoteAccess): Pr
   }
   const branches = new Map<string, string>();
   const tags = new Map<string, string>();
-  for (const { ref, oid } of refs) {
-    if (ref.startsWith('refs/heads/')) {
-      branches.set(ref.slice('refs/heads/'.length), oid);
-    } else tags.set(ref.slice('refs/tags/'.length), oid);
+  const tagCommits = new Map<string, string>();
+  for (const { ref, oid, peeled } of refs) {
+    if (ref.startsWith('refs/heads/')) branches.set(ref.slice('refs/heads/'.length), oid);
+    else {
+      tags.set(ref.slice('refs/tags/'.length), oid);
+      tagCommits.set(ref.slice('refs/tags/'.length), peeled ?? oid);
+    }
   }
-  return { branches, tags };
+  return { branches, tags, tagCommits };
 }
 
 /**

@@ -163,8 +163,18 @@ createServer((req, res) => {
       } catch {
         exists = false;
       }
-      // A new branch starts at `from`'s tip.
-      const parent = g(['rev-parse', exists ? branch : `refs/heads/${ask.from ?? 'main'}`]);
+      // A new branch starts at `from`'s tip; a `from` the repository lacks is the caller's mistake.
+      let parent;
+      try {
+        parent = g([
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          exists ? branch : `refs/heads/${ask.from ?? 'main'}`,
+        ]);
+      } catch {
+        return json(res, 400, { message: `no branch ${ask.from ?? 'main'} to start ${ask.branch} from` });
+      }
       const who = {
         GIT_AUTHOR_NAME: 'outside',
         GIT_AUTHOR_EMAIL: 'o@e',

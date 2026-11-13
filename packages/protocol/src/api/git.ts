@@ -212,7 +212,7 @@ export const GitPageStatus = z.object({
     hasChangelog: z.boolean(),
   }),
   backups: z.array(z.string()),
-  /** Tags here that name something other than origin's tag of that name (never moved by Emberline). */
+  /** Tags here on another commit than origin's tag of that name (never moved by Emberline); compared by commit. */
   tagsDifferFromOrigin: z.array(z.string()),
   /** origin's tags named like a branch, which Emberline does not create here. */
   tagsNamedLikeBranches: z.array(z.string()),

@@ -24,6 +24,7 @@ import {
   type TestApp,
 } from '../test-utils.js';
 import { rmTemp } from '../test-rm.js';
+import { parseRemoteRefs } from './remote-git.js';
 import { generateKey } from '../ssh-keys/store.js';
 
 const TOKEN = 'remote-git-secret-token';
@@ -586,5 +587,35 @@ describe('import clone', () => {
     expect(failed).toBe(true);
     expect(await importStatus(project.id)).toMatchObject({ status: 'ready' });
     expect(gitIn(project.path, 'remote', 'get-url', 'origin')).toBe(appUrl());
+  });
+});
+
+describe('parseRemoteRefs', () => {
+  it("keeps only branches and tags git would accept, never HEAD, and an annotated tag's commit beside it", () => {
+    const A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const C = 'cccccccccccccccccccccccccccccccccccccccc';
+    const out = [
+      `${A}\trefs/heads/main`,
+      `${A}\trefs/heads/-x`,
+      `${A}\trefs/heads/a/../b`,
+      `${A}\trefs/heads/HEAD`,
+      `${A}\trefs/tags/HEAD`,
+      `${A}\trefs/heads/with\ttab`,
+      `${A}\trefs/heads/with space`,
+      `${A}\trefs/notes/commits`,
+      `${A}\tHEAD`,
+      `abc123\trefs/heads/short`,
+      `${B}\trefs/tags/v1`,
+      `${C}\trefs/tags/v1^{}`,
+      `${C}\trefs/tags/x^{}`,
+      `${A}\trefs/tags/light`,
+      '',
+    ].join('\n');
+    expect(parseRemoteRefs(out)).toEqual([
+      { ref: 'refs/heads/main', oid: A },
+      { ref: 'refs/tags/v1', oid: B, peeled: C },
+      { ref: 'refs/tags/light', oid: A },
+    ]);
   });
 });

@@ -172,28 +172,44 @@ export async function gatewayRemoteRef(
   return null;
 }
 
+/** A ref `ls-remote` named: what it names, and for an annotated tag the commit it peels to. */
+export interface RemoteRef {
+  ref: string;
+  oid: string;
+  /** An annotated tag's commit (its `^{}` line); absent for a branch or a lightweight tag. */
+  peeled?: string;
+}
+
 /**
  * `ls-remote` output as a list of the branches and tags it names, each with exactly what it names
- * (an annotated tag's own object; its peeled `^{}` line is left out). A ref whose name git would
- * refuse or a git argument could misread ({@link refKind}), or one named `HEAD`, is dropped:
- * Emberline never writes one.
+ * (an annotated tag's own object, with the commit from its `^{}` line as `peeled`). A ref whose name
+ * git would refuse or a git argument could misread ({@link refKind}), or one named `HEAD`, is
+ * dropped: Emberline never writes one. A line splits at its first tab only, so a tab in a name is
+ * part of the name (and refused).
  */
-export function parseRemoteRefs(out: string): { ref: string; oid: string }[] {
-  const refs: { ref: string; oid: string }[] = [];
+export function parseRemoteRefs(out: string): RemoteRef[] {
+  const refs: RemoteRef[] = [];
+  const peeled = new Map<string, string>();
   for (const line of out.split('\n')) {
-    const [oid, name] = line.split('\t').map((part) => part.trim());
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const oid = line.slice(0, tab).trim();
+    const name = line.slice(tab + 1).replace(/[\r\n]+$/, '');
+    if (!FULL_OID.test(oid)) continue;
+    if (name.endsWith('^{}')) {
+      const tag = name.slice(0, -'^{}'.length);
+      if (refKind(tag) === 'tag') peeled.set(tag, oid);
+      continue;
+    }
     // `HEAD` as a branch or tag name would make git's own `HEAD` ambiguous: never read as one.
-    if (name === 'refs/heads/HEAD' || name === 'refs/tags/HEAD') continue;
-    if (oid && name && FULL_OID.test(oid) && refKind(name)) refs.push({ ref: name, oid });
+    if (name === 'refs/heads/HEAD' || name === 'refs/tags/HEAD' || !refKind(name)) continue;
+    refs.push({ ref: name, oid });
   }
-  return refs;
+  return refs.map((r) => (peeled.has(r.ref) ? { ...r, peeled: peeled.get(r.ref)! } : r));
 }
 
 /** Every branch and tag of the remote, in one `ls-remote --heads --tags`. */
-export async function gatewayRemoteRefs(
-  r: GatewayRemote,
-  cwd: string,
-): Promise<{ ref: string; oid: string }[]> {
+export async function gatewayRemoteRefs(r: GatewayRemote, cwd: string): Promise<RemoteRef[]> {
   const out = await r.gateway.run(
     grant(r),
     async (url) =>

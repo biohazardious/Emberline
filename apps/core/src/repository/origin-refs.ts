@@ -68,6 +68,25 @@ async function refsUnder(mainPath: string, prefix: string): Promise<Map<string, 
   return refs;
 }
 
+/**
+ * The commit each local tag names (an annotated tag's peeled one level, `%(*objectname)`, as
+ * origin's `^{}` line peels it), by name.
+ */
+async function tagCommitsHere(mainPath: string): Promise<Map<string, string>> {
+  const out = (
+    await realGit(
+      ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)', 'refs/tags/'],
+      mainPath,
+    )
+  ).stdout;
+  const commits = new Map<string, string>();
+  for (const line of out.split('\n')) {
+    const [ref, oid, peeled] = line.split('\0');
+    if (ref?.startsWith('refs/tags/') && oid) commits.set(ref.slice('refs/tags/'.length), peeled || oid);
+  }
+  return commits;
+}
+
 const hasRealObject = (mainPath: string, oid: string) =>
   realGit(['cat-file', '-e', oid], mainPath).then(() => true, unlessRunnerUnavailable(false));
 
@@ -182,8 +201,9 @@ export async function bringOriginObjects(
  * `refs/remotes/origin/<branch>` that changed set to what origin named, and the new tags created
  * (compare-and-set: one that appeared meanwhile is left as it is). A write of `needed` that fails is
  * the read's failure; any other is skipped (a name that clashes with another ref, say). Returns the
- * tags here that name something other than origin's tag of the same name, and origin's tags that
- * are named like a branch (never created here).
+ * tags here on another commit than origin's tag of the same name (compared by commit, so the
+ * lightweight and the annotated tag of one commit match), and origin's tags that are named like a
+ * branch (never created here).
  */
 export async function writeOriginRefs(
   mainPath: string,
@@ -232,9 +252,13 @@ export async function writeOriginRefs(
     .filter((name) => namedLikeBranch(name, refs, localBranches))
     .sort()
     .slice(0, DIFFERING_KEPT);
-  const tagsDiffer = [...refs.tags]
+  // Compared by the commit each names: a lightweight tag here and an annotated one on origin (or
+  // the other way round) on the same commit are the same tag, not one that differs.
+  const commitsHere = await tagCommitsHere(mainPath);
+  const tagsDiffer = [...refs.tagCommits]
     .filter(
-      ([name, oid]) => !likeBranches.includes(name) && localTags.has(name) && localTags.get(name) !== oid,
+      ([name, commit]) =>
+        !likeBranches.includes(name) && commitsHere.has(name) && commitsHere.get(name) !== commit,
     )
     .map(([name]) => name)
     .sort(newestFirst)
