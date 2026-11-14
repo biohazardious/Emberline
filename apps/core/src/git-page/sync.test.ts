@@ -194,6 +194,34 @@ describe('pull from origin', () => {
     expect((await pullNow()).state).toBe('up_to_date');
   });
 
+  it("a later read of origin retires a pull's success notice, and leaves a stop standing", async () => {
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'x.txt', 'x\n', 'feat: from my laptop');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    expect((await pullNow()).state).toBe('pulled');
+    commit(elsewhere, 'y.txt', 'y\n', 'feat: more from my laptop');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    const read = await send('POST', gitUrl('/fetch'));
+    expect(read.statusCode).toBe(200);
+    // The notice was about the pull before: the page now shows origin's new commit, not "Pulled".
+    expect(read.json()).toMatchObject({ state: 'idle', message: null });
+    const status = (await send('GET', gitUrl())).json();
+    expect(status).toMatchObject({ working: 'behind', sync: { state: 'idle', message: null } });
+    // A stop waits for the person: a read never retires it.
+    const stop = {
+      state: 'rewritten' as const,
+      at: new Date().toISOString(),
+      branch: 'main',
+      files: [],
+      message: 'stop',
+    };
+    writeRepositorySettings(t.db, projectId, { sync: stop });
+    expect((await send('POST', gitUrl('/fetch'))).json()).toMatchObject({
+      state: 'rewritten',
+      message: 'stop',
+    });
+  });
+
   it('merges origin into a working branch that has local commits, and merges main into the working branch', async () => {
     git(projectPath, 'branch', 'develop');
     git(projectPath, 'push', '-q', bare, 'develop');

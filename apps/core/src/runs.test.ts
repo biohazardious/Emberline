@@ -1188,6 +1188,19 @@ describe('runs', () => {
     expect(detail.events.find((e) => e.type === 'last_screen')?.payload).toEqual({});
   });
 
+  it('says the run was merged into main, even when the merge note is older than the events it lists', async () => {
+    const project = await createProject('Merged once', false);
+    const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();
+    const detail = async () => (await api('GET', `/api/runs/${run.id}`)).json() as RunDetail;
+    expect((await detail()).mergedIntoMain).toBe(false);
+    t.runs.note(run.id, 'merged_to_main', { summary: 'merged' });
+    // Many events after it: the note is no longer in the detail's tail.
+    for (let i = 0; i < 250; i++) t.runs.note(run.id, 'filler', {});
+    const after = await detail();
+    expect(after.events.some((e) => e.type === 'merged_to_main')).toBe(false);
+    expect(after.mergedIntoMain).toBe(true);
+  });
+
   it('records an automatic stop as a system event with its reason', async () => {
     const project = await createProject('Auto stop', false);
     const run: Run = (await api('POST', '/api/runs', { projectId: project.id })).json();

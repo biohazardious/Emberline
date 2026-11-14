@@ -1,4 +1,10 @@
-import type { ReviewComment, Run, RunReviewState, SlopAuditReport } from '@emberline/protocol';
+import type {
+  ReviewComment,
+  Run,
+  RunDiffSummary,
+  RunReviewState,
+  SlopAuditReport,
+} from '@emberline/protocol';
 import { commentChipId } from './components/review/CommentChip';
 import { blockingBanner, blockingMessage, carriedMessage, commentLocation } from './reviewComments';
 
@@ -144,4 +150,9 @@ export function buildMergeGateSummary(params: {
     carriedBlocking,
     holdReasons,
   };
+}
+
+/** Merged into main at least once, and the branch has nothing main lacks now (a later turn's work is not). */
+export function mergedWithNothingLeft(mergedOnce: boolean, branch: RunDiffSummary | undefined): boolean {
+  return mergedOnce && branch?.isGitRepo === true && branch.files.length === 0;
 }

@@ -1,5 +1,6 @@
 import type { Run, RunDetail, RunDiffSummary, RunReviewState } from '@emberline/protocol';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { mergedWithNothingLeft } from '../reviewGate';
 import { GitBranch, Keyboard } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
@@ -10,6 +11,7 @@ import { RunStatePill } from '../components/RunStatePill';
 
 export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (runId: string) => void }) {
   const [run, setRun] = useState<Run | null>(null);
+  const [mergedOnce, setMergedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -27,6 +29,8 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
     try {
       const r = await api<RunDetail>(`/api/runs/${id}`);
       setRun(r);
+      // A core from before the field says nothing: the gate is shown as before.
+      setMergedOnce(r.mergedIntoMain === true);
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -35,6 +39,13 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
   useEffect(() => {
     void loadRun();
   }, [loadRun]);
+  // The branch against main, as the review shows it (the same query): merged with nothing left over.
+  const branch = useQuery({
+    queryKey: ['diff-summary', id, 'branch'],
+    queryFn: () => api<RunDiffSummary>(`/api/runs/${id}/diff?scope=branch`),
+    enabled: mergedOnce,
+  });
+  const merged = mergedWithNothingLeft(mergedOnce, branch.data);
 
   if (error) {
     return (
@@ -112,6 +123,7 @@ export function ReviewPage({ id, onInspectRun }: { id: string; onInspectRun?: (r
           <ErrorBoundary resetKey={run.id}>
             <ReviewView
               run={run}
+              merged={merged}
               onRunUpdated={setRun}
               shortcutSheetOpen={shortcutSheetOpen}
               onShortcutSheetOpenChange={setShortcutSheetOpen}

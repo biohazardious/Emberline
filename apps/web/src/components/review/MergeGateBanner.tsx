@@ -4,6 +4,8 @@ import type { MergeGateSummary } from '../../reviewGate';
 
 interface Props {
   gate: MergeGateSummary;
+  /** Merged into main with nothing left over: "Merged into main", not "Merge gate ready". */
+  merged?: boolean;
   busy?: boolean;
   onJumpToComment: (commentId: string) => void;
   onVerifyCarried: () => void;
@@ -12,6 +14,7 @@ interface Props {
 
 export function MergeGateBanner({
   gate,
+  merged = false,
   busy = false,
   onJumpToComment,
   onVerifyCarried,
@@ -26,9 +29,11 @@ export function MergeGateBanner({
       <div className="review-gate-summary review-gate-open" role="status" aria-label="Merge gate status">
         <div className="review-gate-head">
           <span className="review-gate-pill review-gate-pill-ok mono">
-            <CheckCircle2 className="icon" aria-hidden /> Merge gate ready
+            <CheckCircle2 className="icon" aria-hidden /> {merged ? 'Merged into main' : 'Merge gate ready'}
           </span>
-          <span className="muted small review-tabular">0 blocking reasons</span>
+          <span className="muted small review-tabular">
+            {merged ? 'nothing left to merge' : '0 blocking reasons'}
+          </span>
         </div>
         {onOpenShortcuts && (
           <div className="review-gate-kbd-hints hide-sm">

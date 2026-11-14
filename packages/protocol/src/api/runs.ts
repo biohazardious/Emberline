@@ -768,6 +768,8 @@ export const RunDetail = Run.extend({
   finalMessage: z.string().nullable().default(null),
   /** The terminal's last screen, kept when its session closed; null while it is still open. */
   lastScreen: z.string().nullable().default(null),
+  /** The run's work was merged into main (by the factory or a person) at least once. */
+  mergedIntoMain: z.boolean().optional(),
 });
 export type RunDetail = z.infer<typeof RunDetail>;
 

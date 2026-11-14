@@ -21,6 +21,8 @@ import { formatAgentDisplayName } from './RunInspector';
 
 interface Props {
   run: Run;
+  /** The run was merged into main and its branch has nothing main lacks: the gate says so. */
+  merged?: boolean;
   onRunUpdated?: (run: Run) => void;
   shortcutSheetOpen?: boolean;
   onShortcutSheetOpenChange?: (open: boolean) => void;
@@ -28,6 +30,7 @@ interface Props {
 
 export function ReviewView({
   run,
+  merged = false,
   onRunUpdated,
   shortcutSheetOpen: controlledSheetOpen,
   onShortcutSheetOpenChange,
@@ -193,6 +196,7 @@ export function ReviewView({
     <div className="review-workspace">
       <MergeGateBanner
         gate={mergeGate}
+        merged={merged}
         busy={ctrl.commentBusy}
         onJumpToComment={ctrl.jumpToComment}
         onVerifyCarried={ctrl.handleVerifyCarried}

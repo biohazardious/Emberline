@@ -587,6 +587,9 @@ export const CONNECT_FOR_ACCOUNT =
  * Owns the run lifecycle: worktree + agent spawn, hook ingestion (the primary state signal),
  * and reconciliation with ptyd (process exits, runner restarts).
  */
+/** The notes a merge of a run into main leaves (factory/post-merge.ts MERGE_NOTES). */
+const RUN_MERGE_NOTES = ['merged_to_main', 'merged_by_person'];
+
 export class RunService extends EventEmitter<RunServiceEvents> {
   private timer?: NodeJS.Timeout;
   /** The reconcile pass running now; resolves (never rejects) when it ends. */
@@ -876,6 +879,13 @@ export class RunService extends EventEmitter<RunServiceEvents> {
       events,
       finalMessage: this.finalMessage(row),
       lastScreen: this.lastScreen(id),
+      // Asked of every event, not the tail above: a long run's merge note can be older than it.
+      mergedIntoMain:
+        this.db
+          .select({ id: runEvents.id })
+          .from(runEvents)
+          .where(and(eq(runEvents.runId, id), inArray(runEvents.type, RUN_MERGE_NOTES)))
+          .get() !== undefined,
     };
   }
 

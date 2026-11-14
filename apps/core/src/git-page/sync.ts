@@ -296,7 +296,13 @@ async function pullIn(deps: SyncDeps, projectId: string, ws: Snapshot, mode: Mod
   if (read.error)
     return stopped({ state: 'error', branch: null, message: `Couldn't read origin: ${read.error}` });
   const settings = readRepositorySettings(db, projectId);
-  if (mode === 'read') return current();
+  if (mode === 'read') {
+    // A pull's success notice ("Pulled …", "main now matches origin") was about the read before
+    // this one: a newer read retires it, so the page shows origin as read now. A stop stays.
+    if (current().state === 'pulled')
+      return record(db, projectId, { state: 'idle', branch: null, message: null });
+    return current();
+  }
   if (mode === 'auto') {
     // With auto-pull off, the read alone shows the new commits; the person pulls.
     if (!settings.autoPull) return current();
