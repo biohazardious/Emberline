@@ -71,8 +71,14 @@ export function GitDiffView({
               onClick={() => setSelected(f.path)}
             >
               <span className="git-file-path">{f.path}</span>
-              <span className="git-add">+{f.additions}</span>
-              <span className="git-del">−{f.deletions}</span>
+              {f.binary ? (
+                <span className="muted small">binary</span>
+              ) : (
+                <>
+                  <span className="git-add">+{f.additions}</span>
+                  <span className="git-del">−{f.deletions}</span>
+                </>
+              )}
             </button>
           </li>
         ))}

@@ -93,6 +93,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Git page', () => {
+  it('says the last read of origin failed instead of when it was read', async () => {
+    serve(status({ checkFailed: true, checkedAt: new Date().toISOString() }));
+    const view = await open();
+    await waitFor(() =>
+      expect(view.container.querySelector('.git-strip')?.textContent).toContain('read failed'),
+    );
+  });
+
   it('with main as the working branch the strip does not compare main with itself, and keeps the tag', async () => {
     serve(status({ workingBranch: 'main', mainBehindWorking: 0 }));
     const view = await open();

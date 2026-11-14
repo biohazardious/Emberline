@@ -355,8 +355,17 @@ export function GitStatusStrip({
         {status.hasOrigin && (
           <span className="git-strip-item small">
             {remoteStateText(status.working, status.workingCounts?.ahead, status.workingCounts?.behind)}
-            <span className="muted">
-              {status.checkedAt ? `read ${timeAgo(status.checkedAt)}` : 'not read yet'}
+            <span
+              className="muted"
+              title={
+                status.checkFailed
+                  ? 'Origin as of the last read that worked; the newest one failed.'
+                  : undefined
+              }
+            >
+              {status.checkedAt
+                ? `${status.checkFailed ? 'read failed' : 'read'} ${timeAgo(status.checkedAt)}`
+                : 'not read yet'}
             </span>
           </span>
         )}

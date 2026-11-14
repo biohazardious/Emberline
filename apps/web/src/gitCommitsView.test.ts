@@ -243,6 +243,18 @@ describe('the histories the Commits tab offers', () => {
 });
 
 describe('GitDiffView', () => {
+  it('says binary for a binary file instead of +0 −0', async () => {
+    const png = { ...file('logo.png'), additions: 0, deletions: 0, binary: true };
+    const { container } = await renderDom(
+      createElement(GitDiffView, {
+        files: [file('a.ts'), png],
+        loadFile: async () => ({ path: 'a.ts', original: '', modified: '', binary: false, truncated: false }),
+      }),
+    );
+    const rows = [...container.querySelectorAll('.git-file')].map((b) => b.textContent);
+    expect(rows).toEqual(['a.ts+2−1', 'logo.pngbinary']);
+  });
+
   const diffOf = (modified: string) => ({
     path: 'a.ts',
     original: '',

@@ -232,6 +232,7 @@ export function CodeExplorerTree({
       )}
 
       <SearchInput
+        className="code-explorer-search"
         ariaLabel="Filter workspace files"
         placeholder="Filter files (e.g. .apk, .ts, dist)…"
         value={filterText}

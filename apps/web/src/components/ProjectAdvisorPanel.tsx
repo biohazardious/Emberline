@@ -5,6 +5,21 @@ import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { PERSONA_LIST, PersonaBadge } from './PersonaBadge';
 
+/**
+ * The stack badges beside the project's name: language, frontend, backend and database, each once.
+ * A layer left to the agent (stored by older cores as a sentence) is not a stack yet.
+ */
+export function stackBadgesOf(stack: Project['techStack'] | undefined): string[] {
+  const values = [stack?.language, stack?.frontend, stack?.backend, stack?.database];
+  return [
+    ...new Set(
+      values.filter(
+        (v): v is string => typeof v === 'string' && v !== '' && !v.startsWith('Decided by the agent'),
+      ),
+    ),
+  ];
+}
+
 export function ProjectAdvisorPanel({
   project,
   runnerDown,
@@ -73,12 +88,7 @@ export function ProjectAdvisorPanel({
     }
   };
 
-  const stackBadges = [
-    project.techStack?.language,
-    project.techStack?.frontend,
-    project.techStack?.backend,
-    project.techStack?.database,
-  ].filter(Boolean);
+  const stackBadges = stackBadgesOf(project.techStack);
 
   return (
     <section className="panel" aria-labelledby="advisor-title">
