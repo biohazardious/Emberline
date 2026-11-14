@@ -231,6 +231,47 @@ export const realGit = (args: string[], cwd: string) =>
     env: REAL_OBJECTS_ENV,
   });
 
+/**
+ * Brings the main workspace's index up to date with its files' stat data. `git reset --keep` (unlike
+ * merge, switch or status) never does it, so a file whose stat changed but not its content (copied,
+ * restored from a backup, touched, written again unchanged) reads as an edit and refuses the reset.
+ */
+export async function refreshIndex(mainPath: string): Promise<void> {
+  await execGitFile(['update-index', '-q', '--refresh'], { cwd: mainPath, timeout: 120_000 }).catch(
+    (error: unknown) => {
+      // Exit 1: some files really changed. That is for the caller's own checks, not a failure here.
+      if (isRunnerUnavailable(error) || (error as { code?: unknown }).code !== 1) throw error;
+    },
+  );
+}
+
+/** `git reset --keep <target>` in the main workspace, with its index refreshed first (see refreshIndex). */
+export async function resetKeep(mainPath: string, target: string): Promise<void> {
+  await refreshIndex(mainPath);
+  await execGitFile(['reset', '--keep', target], { cwd: mainPath, timeout: 120_000 });
+}
+
+/**
+ * Why `git reset --keep <target>` would be refused in the main workspace, as git's failed command
+ * (read its words with gitMessage), or null when it would go through. Git's own check, so nothing
+ * is guessed: `read-tree -m -u --dry-run HEAD <target>` is the same two-way merge (an edit, staged
+ * or not, an untracked file where the target adds one, a file where it adds a folder) and writes
+ * nothing. The index is refreshed first, as resetKeep does.
+ */
+export async function resetKeepRefusal(mainPath: string, target: string): Promise<{ error: unknown } | null> {
+  await refreshIndex(mainPath);
+  try {
+    await execGitFile(['read-tree', '-m', '-u', '--dry-run', 'HEAD', target], {
+      cwd: mainPath,
+      timeout: 120_000,
+    });
+    return null;
+  } catch (error) {
+    if (isRunnerUnavailable(error)) throw error;
+    return { error };
+  }
+}
+
 /** The commit `refs/heads/<branch>` names now, with its subject; null when the branch has no commit. */
 export async function branchTip(
   mainPath: string,

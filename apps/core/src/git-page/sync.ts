@@ -37,6 +37,8 @@ import {
   mainBranchState,
   originUrls,
   realGit,
+  resetKeep,
+  resetKeepRefusal,
   RUNNER_WAITING_MESSAGE,
   unlessRunnerUnavailable,
 } from '../repository/git.js';
@@ -119,6 +121,11 @@ export interface SyncDeps {
    * Backlog) before `branch` takes origin's history. Called under the main-workspace lock.
    */
   setAside?: (projectId: string, runs: LiveRun[], branch: string) => Promise<void>;
+  /**
+   * After Match origin moved `branch`: the ticket Resolve with a ticket made for the stop it ended is
+   * closed, with a note, since nothing is left to merge. Called under the main-workspace lock.
+   */
+  closePullTicket?: (projectId: string, ticketId: string, branch: string) => void;
 }
 
 /** What one pull came to, before it is stored as the project's `sync`. */
@@ -1039,6 +1046,14 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
           `${branch} is checked out in another worktree, so Emberline did not move it.`,
           'branch_checked_out',
         );
+      // Whatever the reset would refuse over (an edit, an untracked file in the way), found before
+      // any run is set aside or backup kept.
+      const inTheWay = checkedOut === branch ? await resetKeepRefusal(ws.path, remote) : null;
+      if (inTheWay)
+        throw conflict(
+          `The main workspace has changes that matching origin would overwrite, so ${branch} stayed as it was and nothing was set aside. Commit, move or discard them, then match origin again. (${gitMessage(inTheWay.error)})`,
+          'workspace_dirty',
+        );
       // Runs based on the working branch's history would merge it back in. They are set aside only
       // as the person confirmed them: a run that blocks since the refusal they saw is listed again,
       // and nothing is set aside.
@@ -1051,6 +1066,8 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
         const details = {
           runs: blockingRuns(live),
           backlogPickup: factory.autoPickupReady && factory.autoPickupBacklog,
+          // The pull's own ticket is closed once the branch moved, not sent back to Backlog.
+          pullTicketId: pullTicketOf(readRepositorySettings(db, projectId), branch),
         };
         if (!(live.every((r) => confirmed.has(r.id)) && deps.setAside))
           throw new HttpError(
@@ -1075,7 +1092,7 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
       try {
         if (checkedOut === branch) {
           try {
-            await execGitFile(['reset', '--keep', remote], { cwd: ws.path, timeout: 120_000 });
+            await resetKeep(ws.path, remote);
           } catch (error) {
             if (isRunnerUnavailable(error)) throw error;
             return { backup, setAside, refused: gitMessage(error) };
@@ -1105,6 +1122,8 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
         .map((l) => l.trim())
         .filter(Boolean);
       const settings = readRepositorySettings(db, projectId);
+      const pullTicket = pullTicketOf(settings, branch);
+      if (pullTicket) deps.closePullTicket?.(projectId, pullTicket, branch);
       writeRepositorySettings(db, projectId, {
         pulledOids: [...new Set([...pulled, ...settings.pulledOids])].slice(0, PULLED_KEPT),
         syncStop: null,
@@ -1132,6 +1151,27 @@ export async function matchOrigin(deps: SyncDeps, projectId: string, raw: unknow
     branch,
     message: `${branch} now matches origin. Its old tip is kept as ${done.backup}.`,
   });
+}
+
+/**
+ * The ticket Resolve with a ticket made for a stop that merged origin's `branch` into it, or null:
+ * Match origin on `branch` ends that stop, so the ticket has nothing left to do. Read from the stop
+ * itself, never from the last pull's record (which a later pull of another branch rewrites); a stop
+ * that merges something else (main into the working branch) still needs its ticket.
+ */
+export function pullTicketOf(
+  settings: { syncStop: { source: string; ticketId?: string } | null },
+  branch: string,
+): string | null {
+  const stop = settings.syncStop;
+  return stop?.source === `origin/${branch}` ? (stop.ticketId ?? null) : null;
+}
+
+/** The note on the pull ticket Match origin closed, after the person's text. */
+export function pullTicketClosedNote(body: string, branch: string): string {
+  const note = `Closed by Match origin on ${new Date().toISOString().slice(0, 10)}: ${branch} took origin's history, so there is nothing left to merge.`;
+  const next = body.trimEnd() ? `${body.trimEnd()}\n\n${note}` : note;
+  return next.length <= TICKET_BODY_MAX ? next : body;
 }
 
 /** "1 run was" / "N runs were", for a message after Match origin set runs aside. */

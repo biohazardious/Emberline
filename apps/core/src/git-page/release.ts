@@ -46,6 +46,7 @@ import {
   pushRef,
   realGit,
   remoteRefHead,
+  resetKeep,
   unlessRunnerUnavailable,
 } from '../repository/git.js';
 import type { RepositoryService } from '../repository/service.js';
@@ -1222,10 +1223,9 @@ export class ReleaseJobs {
       if ((await refTip(mainPath, 'HEAD')) !== from) throw conflict(mainMoved(main), 'main_moved');
       const forward = await isAncestorCommit(mainPath, from, to);
       try {
-        await execGitFile(forward ? ['merge', '--ff-only', '--no-stat', to] : ['reset', '--keep', to], {
-          cwd: mainPath,
-          timeout: 120_000,
-        });
+        if (forward)
+          await execGitFile(['merge', '--ff-only', '--no-stat', to], { cwd: mainPath, timeout: 120_000 });
+        else await resetKeep(mainPath, to);
       } catch (error) {
         if (isRunnerUnavailable(error)) throw error;
         const why = gitMessage(error);

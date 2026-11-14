@@ -1,5 +1,13 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -25,6 +33,8 @@ import {
   remoteRefHead,
   type RemoteAccess,
   remoteUrlForDisplay,
+  resetKeep,
+  resetKeepRefusal,
   shortGitError,
   validateRepositoryUrl,
 } from './git.js';
@@ -515,6 +525,100 @@ describe('remoteUrlForDisplay', () => {
       display: 'https://GitHub.com/o/r.git',
       hadCredentials: false,
     });
+  });
+});
+
+describe('resetKeep and resetKeepRefusal', () => {
+  /** HEAD at `one`; `two` (the target) changes f.txt and adds n.txt and d/f.txt. */
+  const setup = () => {
+    const repo = path.join(dir, 'keep');
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    writeFileSync(path.join(repo, 'f.txt'), 'one\n');
+    writeFileSync(path.join(repo, 'same.txt'), 'same\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'one');
+    git(repo, 'switch', '-q', '-c', 'next');
+    writeFileSync(path.join(repo, 'f.txt'), 'two\n');
+    writeFileSync(path.join(repo, 'n.txt'), 'n\n');
+    mkdirSync(path.join(repo, 'd'));
+    writeFileSync(path.join(repo, 'd', 'f.txt'), 'x\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'two');
+    const two = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'switch', '-q', 'main');
+    return { repo, two };
+  };
+  const refusal = async (repo: string, target: string) => (await resetKeepRefusal(repo, target)) !== null;
+  const resets = (repo: string, target: string) =>
+    resetKeep(repo, target).then(
+      () => true,
+      () => false,
+    );
+
+  it('a file whose stat changed but not its content neither refuses the check nor the reset', async () => {
+    const { repo, two } = setup();
+    // As after a copy or a restore: the index's stat data no longer matches the file.
+    utimesSync(path.join(repo, 'f.txt'), new Date('2001-01-01'), new Date('2001-01-01'));
+    expect(await resetKeepRefusal(repo, two)).toBeNull();
+    utimesSync(path.join(repo, 'f.txt'), new Date('2001-01-02'), new Date('2001-01-02'));
+    expect(await resets(repo, two)).toBe(true);
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(two);
+    expect(readFileSync(path.join(repo, 'f.txt'), 'utf8')).toBe('two\n');
+  });
+
+  it.each([
+    [
+      'an edit to a file the target changes',
+      (repo: string) => writeFileSync(path.join(repo, 'f.txt'), 'edited\n'),
+    ],
+    [
+      'the same edit, staged',
+      (repo: string) => {
+        writeFileSync(path.join(repo, 'f.txt'), 'edited\n');
+        git(repo, 'add', 'f.txt');
+      },
+    ],
+    [
+      'an untracked file where the target adds one',
+      (repo: string) => writeFileSync(path.join(repo, 'n.txt'), 'mine\n'),
+    ],
+    [
+      'an untracked file where the target adds a folder',
+      (repo: string) => writeFileSync(path.join(repo, 'd'), 'mine\n'),
+    ],
+  ])('%s: the check refuses exactly when the reset would, and nothing changes', async (_, change) => {
+    const { repo, two } = setup();
+    change(repo);
+    const before = git(repo, 'status', '--porcelain');
+    expect(await refusal(repo, two)).toBe(true);
+    expect(git(repo, 'status', '--porcelain')).toBe(before);
+    expect(await resets(repo, two)).toBe(false);
+  });
+
+  it.each([
+    [
+      'an edit to a file the target keeps',
+      (repo: string) => writeFileSync(path.join(repo, 'same.txt'), 'edited\n'),
+    ],
+    [
+      "staged content equal to the target's",
+      (repo: string) => {
+        writeFileSync(path.join(repo, 'f.txt'), 'two\n');
+        git(repo, 'add', 'f.txt');
+      },
+    ],
+    [
+      'an ignored file where the target adds one',
+      (repo: string) => {
+        writeFileSync(path.join(repo, '.git', 'info', 'exclude'), 'n.txt\n');
+        writeFileSync(path.join(repo, 'n.txt'), 'built\n');
+      },
+    ],
+  ])('%s: neither the check nor the reset refuses', async (_, change) => {
+    const { repo, two } = setup();
+    change(repo);
+    expect(await resetKeepRefusal(repo, two)).toBeNull();
+    expect(await resets(repo, two)).toBe(true);
   });
 });
 

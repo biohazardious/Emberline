@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { type BuildDemoResponse, TICKET_BODY_MAX } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +23,7 @@ import {
 } from '../test-utils.js';
 import { classify } from './branches.js';
 import { type GitPageDeps, GitPageService } from './service.js';
-import { GitSync, listBackups, setAsideNote } from './sync.js';
+import { GitSync, listBackups, pullTicketOf, setAsideNote } from './sync.js';
 
 let t: TestApp;
 let cookie: string;
@@ -865,22 +865,54 @@ describe('pull from origin', () => {
     expect(head()).toBe(oldTip);
   });
 
-  it('a reset refused by an edit after the runs were set aside says they were, and main stays as it was', async () => {
+  it('an edit the reset would refuse over refuses Match origin before any run is set aside or backup kept', async () => {
     const oldTip = head();
     forcePushUnrelated(cloneOf(bare));
     expect((await pullNow()).state).toBe('rewritten');
-    seedRun('gone1', 'working');
-    // An edit to a file origin's history does not have: reset --keep refuses to drop it.
+    const busy = t.tickets.create(projectId, { title: 'Live work', status: 'in_progress' });
+    seedRun('gone1', 'working', { ticketId: busy.id });
+    // An edit to a file origin's history does not have: reset --keep would refuse to drop it.
     writeFileSync(path.join(projectPath, 'a.txt'), 'edited\n');
-    const answered = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['gone1'] });
-    expect(answered.statusCode).toBe(200);
-    expect(answered.json().state).toBe('workspace_dirty');
-    expect(answered.json().message).toMatch(
-      /^1 run was set aside; main stayed as it was, because the main workspace has changes that matching origin would overwrite/,
-    );
-    expect(t.runs.getRun('gone1').cancelled).toBe(true);
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['gone1'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('workspace_dirty');
+    expect(refused.json().message).toContain('nothing was set aside');
+    expect(refused.json().message).toContain('a.txt');
+    expect(t.runs.getRun('gone1').cancelled).toBe(false);
+    expect(t.tickets.get(busy.id).status).toBe('in_progress');
+    expect(await listBackups(projectPath)).toEqual([]);
     expect(head()).toBe(oldTip);
     expect(readFileSync(path.join(projectPath, 'a.txt'), 'utf8')).toBe('edited\n');
+  });
+
+  it("an untracked file where origin's history adds one refuses Match origin before any run is set aside", async () => {
+    const oldTip = head();
+    forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('untracked1', 'working');
+    // origin's history adds new.txt; one here, untracked, would stop the reset.
+    writeFileSync(path.join(projectPath, 'new.txt'), 'mine\n');
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['untracked1'] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('workspace_dirty');
+    expect(refused.json().message).toContain('new.txt');
+    expect(t.runs.getRun('untracked1').cancelled).toBe(false);
+    expect(await listBackups(projectPath)).toEqual([]);
+    expect(head()).toBe(oldTip);
+    expect(readFileSync(path.join(projectPath, 'new.txt'), 'utf8')).toBe('mine\n');
+  });
+
+  it('a file whose stat changed but not its content (a copied or restored workspace) does not stop Match origin', async () => {
+    const rewritten = forcePushUnrelated(cloneOf(bare));
+    expect((await pullNow()).state).toBe('rewritten');
+    seedRun('copied1', 'working');
+    // Same bytes, new mtime: the index's stat data no longer matches, as after a copy or a restore.
+    utimesSync(path.join(projectPath, 'a.txt'), new Date('2001-01-01'), new Date('2001-01-01'));
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main', setAside: ['copied1'] });
+    expect(matched.statusCode).toBe(200);
+    expect(matched.json()).toMatchObject({ state: 'pulled', branch: 'main' });
+    expect(head()).toBe(rewritten);
+    expect(git(projectPath, 'status', '--porcelain')).toBe('');
   });
 
   it('a run that is still starting cannot be set aside: Match origin refuses and changes nothing', async () => {
@@ -1154,6 +1186,20 @@ describe('reading all of origin', () => {
   });
 });
 
+describe('pullTicketOf', () => {
+  it("is the stop's ticket only when the stop merged origin's same branch", () => {
+    const stop = (source: string) => ({ syncStop: { source, ticketId: 't1' } });
+    expect(pullTicketOf(stop('origin/main'), 'main')).toBe('t1');
+    expect(pullTicketOf(stop('origin/develop'), 'develop')).toBe('t1');
+    // Match origin on main while the stop is develop's: its ticket is not main's to close.
+    expect(pullTicketOf(stop('origin/develop'), 'main')).toBeNull();
+    // A stop merging main into the working branch still needs its ticket after develop matches origin.
+    expect(pullTicketOf(stop('main'), 'develop')).toBeNull();
+    expect(pullTicketOf({ syncStop: { source: 'origin/main' } }, 'main')).toBeNull();
+    expect(pullTicketOf({ syncStop: null }, 'main')).toBeNull();
+  });
+});
+
 describe('a pull that cannot merge, and Match origin', () => {
   /** On `dir` (checked out), the same change as `file`'s commit here: the same patch under a new hash. */
   const samePatch = (dir: string, file: string) =>
@@ -1271,6 +1317,49 @@ describe('a pull that cannot merge, and Match origin', () => {
     const again = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
     expect(again.statusCode).toBe(409);
     expect(again.json().error).toBe('nothing_to_match');
+  });
+
+  it("the pull's own ticket (Resolve with a ticket) is closed by Match origin, not sent back to Backlog", async () => {
+    const { originTip } = rewriteKeepingBase();
+    expect((await pullNow()).state).toBe('rewritten');
+    // As on TrueNAS: the stop kept the ticket Resolve with a ticket made for it.
+    const resolve = t.tickets.create(projectId, {
+      title: 'Merge origin/main into main',
+      body: 'Resolve it.',
+      status: 'review',
+    });
+    const stop = readRepositorySettings(t.db, projectId).syncStop!;
+    writeRepositorySettings(t.db, projectId, { syncStop: { ...stop, ticketId: resolve.id } });
+    const dir = path.join(t.dir, 'wt-pull1');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/pull1', dir, 'main');
+    commit(dir, 'merged.txt');
+    seedRun('pull1', 'done', { ticketId: resolve.id, worktreePath: dir, endedAt: new Date() });
+    // Another ticket's waiting run: set aside as usual.
+    const other = t.tickets.create(projectId, { title: 'Other work', status: 'review' });
+    const dir2 = path.join(t.dir, 'wt-other1');
+    git(projectPath, 'worktree', 'add', '-q', '-b', 'emberline/other1', dir2, 'main');
+    commit(dir2, 'other.txt');
+    seedRun('other1', 'done', { ticketId: other.id, worktreePath: dir2, endedAt: new Date() });
+
+    // The refusal names the pull's ticket, so the dialog can say it is closed, not sent back.
+    const refused = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().pullTicketId).toBe(resolve.id);
+    const matched = await send('POST', gitUrl('/match-origin'), {
+      branch: 'main',
+      setAside: ['pull1', 'other1'],
+    });
+    expect(matched.statusCode).toBe(200);
+    expect(head()).toBe(originTip);
+    const closed = t.tickets.get(resolve.id);
+    expect(closed.status).toBe('done');
+    expect(closed.body).toMatch(
+      /^Resolve it\.\n\nClosed by Match origin on \d{4}-\d{2}-\d{2}: main took origin's history, so there is nothing left to merge\.$/,
+    );
+    expect(t.runs.getRun('pull1').cancelled).toBe(true);
+    expect(t.tickets.get(other.id).status).toBe('backlog');
+    expect(t.tickets.get(other.id).body).toContain('Set aside by Match origin');
+    expect(readRepositorySettings(t.db, projectId).syncStop).toBeNull();
   });
 
   it('commits mostly on origin under new hashes, but not nearly all, are a conflict that says so', async () => {

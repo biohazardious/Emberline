@@ -69,6 +69,8 @@ import {
   pull,
   pullTicketText,
   SET_ASIDE_REASON,
+  pullTicketClosedNote,
+  pullTicketOf,
   setAsideNote,
   type SyncDeps,
   within,
@@ -200,6 +202,7 @@ export class GitPageService {
       workspacesDir: this.deps.workspacesDir,
       ...(this.deps.buildWorkspaceDemo ? { buildWorkspaceDemo: this.deps.buildWorkspaceDemo } : {}),
       setAside: (projectId, list, branch) => this.setAside(projectId, list, branch),
+      closePullTicket: (projectId, ticketId, branch) => this.closePullTicket(projectId, ticketId, branch),
     };
   }
 
@@ -213,14 +216,23 @@ export class GitPageService {
       await this.deps.runs.setAside(run.id, SET_ASIDE_REASON);
       if (run.ticketId) branchesOf.set(run.ticketId, [...(branchesOf.get(run.ticketId) ?? []), run.branch]);
     }
+    // The pull's own ticket is closed once the branch moved (closePullTicket), not sent to Backlog.
+    const pullTicket = pullTicketOf(readRepositorySettings(this.db, projectId), branch);
     for (const [ticketId, branches] of branchesOf) {
       const ticket = this.deps.tickets.find(ticketId);
-      if (!ticket || ticket.projectId !== projectId) continue;
+      if (!ticket || ticket.projectId !== projectId || ticketId === pullTicket) continue;
       this.deps.tickets.update(ticketId, {
         status: 'backlog',
         body: setAsideNote(ticket.body, branch, branches),
       });
     }
+  }
+
+  /** Match origin's end of the stop Resolve with a ticket was made for: its ticket is done, with a note. */
+  private closePullTicket(projectId: string, ticketId: string, branch: string): void {
+    const ticket = this.deps.tickets.find(ticketId);
+    if (!ticket || ticket.projectId !== projectId || ticket.status === 'done') return;
+    this.deps.tickets.update(ticketId, { status: 'done', body: pullTicketClosedNote(ticket.body, branch) });
   }
 
   /**
