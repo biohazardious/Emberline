@@ -1,7 +1,7 @@
 import { type FactorySettings, type Run, WORKTREE_YML_INVALID, worktreeCheckOf } from '@emberline/protocol';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { readWizardTickets } from '../db/project-settings.js';
+import { readRepositorySettings, readWizardTickets } from '../db/project-settings.js';
 import { runEvents } from '../db/schema.js';
 import { conflict } from '../errors.js';
 import type { HealGate } from '../factory/conflict-heal.js';
@@ -325,6 +325,30 @@ export async function buildGate(pass: GatePass): Promise<GateOutcome> {
 }
 
 /**
+ * For the run of the ticket Resolve with a ticket made for a pull that stopped: the tip of what it
+ * merges in (origin's branch, or main), as core recorded it when the pull stopped. Its lines are
+ * already there, so the guards judge only what the run wrote. Read from core's own record, never
+ * from a ref an agent could move; undefined for any other run.
+ */
+export function pullTicketUpstream(
+  db: Db,
+  projectId: string | null,
+  ticketId: string | undefined,
+): string | undefined {
+  if (!projectId || !ticketId) return undefined;
+  try {
+    const stop = readRepositorySettings(db, projectId).syncStop;
+    return stop?.ticketId === ticketId &&
+      stop.sourceTip &&
+      /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(stop.sourceTip)
+      ? stop.sourceTip
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The deterministic secret guard and anti-slop gate over the run's diff: leaked keys and `.env`
  * files, type evasion, unfinished stubs, skipped tests, debug leftovers. The agent is asked once to
  * clean up (held first, so an undelivered request never lets a later dispatch merge the leak); a
@@ -333,9 +357,11 @@ export async function buildGate(pass: GatePass): Promise<GateOutcome> {
 export async function slopGate(pass: GatePass): Promise<GateOutcome> {
   const { db, run, settings } = pass;
   if (!run.worktreePath || pass.orchestrator) return PASS;
-  const slopReport = await auditWorktreeSlop({ runId: run.id, workspacePath: run.worktreePath }).catch(
-    () => null,
-  );
+  const slopReport = await auditWorktreeSlop({
+    runId: run.id,
+    workspacePath: run.worktreePath,
+    upstream: pullTicketUpstream(db, run.projectId, pass.ticket?.id),
+  }).catch(() => null);
   const hasSecretViolation = Boolean(settings.secretGuardGate && slopReport && !slopReport.secretGuardPassed);
   const hasSlopViolation = Boolean(
     settings.antiSlopGate && slopReport && slopReport.addedLinesAudited > 0 && !slopReport.passed,

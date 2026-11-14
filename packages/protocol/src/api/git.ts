@@ -196,6 +196,8 @@ export const GitPageStatus = z.object({
   workingCounts: z.object({ ahead: z.number().int(), behind: z.number().int() }).nullable(),
   mainCounts: z.object({ ahead: z.number().int(), behind: z.number().int() }).nullable(),
   checkedAt: z.string().nullable(),
+  /** The read at checkedAt failed: the states are origin's as of the last read that worked. */
+  checkFailed: z.boolean().optional(),
   autoPull: z.boolean(),
   sync: GitSync,
   forgeRelease: z.boolean(),

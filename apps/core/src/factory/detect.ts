@@ -166,8 +166,11 @@ export type HeadWorktreeYml =
   | { kind: 'present'; yml: ExistingWorktreeYml }
   /** HEAD was read and has no `.emberline/worktree.yml`. */
   | { kind: 'absent' }
-  /** git could not tell (no repository, no commit, a broken HEAD, unsafe config). */
-  | { kind: 'unknown'; error: string };
+  /**
+   * git could not tell (no repository, no commit, a broken HEAD, unsafe config). `notRepo`: the
+   * folder is no repository at all (a shared project without git), so there is no HEAD to review.
+   */
+  | { kind: 'unknown'; error: string; notRepo?: true };
 
 /** Extra git arguments and environment for a read (e.g. one that must see only the real objects). */
 export interface GitReadOptions {
@@ -187,7 +190,7 @@ export async function readHeadWorktreeYml(
 ): Promise<HeadWorktreeYml> {
   const rel = ADOPT_FILE_PATHS.worktreeYml;
   if (!(await entryExists(path.join(dir, '.git'))))
-    return { kind: 'unknown', error: 'the main workspace is not a git repository' };
+    return { kind: 'unknown', error: 'the main workspace is not a git repository', notRepo: true };
   let stdout: string;
   try {
     stdout = (

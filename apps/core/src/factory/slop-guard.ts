@@ -282,7 +282,40 @@ export async function branchBase(workspacePath: string): Promise<string | null> 
   return null;
 }
 
-async function collectDiffAddedLines(workspacePath: string): Promise<{
+/** Git that reads only the real objects (no replace refs or grafts an agent could plant). */
+const REAL_OBJECTS = {
+  args: ['-c', 'core.commitGraph=false', '-c', 'core.useReplaceRefs=false'],
+  env: { GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' },
+};
+
+/**
+ * The lines the worktree's files add over `upstream` (a commit), as `file\0line` keys on the
+ * worktree's side; null when that diff cannot be read (then nothing is left out).
+ */
+async function linesAddedOver(workspacePath: string, upstream: string): Promise<Set<string> | null> {
+  try {
+    const { stdout } = await execGitFile(
+      [...REAL_OBJECTS.args, 'diff', upstream, '--unified=0', '--no-color', '--no-ext-diff', '--'],
+      { cwd: workspacePath, env: REAL_OBJECTS.env, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const keys = new Set<string>();
+    let file: string | null = null;
+    let line = 0;
+    for (const raw of stdout.split('\n')) {
+      if (raw.startsWith('+++ ')) file = raw.startsWith('+++ b/') ? raw.slice(6).trim() : null;
+      else if (raw.startsWith('@@ ')) line = Number.parseInt(/\+(\d+)(?:,\d+)? @@/.exec(raw)?.[1] ?? '1', 10);
+      else if (file && raw.startsWith('+')) keys.add(`${file}\0${line++}`);
+    }
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
+async function collectDiffAddedLines(
+  workspacePath: string,
+  upstream?: string,
+): Promise<{
   files: string[];
   addedLines: DiffAddedLine[];
 }> {
@@ -349,6 +382,24 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
     }
   }
 
+  // A merge of `upstream` (origin's tip core recorded for the pull's own ticket) brings in lines
+  // its run never wrote, already published there: only the lines it adds over upstream are its own.
+  // Untracked files below are the run's whatever upstream holds.
+  let upstreamApplied = false;
+  if (hasGit && upstream && addedLines.length > 0) {
+    const own = await linesAddedOver(workspacePath, upstream);
+    if (own) {
+      upstreamApplied = true;
+      const kept = addedLines.filter((l) => own.has(`${l.file}\0${l.line}`));
+      // A file only upstream's lines came into is upstream's; one with no added lines (an empty
+      // new file) stays the run's.
+      const hadLines = new Set(addedLines.map((l) => l.file));
+      const keptFiles = new Set(kept.map((l) => l.file));
+      for (const f of hadLines) if (!keptFiles.has(f)) filesSet.delete(f);
+      addedLines.splice(0, addedLines.length, ...kept);
+    }
+  }
+
   if (hasGit) {
     try {
       const { stdout: statusOut } = await execGitFile(['status', '--porcelain', '-uall'], {
@@ -380,8 +431,8 @@ async function collectDiffAddedLines(workspacePath: string): Promise<{
     }
   }
 
-  // Fallback for non-git workspaces or fresh directories
-  if (filesSet.size === 0) {
+  // Fallback for non-git workspaces or fresh directories (not a diff that was all upstream's)
+  if (filesSet.size === 0 && !upstreamApplied) {
     const walkedFiles = await walkWorkspaceAuditableFiles(workspacePath);
     for (const relFile of walkedFiles.slice(0, 25)) {
       const absFile = path.join(workspacePath, relFile);
@@ -454,9 +505,14 @@ function scriptCodeReader(workspacePath: string): (entry: DiffAddedLine) => Prom
 export async function auditWorktreeSlop(params: {
   runId: string;
   workspacePath: string;
+  /**
+   * A commit whose lines the run brought in by merging it rather than wrote (origin's tip core
+   * recorded for the pull's own ticket): lines it holds as they are are not audited.
+   */
+  upstream?: string;
 }): Promise<SlopAuditReport> {
   const { runId, workspacePath } = params;
-  const { files, addedLines } = await collectDiffAddedLines(workspacePath);
+  const { files, addedLines } = await collectDiffAddedLines(workspacePath, params.upstream);
   const codeOf = scriptCodeReader(workspacePath);
   const issues: SlopIssue[] = [];
   let issueSeq = 1;

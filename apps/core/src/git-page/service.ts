@@ -347,6 +347,7 @@ export class GitPageService {
       workingCounts: null,
       mainCounts: null,
       checkedAt: settings.lastRemoteCheck?.at ?? null,
+      checkFailed: Boolean(settings.lastRemoteCheck?.error),
       autoPull: settings.autoPull,
       sync: this.currentSync(projectId, settings.sync),
       forgeRelease: false,

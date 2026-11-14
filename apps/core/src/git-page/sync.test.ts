@@ -11,6 +11,7 @@ import {
 import { runEvents, runs } from '../db/schema.js';
 import { withMainWorkspaceLock } from '../factory/merge.js';
 import { updateFactorySettings } from '../factory/settings.js';
+import { pullTicketUpstream } from '../runs/gates.js';
 import { doneStarting, markStarting } from '../runs/starting.js';
 import { type FakeForge, startFakeForge } from '../test-fake-forge.js';
 import {
@@ -1197,6 +1198,39 @@ describe('pullTicketOf', () => {
     expect(pullTicketOf(stop('main'), 'develop')).toBeNull();
     expect(pullTicketOf({ syncStop: { source: 'origin/main' } }, 'main')).toBeNull();
     expect(pullTicketOf({ syncStop: null }, 'main')).toBeNull();
+  });
+});
+
+describe('the status after a read of origin that failed', () => {
+  it('says the read failed, keeping when it was tried', async () => {
+    const at = new Date().toISOString();
+    const check = { url: 'x', originKey: 'k', branch: 'main', at, published: true };
+    writeRepositorySettings(t.db, projectId, {
+      lastRemoteCheck: { ...check, error: 'could not read origin' },
+    });
+    expect((await send('GET', gitUrl())).json()).toMatchObject({ checkedAt: at, checkFailed: true });
+    writeRepositorySettings(t.db, projectId, { lastRemoteCheck: { ...check, error: null } });
+    expect((await send('GET', gitUrl())).json()).toMatchObject({ checkedAt: at, checkFailed: false });
+  });
+});
+
+describe("the guards' upstream for the pull's own ticket", () => {
+  it("is the tip core recorded when the pull stopped, only for that stop's ticket", () => {
+    const tip = 'a'.repeat(40);
+    writeRepositorySettings(t.db, projectId, {
+      syncStop: { working: tip, main: tip, source: 'origin/main', sourceTip: tip, ticketId: 't1' },
+    });
+    expect(pullTicketUpstream(t.db, projectId, 't1')).toBe(tip);
+    expect(pullTicketUpstream(t.db, projectId, 't2')).toBeUndefined();
+    expect(pullTicketUpstream(t.db, projectId, undefined)).toBeUndefined();
+    expect(pullTicketUpstream(t.db, null, 't1')).toBeUndefined();
+    // Never anything that is not a full commit id.
+    writeRepositorySettings(t.db, projectId, {
+      syncStop: { working: tip, main: tip, source: 'origin/main', sourceTip: 'main', ticketId: 't1' },
+    });
+    expect(pullTicketUpstream(t.db, projectId, 't1')).toBeUndefined();
+    writeRepositorySettings(t.db, projectId, { syncStop: null });
+    expect(pullTicketUpstream(t.db, projectId, 't1')).toBeUndefined();
   });
 });
 

@@ -24,6 +24,13 @@ const INHERITED_ENV = [
   'OPENAI_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  // The runner names its agents' commits; a test's own `-c user.name` would lose to these.
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_AUTHOR_DATE',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'GIT_COMMITTER_DATE',
 ];
 for (const name of INHERITED_ENV) delete process.env[name];
 // Core reads the runner's home (CLI logins) and tools volume; tests that need them create their own.

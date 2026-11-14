@@ -109,7 +109,8 @@ export function validateChoices(choices: ProjectChoices, appType: ProjectAppType
 export function techStackFromChoices(choices: ProjectChoices, versionPolicy?: string): ProjectTechStack {
   const text = (id: StackDimensionId): string => {
     const choice = choices[id];
-    if (choice === undefined || choice === 'none') return '';
+    // Left to the agent: nothing is decided yet (PROJECT.md says who decides), so no stack text.
+    if (choice === undefined || choice === 'none' || choice === 'agent') return '';
     return describeChoice(id, choice);
   };
   return {

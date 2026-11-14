@@ -339,6 +339,13 @@ describe('worktree.yml trust (Review Focus 1)', () => {
     expect((await status(project.id)).approved).not.toBeNull();
   });
 
+  it('a folder that never had a repository and has nothing approved flags nothing to review', async () => {
+    const project = await createProject();
+    rmTemp(path.join(project.path, '.git'));
+    const s = await status(project.id);
+    expect(s).toMatchObject({ approved: null, head: null, headError: null, changed: false, removed: false });
+  });
+
   it('a HEAD file that is a symbolic link is refused', async () => {
     const project = await createProject();
     mkdirSync(path.join(project.path, '.emberline'));

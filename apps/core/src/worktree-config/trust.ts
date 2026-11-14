@@ -53,7 +53,10 @@ export async function worktreeConfigStatus(
   return {
     approved,
     head,
-    headError: read.kind === 'unknown' ? read.error : null,
+    // A folder that never had a repository (a shared project without git, nothing approved) has no
+    // HEAD to review: nothing to flag. One whose approved file's repository went is still flagged.
+    // Merges read either as unknown all the same.
+    headError: read.kind === 'unknown' && !(read.notRepo && approved === null) ? read.error : null,
     changed,
     removed,
     // Without HEAD content there is nothing to compare: the errors say what is wrong.
