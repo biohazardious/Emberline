@@ -7,6 +7,7 @@ import type * as ApiModule from './api';
 import { apiRoutes, cleanup, click, getButton, queryButton, renderDom, waitFor } from './domRender';
 import { AppTopbar } from './components/AppTopbar';
 import { GitPage } from './pages/GitPage';
+import { setAsideNoteText } from './components/git/GitStatusStrip';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -92,6 +93,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Git page', () => {
+  it('with main as the working branch the strip does not compare main with itself, and keeps the tag', async () => {
+    serve(status({ workingBranch: 'main', mainBehindWorking: 0 }));
+    const view = await open();
+    await waitFor(() => expect(view.container.textContent).toContain('v0.8.0'));
+    const strip = view.container.querySelector('.git-strip')?.textContent ?? '';
+    expect(strip).not.toContain('not behind');
+    expect(strip).not.toContain('has everything in');
+    expect(strip).not.toContain('behind main');
+  });
+
   it('shows the status strip with a tab skeleton', async () => {
     serve(status());
     const view = await open();
@@ -103,11 +114,9 @@ describe('Git page', () => {
     expect(tabs).toEqual(['Commits', 'Branches', 'Release']);
     // Run branches stay out of the picker; a branch only on origin is offered (picking it checks it out).
     await waitFor(() =>
-      expect([...view.container.querySelectorAll('option')].map((o) => o.value)).toEqual([
-        'develop',
-        'main',
-        '12112026_backup',
-      ]),
+      expect(
+        [...view.container.querySelectorAll<HTMLOptionElement>('.git-strip option')].map((o) => o.value),
+      ).toEqual(['develop', 'main', '12112026_backup']),
     );
     expect(view.container.querySelector('option[value="12112026_backup"]')?.textContent).toBe(
       '12112026_backup (on origin)',
@@ -191,8 +200,8 @@ describe('Git page', () => {
       },
     });
     const view = await open();
-    await waitFor(() => expect(view.container.querySelectorAll('option')).toHaveLength(3));
-    const select = view.container.querySelector('select') as HTMLSelectElement;
+    await waitFor(() => expect(view.container.querySelectorAll('.git-strip option')).toHaveLength(3));
+    const select = view.container.querySelector('.git-strip select') as HTMLSelectElement;
     select.value = 'main';
     await act(async () => select.dispatchEvent(new Event('change', { bubbles: true })));
     await waitFor(() => expect(view.container.querySelector('.git-strip > [role="alert"]')).not.toBeNull());
@@ -390,6 +399,28 @@ describe('Match origin blocked by runs', () => {
         "Their branches stay as they are; their tickets go back to Backlog, where Backlog auto-pickup may start them again, on origin's history.",
       ),
     );
+  });
+
+  it("says the pull's own ticket is closed, and the others go back to Backlog", async () => {
+    const runs = blocking.map((r) => ({ ...r, status: r.status as 'waiting' | 'live' }));
+    const problem = { text: '', runs, backlogPickup: false, pullTicketId: 't38' };
+    expect(setAsideNoteText(problem)).toBe(
+      "Their branches stay as they are. EMB-38 is closed: once the branch takes origin's history, nothing is left to merge. The other tickets go back to Backlog.",
+    );
+    expect(setAsideNoteText({ ...problem, runs: runs.slice(0, 1) })).toBe(
+      "Its branch stays as it is. EMB-38 is closed: once the branch takes origin's history, nothing is left to merge.",
+    );
+    expect(setAsideNoteText({ ...problem, pullTicketId: null })).toBe(
+      'Their branches stay as they are; their tickets go back to Backlog.',
+    );
+    // A run with no ticket is never taken for the pull's.
+    expect(
+      setAsideNoteText({
+        ...problem,
+        pullTicketId: null,
+        runs: [{ ...runs[0]!, ticketId: null, ticketKey: null }],
+      }),
+    ).toBe('Their branches stay as they are; their tickets go back to Backlog.');
   });
 
   it('a set-aside that fails for another reason closes the dialog, and the strip says why', async () => {

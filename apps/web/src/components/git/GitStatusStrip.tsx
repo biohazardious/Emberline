@@ -25,6 +25,8 @@ export interface Problem {
   runs: BlockingRun[];
   /** Match origin's refusal: whether the factory picks tickets up from Backlog (Backlog auto-pickup). */
   backlogPickup: boolean;
+  /** Match origin's refusal: the pull's own ticket (Resolve with a ticket), closed instead of sent back. */
+  pullTicketId: string | null;
 }
 
 /** A failed request as the strip shows it; `runs_live` also lists the runs that block the change. */
@@ -43,7 +45,11 @@ export function problemOf(error: unknown): Problem {
         )
       : [];
   const backlogPickup = error instanceof ApiRequestError && error.data.backlogPickup === true;
-  return { text: errorMessage(error), runs, backlogPickup };
+  const pullTicketId =
+    error instanceof ApiRequestError && typeof error.data.pullTicketId === 'string'
+      ? error.data.pullTicketId
+      : null;
+  return { text: errorMessage(error), runs, backlogPickup, pullTicketId };
 }
 
 /**
@@ -85,6 +91,21 @@ export function GitProblemBanner({ projectId, problem }: { projectId: string; pr
       {problem.runs.length > 0 && <BlockingRuns projectId={projectId} runs={problem.runs} />}
     </div>
   );
+}
+
+/** What setting the blocking runs aside does to their branches and tickets, as the dialog says it. */
+export function setAsideNoteText(blocked: Problem): string {
+  const pull = blocked.runs.find((r) => r.ticketId !== null && r.ticketId === blocked.pullTicketId);
+  const others = blocked.runs.some((r) => r.ticketId === null || r.ticketId !== blocked.pullTicketId);
+  const back = blocked.backlogPickup
+    ? "go back to Backlog, where Backlog auto-pickup may start them again, on origin's history"
+    : 'go back to Backlog';
+  const closed = pull
+    ? `${pull.ticketKey ?? "The pull's ticket"} is closed: once the branch takes origin's history, nothing is left to merge.`
+    : null;
+  if (closed && !others) return `Its branch stays as it is. ${closed}`;
+  if (closed) return `Their branches stay as they are. ${closed} The other tickets ${back}.`;
+  return `Their branches stay as they are; their tickets ${back}.`;
 }
 
 /**
@@ -166,11 +187,7 @@ function MatchOriginDialog({
           <div className="banner banner-warn" role="status">
             <span>{blocked.text}</span>
             <BlockingRuns projectId={projectId} runs={blocked.runs} />
-            <p className="small git-runs-note">
-              {blocked.backlogPickup
-                ? "Their branches stay as they are; their tickets go back to Backlog, where Backlog auto-pickup may start them again, on origin's history."
-                : 'Their branches stay as they are; their tickets go back to Backlog.'}
-            </p>
+            <p className="small git-runs-note">{setAsideNoteText(blocked)}</p>
           </div>
         )}
         <div className="request-dialog-actions">
@@ -312,20 +329,29 @@ export function GitStatusStrip({
             ))}
           </select>
         </label>
-        <span className="git-strip-item small">
-          {status.mainBehindWorking > 0 ? (
-            <span>
-              <span className="mono">{status.defaultBranch}</span> is {status.mainBehindWorking}{' '}
-              {status.mainBehindWorking === 1 ? 'commit' : 'commits'} behind{' '}
-              <span className="mono">{status.workingBranch}</span>
-            </span>
-          ) : (
-            <span className="muted">
-              <span className="mono">{status.defaultBranch}</span> is not behind
-            </span>
-          )}
-          {status.latestTag && <span className="badge mono">{status.latestTag}</span>}
-        </span>
+        {(status.workingBranch !== status.defaultBranch || status.latestTag) && (
+          <span className="git-strip-item small">
+            {/* Main against the working branch says something only when they are two branches. */}
+            {status.workingBranch !== status.defaultBranch &&
+              (status.mainBehindWorking > 0 ? (
+                <span>
+                  <span className="mono">{status.defaultBranch}</span> is {status.mainBehindWorking}{' '}
+                  {status.mainBehindWorking === 1 ? 'commit' : 'commits'} behind{' '}
+                  <span className="mono">{status.workingBranch}</span>
+                </span>
+              ) : (
+                <span className="muted">
+                  <span className="mono">{status.defaultBranch}</span> has everything in{' '}
+                  <span className="mono">{status.workingBranch}</span>
+                </span>
+              ))}
+            {status.latestTag && (
+              <span className="badge mono" title={`The newest tag in ${status.defaultBranch}'s history`}>
+                {status.latestTag}
+              </span>
+            )}
+          </span>
+        )}
         {status.hasOrigin && (
           <span className="git-strip-item small">
             {remoteStateText(status.working, status.workingCounts?.ahead, status.workingCounts?.behind)}

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
 import { apiRoutes, cleanup, click, deferred, renderDom, waitFor } from './domRender';
-import { GitCommitsTab } from './components/git/GitCommitsTab';
+import { GitCommitsTab, historyChoices, originHint } from './components/git/GitCommitsTab';
 import { GitDiffView } from './components/git/GitDiffView';
 
 vi.mock('./api', async (importOriginal) => ({
@@ -68,6 +68,11 @@ beforeEach(() => {
           commit(2, { fromOrigin: true }),
         ],
       }),
+      [`GET ${B}?ref=refs%2Fremotes%2Forigin%2Fmain`]: () => {
+        calls.push('ref=origin/main');
+        return { ref: 'refs/remotes/origin/main', nextCursor: null, commits: [commit(4)] };
+      },
+      [`GET ${B}/${sha(4)}`]: () => ({ sha: sha(4), message: 'subject 4', parents: [], files: [] }),
       [`GET ${B}?cursor=50`]: () => {
         calls.push('cursor=50');
         return { ref: 'develop', nextCursor: null, commits: [commit(3)] };
@@ -170,6 +175,70 @@ describe('GitCommitsTab', () => {
     await waitFor(() =>
       expect(container.querySelector('.git-commit-message')?.textContent).toContain('subject 1'),
     );
+  });
+});
+
+describe('the histories the Commits tab offers', () => {
+  const rewritten = {
+    workingBranch: 'main',
+    defaultBranch: 'main',
+    hasOrigin: true,
+    working: 'rewritten',
+    main: 'rewritten',
+    workingCounts: { ahead: 82, behind: 206 },
+    backups: [],
+  } as unknown as GitPageStatus;
+
+  it("the working branch first, then main, origin's branches as read and the backups, by full ref", () => {
+    expect(
+      historyChoices({
+        workingBranch: 'develop',
+        defaultBranch: 'main',
+        hasOrigin: true,
+        working: 'behind',
+        main: 'up_to_date',
+        backups: ['main-20261114-202913'],
+      }),
+    ).toEqual([
+      { ref: null, label: 'develop' },
+      { ref: 'refs/heads/main', label: 'main' },
+      { ref: 'refs/remotes/origin/develop', label: 'origin/develop' },
+      { ref: 'refs/remotes/origin/main', label: 'origin/main' },
+      { ref: 'refs/emberline/backup/main-20261114-202913', label: 'backup main-20261114-202913' },
+    ]);
+    // Not on origin, or no origin: nothing of origin's is offered.
+    expect(historyChoices({ ...rewritten, working: 'unpublished' })).toEqual([{ ref: null, label: 'main' }]);
+    expect(historyChoices({ ...rewritten, hasOrigin: false })).toEqual([{ ref: null, label: 'main' }]);
+  });
+
+  it('says what origin has that the working branch lacks: a rewritten history, or new commits', () => {
+    expect(originHint(rewritten)).toBe(
+      'origin/main has a different history, with 206 commits main here does not have.',
+    );
+    expect(originHint({ ...rewritten, working: 'behind', workingCounts: { ahead: 0, behind: 1 } })).toBe(
+      'origin/main has 1 commit main here does not have yet.',
+    );
+    expect(originHint({ ...rewritten, working: 'up_to_date' })).toBeNull();
+    expect(originHint({ ...rewritten, working: 'ahead' })).toBeNull();
+  });
+
+  it("shows origin's history from the hint, and goes back to the working branch from the picker", async () => {
+    const { container } = await renderDom(
+      createElement(GitCommitsTab, { projectId: 'p1', status: rewritten }),
+    );
+    await waitFor(() => expect(container.textContent).toContain('subject 2'));
+    expect(container.textContent).toContain('origin/main has a different history');
+    await click([...container.querySelectorAll('button')].find((b) => b.textContent === 'Show origin/main')!);
+    await waitFor(() => expect(container.textContent).toContain('subject 4'));
+    expect(container.textContent).not.toContain('subject 2');
+    expect(calls).toEqual(['ref=origin/main']);
+    // The hint is about the working branch's history, so it goes while origin's is shown.
+    expect(container.textContent).not.toContain('has a different history');
+    const select = container.querySelector('select')!;
+    expect(select.value).toBe('refs/remotes/origin/main');
+    select.value = '';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => expect(container.textContent).toContain('subject 2'));
   });
 });
 
