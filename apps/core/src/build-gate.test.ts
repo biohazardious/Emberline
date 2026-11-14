@@ -196,6 +196,28 @@ describe('approved worktree.yml checks', () => {
     expect(seen).toEqual(['make all', 'make lint']);
   });
 
+  it("a failing check's output ends with the command's own error and how the step ended, not its first lines again", async () => {
+    const progress = Array.from({ length: 200 }, (_, i) => `#${i} progress`).join('\n');
+    setCommandExecutor(async () => ({
+      exitCode: 1,
+      signal: null,
+      stdout: '',
+      stderr: `${progress}\nERROR: the real cause`,
+      timedOut: false,
+      truncated: false,
+    }));
+    const res = await buildWorkspaceDemo({
+      projectId: 'p',
+      targetId: 'main',
+      workspacePath: ws,
+      checks: { test: 'docker build --target check .' },
+    });
+    expect(res.ok).toBe(false);
+    const lines = res.output.trimEnd().split('\n');
+    expect(lines.at(-1)).toBe('The command exited with code 1.');
+    expect(lines.at(-2)).toBe('ERROR: the real cause');
+  });
+
   it('only some checks: the others are not run, and no detected step is added', async () => {
     files({ 'package.json': JSON.stringify({ scripts: { build: 'vite build' } }), 'node_modules/.keep': '' });
     const seen: string[] = [];

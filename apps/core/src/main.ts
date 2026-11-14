@@ -89,7 +89,10 @@ for (const warning of startupWarnings(process.env, config)) {
 logDocker = (status) => {
   if (status.available)
     app.log.info({ host: config.dockerHost, version: status.version }, 'Docker engine available');
-  else app.log.warn({ host: config.dockerHost, error: status.error }, 'Docker engine unreachable');
+  // A probe before ops (the probe's way to the engine) first answers would only report "the ops
+  // service is missing" at every start; the probe on its connection logs the engine's real state.
+  else if ((ops ?? ptyd).status === 'connected')
+    app.log.warn({ host: config.dockerHost, error: status.error }, 'Docker engine unreachable');
 };
 // A background task that forgot a .catch must not take down every running agent's control plane.
 process.on('unhandledRejection', (reason) => {

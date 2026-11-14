@@ -104,6 +104,12 @@ COPY packages/adapter-gemini/package.json packages/adapter-gemini/
 COPY packages/hook/package.json packages/hook/
 RUN --mount=type=cache,id=emberline-pnpm,target=/pnpm-store pnpm install --frozen-lockfile
 COPY . .
+# COPY keeps the checkout's modes: one made under a strict umask (a NAS share, 0007) leaves folders
+# that only root may enter, and the runner's ptyd (user ptyd) could read neither its own bundle nor,
+# in the check stage, the sources. Only what lacks read access is changed; node_modules (installed
+# here, already readable) is left alone, so the layer does not copy it again.
+RUN find /src -name node_modules -prune -o -type d ! -perm -0555 -exec chmod a+rx {} + \
+  -o -type f ! -perm -0444 -exec chmod a+r {} +
 RUN pnpm build
 # The runner's /etc/ssh/ssh_known_hosts, from the pinned host keys core checks too (one list:
 # packages/protocol/src/ssh-known-hosts.ts, which names the sources and the date they were checked).

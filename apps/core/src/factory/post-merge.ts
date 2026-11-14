@@ -71,7 +71,7 @@ export function rebuildMainDemoStep(
       log(
         res.ok
           ? `post-merge: rebuilt main of project ${projectId}`
-          : `post-merge: rebuild of main failed for project ${projectId}: ${res.output.slice(-300)}`,
+          : `post-merge: rebuild of main failed for project ${projectId}: ${res.output.slice(-800)}`,
       );
     },
   };

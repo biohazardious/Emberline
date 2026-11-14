@@ -13,6 +13,7 @@ import {
   execCommand,
   RUNNER_BIN,
   runnerSystemCommand,
+  failureReason,
 } from '../command-exec.js';
 import type { Db } from '../db/index.js';
 import { notFound } from '../errors.js';
@@ -492,7 +493,14 @@ async function runWorkspaceBuild(params: BuildWorkspaceDemoParams): Promise<Buil
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     if (typeof execErr.stdout === 'string' && execErr.stdout.trim()) logs.push(execErr.stdout);
     if (typeof execErr.stderr === 'string' && execErr.stderr.trim()) logs.push(execErr.stderr);
-    const msg = err instanceof Error ? err.message : String(err);
+    // A failed command's own output is above, whole: its message would repeat the first lines of
+    // it (a long build's progress) after the real error at the end. How it ended is enough here.
+    const msg =
+      err instanceof CommandFailedError
+        ? `The command ${failureReason(err.request, err.result)}.`
+        : err instanceof Error
+          ? err.message
+          : String(err);
     logs.push(msg);
     const fallbackEntry = await detectDemoEntryRelPath(workspacePath);
     return {

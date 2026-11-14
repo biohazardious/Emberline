@@ -363,6 +363,15 @@ export function isRunnerTimeout(error: unknown): boolean {
 }
 
 /** Error shaped like `execFile`'s: carries the exit code and both output streams. */
+/** How a command ended without success: a timeout, too much output, or its exit code or signal. */
+export function failureReason(request: ExecRequest, result: ExecResult): string {
+  return result.timedOut
+    ? `timed out after ${request.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`
+    : result.truncated
+      ? 'output exceeded the size limit'
+      : `exited with code ${result.exitCode ?? result.signal}`;
+}
+
 export class CommandFailedError extends Error {
   declare readonly request: ExecRequest;
   declare readonly result: ExecResult;
@@ -382,11 +391,7 @@ export class CommandFailedError extends Error {
     stdout: string,
     stderr: string,
   ) {
-    const why = result.timedOut
-      ? `timed out after ${request.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`
-      : result.truncated
-        ? 'output exceeded the size limit'
-        : `exited with code ${result.exitCode ?? result.signal}`;
+    const why = failureReason(request, result);
     const shown = (text: string) => redactCapabilityUrls(withoutUrlCredentials(text));
     super(
       `${request.file} ${shown(request.args.slice(0, 4).join(' '))} ${why}${stderr.trim() ? `: ${shown(stderr.trim()).slice(0, 500)}` : ''}`,
