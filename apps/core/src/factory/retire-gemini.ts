@@ -15,6 +15,7 @@ import { NoticeService, providerName } from '../notices/service.js';
 import { applyRunEvent } from '../runs/lifecycle.js';
 import { AGENT_REMOVED } from '../runs/service.js';
 import { ACTIVE_RUN_STATES } from '../tickets/columns.js';
+import { getFactorySettings } from './settings.js';
 
 const GEMINI = 'gemini';
 const ANTIGRAVITY = 'antigravity';
@@ -79,9 +80,20 @@ export function retireGemini(
     removeCatalogAndQuota(db);
 
     const raw = getSetting<StoredSettings>(db, FACTORY_SETTINGS_KEY);
-    const { settings, lines } = raw ? rewriteSettings(raw) : { settings: null, lines: [] };
+    const rewrite = raw ? rewriteSettings(raw) : { settings: null, lines: [], defaultMoved: null };
+    const { settings } = rewrite;
     if (settings) setSetting(db, FACTORY_SETTINGS_KEY, settings);
     const changed = settings !== null;
+    // Named as the settings read it back, which is what runs get (an agent not enabled is not it).
+    const lines = [...rewrite.lines];
+    if (rewrite.defaultMoved) {
+      const agent = getFactorySettings(db).defaultAgent;
+      lines.unshift(
+        agent === ANTIGRAVITY && rewrite.defaultMoved === 'only_antigravity'
+          ? 'Default agent → Antigravity (the only provider left on)'
+          : `Default agent → ${providerName(agent)}`,
+      );
+    }
 
     const endedRuns = endRemovedAgentRuns(db, opts.now);
     const hadRuns =
@@ -127,8 +139,16 @@ function removeCatalogAndQuota(db: Db): void {
   publishCatalog(db);
 }
 
-/** The settings with Gemini gone, or null when they never named it. */
-function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null; lines: string[] } {
+/**
+ * The settings with Gemini gone, or null when they never named it. `defaultMoved`: the default agent
+ * was Gemini (stored, or read as the first enabled provider) and is something else now;
+ * `only_antigravity` when Antigravity is all that is left on.
+ */
+function rewriteSettings(raw: StoredSettings): {
+  settings: StoredSettings | null;
+  lines: string[];
+  defaultMoved: 'moved' | 'only_antigravity' | null;
+} {
   const next: StoredSettings = { ...raw };
   const lines: string[] = [];
   let changed = false;
@@ -143,13 +163,25 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   }
   const enabledNow = (next.enabledProviders as unknown[] | undefined) ?? [];
 
-  if (raw.defaultAgent === GEMINI) {
-    // Not Antigravity, for the same reason no step moves there.
-    const firstOther = enabledNow.find((id) => id !== ANTIGRAVITY && AgentId.safeParse(id).success) as
-      AgentId | undefined;
-    next.defaultAgent = firstOther ?? 'claude';
+  // The default the settings read gave: the stored one when it is enabled, else the first enabled
+  // provider. Gemini first in the list with no (or no enabled) stored default was the default too.
+  const readDefault =
+    storedList && storedList.length > 0
+      ? storedList.includes(raw.defaultAgent)
+        ? raw.defaultAgent
+        : storedList[0]
+      : raw.defaultAgent;
+  let defaultMoved: 'moved' | 'only_antigravity' | null = null;
+  if (raw.defaultAgent === GEMINI || readDefault === GEMINI) {
+    // Not Antigravity while another provider is on, for the same reason no step moves there. When
+    // Antigravity is the only one left, it is the default: the person enabled it, and the settings
+    // read would pick it anyway (Claude is not enabled for them).
+    const known = enabledNow.filter((id): id is AgentId => AgentId.safeParse(id).success);
+    const firstOther = known.find((id) => id !== ANTIGRAVITY);
+    const onlyAntigravity = !firstOther && known.includes(ANTIGRAVITY);
+    next.defaultAgent = firstOther ?? (onlyAntigravity ? ANTIGRAVITY : 'claude');
     changed = true;
-    lines.push(`Default agent → ${providerName(next.defaultAgent as AgentId)}`);
+    defaultMoved = onlyAntigravity ? 'only_antigravity' : 'moved';
   }
 
   const routes = raw.personaRoutes && typeof raw.personaRoutes === 'object' ? raw.personaRoutes : {};
@@ -180,5 +212,5 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   if (raw.personaAgents) next.personaAgents = nextAgents;
   if (raw.personaModels) next.personaModels = nextModels;
 
-  return { settings: changed ? next : null, lines };
+  return { settings: changed ? next : null, lines, defaultMoved };
 }

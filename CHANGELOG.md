@@ -14,7 +14,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Removed
 
-- **The Gemini CLI provider.** Google ended consumer access to Gemini CLI on 2026-06-18, so it can no longer be signed in with a Google account. It is gone from Settings, the route and model pickers, the agent list and the CLI installer; `make gemini-login` is gone too. Antigravity keeps its Gemini models. Runs it already made stay listed as **Gemini CLI (removed)** and can be handed off to another agent; any still open (queued, waiting or rate limited) are ended on the first start, so they free their ticket slot and the hand-off works.
+- **The Gemini CLI provider.** Google ended consumer access to Gemini CLI on 2026-06-18, so it can no longer be signed in with a Google account. It is gone from Settings, the route and model pickers, the agent list and the CLI installer; `make gemini-login` is gone too. Antigravity keeps its Gemini models. Runs it already made stay listed as **Gemini CLI (removed)** and can be handed off to another agent; any not yet finished (queued, starting, working, waiting or rate limited) are ended on the first start, so they free their ticket slot and the hand-off works.
 
 ### Fixed
 
@@ -29,13 +29,13 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Upgrade notes
 
-**Gemini CLI route steps are dropped.** On the first start, a route step that named Gemini CLI is removed and the chain's next step runs; a chain left with no step runs on the default agent. The step is never moved to Antigravity, even when Antigravity is enabled: Emberline does not add Antigravity to a chain for you (see Provider terms in the README). Add it to a route by hand under Settings → Providers if you want it. A default agent of Gemini CLI becomes the first enabled provider other than Antigravity, else Claude Code. One Inbox notice, "Gemini CLI was removed", lists each route that fell back. Nothing changes on a fresh install.
+**Gemini CLI route steps are dropped.** On the first start, a route step that named Gemini CLI is removed and the chain's next step runs; a chain left with no step runs on the default agent. The step is never moved to Antigravity, even when Antigravity is enabled: Emberline does not add Antigravity to a chain for you (see Provider terms in the README). Add it to a route by hand under Settings → Providers if you want it. A default agent of Gemini CLI (stored, or Gemini CLI first in the enabled list) becomes the first enabled provider other than Antigravity; when Antigravity is the only provider left on, it becomes the default, and the notice says so; with no provider left on, Claude Code. One Inbox notice, "Gemini CLI was removed", lists each route that fell back and where the default agent went. Nothing changes on a fresh install.
 
 **Antigravity needs its own Google sign-in.** It no longer runs on a Gemini API key, and a step that used its key now runs on its sign-in. Sign in once under Settings → Providers (or `make agy-login`). Its card shows signed in only when agy's own sign-in file is there, the same check its runs make. Saving a Gemini key enables no provider.
 
 **The Gemini API key stays for Aider.** It is now on the Aider card; nothing to re-enter. A stored key shows there even while Aider is off, with **Remove key**.
 
-**Old Gemini runs.** They stay readable, but cannot be resumed or answered: Emberline says "Gemini CLI is no longer supported. Hand this run off to another agent." and the hand-off continues the work with another agent. A run still queued, waiting or rate limited at the upgrade is ended as failed with that message, so it no longer holds one of its project's ticket slots.
+**Old Gemini runs.** They stay readable, but cannot be resumed or answered: Emberline says "Gemini CLI is no longer supported. Hand this run off to another agent." and the hand-off continues the work with another agent. A run not yet finished at the upgrade (queued, starting, working, waiting or rate limited) is ended as failed with that message, so it no longer holds one of its project's ticket slots.
 
 **The installed Gemini CLI is removed once** from the runner's tools volume (`npm uninstall -g @google/gemini-cli`); a failure only logs. `~/.gemini` stays, as Antigravity's sign-in lives under it.
 

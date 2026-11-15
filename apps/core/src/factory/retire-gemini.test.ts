@@ -136,7 +136,11 @@ describe('retiring Gemini CLI on upgrade', () => {
     expect(stored()).toMatchObject({
       personaRoutes: { qa: [{ agent: 'antigravity', model: 'gemini-pro', credential: 'login' }] },
     });
-    expect(result.lines).toEqual(['QA & Test Engineer → next in its chain']);
+    // Gemini was first in the list, so it was the default too; Antigravity is all that is left.
+    expect(result.lines).toEqual([
+      'Default agent → Antigravity (the only provider left on)',
+      'QA & Test Engineer → next in its chain',
+    ]);
   });
 
   it('keeps an Antigravity step stored on the API key; it is read as its login', () => {
@@ -150,7 +154,10 @@ describe('retiring Gemini CLI on upgrade', () => {
       },
     });
     const result = retire();
-    expect(result.lines).toEqual(['QA & Test Engineer → next in its chain']);
+    expect(result.lines).toEqual([
+      'Default agent → Antigravity (the only provider left on)',
+      'QA & Test Engineer → next in its chain',
+    ]);
     expect(getFactorySettings(t.db).personaRoutes.qa).toEqual([
       { agent: 'antigravity', model: 'gemini-pro', credential: 'login' },
     ]);
@@ -209,20 +216,76 @@ describe('retiring Gemini CLI on upgrade', () => {
   });
 
   it.each([
-    { enabledProviders: ['gemini', 'codex', 'antigravity'], expected: 'codex' },
-    { enabledProviders: ['gemini', 'antigravity', 'copilot'], expected: 'copilot' },
-    { enabledProviders: ['gemini', 'antigravity'], expected: 'claude' },
-    { enabledProviders: ['gemini'], expected: 'claude' },
-    { enabledProviders: undefined, expected: 'claude' },
+    { enabledProviders: ['gemini', 'codex', 'antigravity'], expected: 'codex', line: 'OpenAI Codex CLI' },
+    {
+      enabledProviders: ['gemini', 'antigravity', 'copilot'],
+      expected: 'copilot',
+      line: 'GitHub Copilot CLI',
+    },
+    { enabledProviders: ['gemini'], expected: 'claude', line: 'Claude Code' },
+    { enabledProviders: undefined, expected: 'claude', line: 'Claude Code' },
   ])(
-    'moves the default agent off Gemini to $expected (from $enabledProviders), never to Antigravity',
-    ({ enabledProviders, expected }) => {
+    'moves a Gemini default agent to $expected (from $enabledProviders), not to Antigravity while another is on',
+    ({ enabledProviders, expected, line }) => {
       store({ ...(enabledProviders ? { enabledProviders } : {}), defaultAgent: 'gemini' });
       const result = retire();
       expect(stored()!.defaultAgent).toBe(expected);
+      // What the settings read gives, which is what runs get.
+      expect(getFactorySettings(t.db).defaultAgent).toBe(expected);
+      expect(result.lines).toEqual([`Default agent → ${line}`]);
       expect(result.changed).toBe(true);
     },
   );
+
+  it('with Antigravity the only provider left on, it is the default, and the notice says so', () => {
+    store({
+      enabledProviders: ['gemini', 'antigravity'],
+      antigravityTermsAcknowledged: true,
+      defaultAgent: 'gemini',
+      personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] },
+    });
+    const result = retire();
+    expect(stored()!.defaultAgent).toBe('antigravity');
+    const read = getFactorySettings(t.db);
+    expect(read.defaultAgent).toBe('antigravity');
+    expect(read.enabledProviders).toEqual(['antigravity']);
+    // The emptied chain runs on that default.
+    expect(read.personaRoutes.qa.map((r) => r.agent)).toEqual(['antigravity']);
+    expect(result.lines).toEqual([
+      'Default agent → Antigravity (the only provider left on)',
+      'QA & Test Engineer → next in its chain',
+    ]);
+    expect(geminiNotices()[0]!.text).toContain(
+      'What changed: Default agent → Antigravity (the only provider left on); QA & Test Engineer → next in its chain.',
+    );
+  });
+
+  it.each([
+    { enabledProviders: ['gemini', 'codex', 'antigravity'], defaultAgent: undefined, expected: 'codex' },
+    { enabledProviders: ['gemini', 'codex'], defaultAgent: 'copilot', expected: 'codex' },
+    { enabledProviders: ['gemini', 'antigravity'], defaultAgent: undefined, expected: 'antigravity' },
+  ])(
+    'Gemini first in the list was the default ($defaultAgent stored): it moves to $expected, and the notice says so',
+    ({ enabledProviders, defaultAgent, expected }) => {
+      store({ enabledProviders, ...(defaultAgent ? { defaultAgent } : {}) });
+      const result = retire();
+      expect(getFactorySettings(t.db).defaultAgent).toBe(expected);
+      expect(result.lines).toEqual([
+        expected === 'antigravity'
+          ? 'Default agent → Antigravity (the only provider left on)'
+          : 'Default agent → OpenAI Codex CLI',
+      ]);
+    },
+  );
+
+  it('no default line when Gemini was neither the stored nor the first enabled provider', () => {
+    store({ enabledProviders: ['claude', 'gemini', 'antigravity'] });
+    expect(retire().lines).toEqual([]);
+    expect(getFactorySettings(t.db).defaultAgent).toBe('claude');
+    store({ enabledProviders: ['gemini', 'antigravity', 'codex'], defaultAgent: 'codex' });
+    expect(retire().lines).toEqual([]);
+    expect(getFactorySettings(t.db).defaultAgent).toBe('codex');
+  });
 
   it('handles the 0.1.x per-persona agent like a route: dropped', () => {
     store({
