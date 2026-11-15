@@ -200,6 +200,27 @@ describe('the routes that now really run Fable', () => {
     expect(new NoticeService(t.db).list()).toHaveLength(1);
   });
 
+  it('skips roadmap entries that are not objects instead of failing, and shows the notice', async () => {
+    const project = await createProject('Odd roadmap');
+    ranBefore(project.id, project.path);
+    mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(project.path, '.emberline', 'roadmap.json'),
+      JSON.stringify({
+        milestones: [
+          null,
+          'M0',
+          { id: 'ms-0', items: 'none' },
+          { id: 'ms-1', items: [null, 7, 'x', ['nested'], item('Combo scoring', 'fable')] },
+        ],
+      }),
+    );
+    await noticeFableRoutes(t.db, notices);
+    expect(notices.list()).toHaveLength(1);
+    expect(notices.list()[0]!.text).toContain('Roadmap: Combo scoring (Odd roadmap).');
+    expect(notices.fableNoticeShown()).toBe(true);
+  });
+
   it('a fresh install has run nothing on Opus: no notice, and none later', async () => {
     await noticeFableRoutes(t.db, notices);
     expect(notices.list()).toEqual([]);

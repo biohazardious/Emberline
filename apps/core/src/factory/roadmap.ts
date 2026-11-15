@@ -868,13 +868,20 @@ async function seedInitialRoadmap(
   };
 }
 
-/** The items a project's roadmap file holds, as written (no seed, no upgrade); none when it is unreadable. */
+/**
+ * The items a project's roadmap file holds, as written (no seed, no upgrade); none when it is
+ * unreadable. A hand-edited file can hold anything, so entries that are not objects are left out.
+ */
 export async function storedRoadmapItems(projectPath: string): Promise<Partial<RoadmapItem>[]> {
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
   try {
     const raw = await readFile(path.join(projectPath, ROADMAP_REL_PATH), 'utf8');
-    const stored = JSON.parse(raw) as Partial<StoredRoadmapFile> | null;
-    if (!stored || !Array.isArray(stored.milestones)) return [];
-    return stored.milestones.flatMap((m) => (Array.isArray(m?.items) ? m.items : []));
+    const stored: unknown = JSON.parse(raw);
+    if (!isObject(stored) || !Array.isArray(stored.milestones)) return [];
+    return stored.milestones.flatMap((m: unknown) =>
+      isObject(m) && Array.isArray(m.items) ? (m.items as unknown[]).filter(isObject) : [],
+    ) as Partial<RoadmapItem>[];
   } catch {
     return [];
   }
