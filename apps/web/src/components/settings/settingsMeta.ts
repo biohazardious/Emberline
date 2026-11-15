@@ -12,7 +12,7 @@ import {
   type ThemeMode,
 } from '@emberline/protocol';
 import type { CSSProperties, FormEvent } from 'react';
-import { PERSONA_LIST } from '../PersonaBadge';
+import { PERSONA_BY_ID, PERSONA_LIST } from '../PersonaBadge';
 
 export const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot', 'aider'];
 export const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot'];
@@ -175,6 +175,14 @@ export function buildPresetRoutes(
       : enabledProviders.includes('codex')
         ? pick('codex', 3, personaRoutes.qa)
         : personaRoutes.qa;
+    // Personas left on their own route keep their fallbacks too; the notice must not say otherwise.
+    const kept = (['ui_ux', 'qa'] as const)
+      .filter((p) => (p === 'ui_ux' ? ui : qa) === personaRoutes[p])
+      .map((p) => PERSONA_BY_ID[p].label);
+    const fallbacks =
+      kept.length === 0
+        ? 'Fallbacks were reset.'
+        : `Fallbacks were reset, except ${kept.join(' and ')}, which kept ${kept.length === 1 ? 'its route' : 'their routes'}: Antigravity is not enabled with its terms acknowledged.`;
     return {
       routes: {
         product_owner: [
@@ -191,8 +199,7 @@ export function buildPresetRoutes(
           defaultRoute(core, selectProviderModelByRank(core, 4), personaRoutes.security[0]?.credential),
         ],
       },
-      notice:
-        'Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. Fallbacks were reset. Click Save to persist.',
+      notice: `Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. ${fallbacks} Click Save to persist.`,
     };
   }
 

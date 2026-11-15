@@ -61,7 +61,7 @@ describe('the multi-provider preset', () => {
   } as PersonaRouteMap;
 
   it('gives UI/UX and QA to Antigravity once it is enabled and acknowledged', () => {
-    const { routes: next } = buildPresetRoutes(
+    const { routes: next, notice } = buildPresetRoutes(
       'multi-provider',
       routes,
       ['claude', 'antigravity'],
@@ -70,6 +70,7 @@ describe('the multi-provider preset', () => {
     );
     expect(next.ui_ux[0]?.agent).toBe('antigravity');
     expect(next.qa[0]?.agent).toBe('antigravity');
+    expect(notice).toContain('Fallbacks were reset. Click Save to persist.');
   });
 
   it('leaves UI/UX and QA on their routes while Antigravity is not ready', () => {
@@ -77,15 +78,24 @@ describe('the multi-provider preset', () => {
       [['claude'], true],
       [['claude', 'antigravity'], false],
     ] as [FactorySettings['enabledProviders'], boolean][]) {
-      const { routes: next } = buildPresetRoutes('multi-provider', routes, enabled, 'claude', ack);
+      const { routes: next, notice } = buildPresetRoutes('multi-provider', routes, enabled, 'claude', ack);
       expect(next.ui_ux).toEqual(routes.ui_ux);
       expect(next.qa).toEqual(routes.qa);
+      expect(notice).toContain(
+        'Fallbacks were reset, except UI/UX and QA, which kept their routes: Antigravity is not enabled with its terms acknowledged.',
+      );
     }
   });
 
   it('still sends QA to Codex when Codex is enabled and Antigravity is not', () => {
-    const { routes: next } = buildPresetRoutes('multi-provider', routes, ['claude', 'codex'], 'claude');
+    const { routes: next, notice } = buildPresetRoutes(
+      'multi-provider',
+      routes,
+      ['claude', 'codex'],
+      'claude',
+    );
     expect(next.qa[0]?.agent).toBe('codex');
     expect(next.ui_ux).toEqual(routes.ui_ux);
+    expect(notice).toContain('Fallbacks were reset, except UI/UX, which kept its route:');
   });
 });
