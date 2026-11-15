@@ -677,6 +677,38 @@ describe('jobs in a runner', () => {
     ).toBe('');
   });
 
+  it('counts a picker read that parses to no models as a failure, keeping the last list', async () => {
+    setSetting(opened.db, 'models.catalog', {
+      claude: {
+        models: [
+          {
+            id: 'claude-fable-5-1',
+            label: 'Fable 5.1',
+            shortLabel: 'claude-fable-5-1',
+            rank: 3,
+            tier: 'medium',
+            badge: 'discovered',
+            capabilities: [],
+            description: '',
+            source: 'picker',
+            missingSince: null,
+            firstSeen: '2026-11-14T10:00:00.000Z',
+            lastSeen: '2026-11-14T10:00:00.000Z',
+          },
+        ],
+        read: null,
+      },
+    });
+    const reads = await inRunner({ claude: pickerJob(fakeScript(), () => []) }).refresh('claude');
+    expect(reads.claude).toMatchObject({
+      ok: false,
+      error: 'the model picker showed no models it could read',
+    });
+    expect(readCatalog(opened.db).claude.models).toMatchObject([
+      { id: 'claude-fable-5-1', missingSince: null },
+    ]);
+  });
+
   const leftover = (kind = MODEL_PROBE_KIND) =>
     client.spawn({ file: '/bin/sh', args: ['-c', 'sleep 30'], cwd: dir, meta: { kind } });
   const sessionKinds = async () => (await client.list()).sessions.map((s) => s.meta.kind);

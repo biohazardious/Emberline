@@ -201,7 +201,10 @@ export function pickerJob(script: PickerScript, parse: (screens: string[]) => Pi
       { ...script, command: { ...ctx.probeCommand(file, args), env: { ...ctx.env, ...env } } },
       { cwd: ctx.cwd, deadlineMs: ctx.deadlineMs },
     );
-    return { models: parse(screens), source: 'picker' };
+    const models = parse(screens);
+    // As for a listing: a picker read that finds nothing is a failure, or every model would go missing.
+    if (models.length === 0) throw new Error('the model picker showed no models it could read');
+    return { models, source: 'picker' };
   };
 }
 
