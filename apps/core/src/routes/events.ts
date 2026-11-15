@@ -1,5 +1,6 @@
 import {
   ClientPresenceMessage,
+  type Notice,
   type ProjectNotice,
   type Run,
   type SchedulerState,
@@ -7,6 +8,7 @@ import {
   type Ticket,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import type { NoticeService } from '../notices/service.js';
 import type { PresenceRegistry } from '../notifications/presence.js';
 import type { RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
@@ -20,6 +22,7 @@ export function registerEventRoutes(
   tickets: TicketService,
   scheduler: Scheduler,
   presence?: PresenceRegistry,
+  notices?: NoticeService,
 ): void {
   app.get('/api/events', { websocket: true }, (socket) => {
     const id = Symbol('events-socket');
@@ -41,7 +44,10 @@ export function registerEventRoutes(
     const onScheduler = (state: SchedulerState) => send({ type: 'scheduler', scheduler: state });
     const onNotice = (notice: ProjectNotice) => send({ type: 'project_notice', notice });
 
+    const onNotices = (list: Notice[]) => send({ type: 'notices', notices: list });
+
     runs.on('run', onRun);
+    notices?.on('change', onNotices);
     runs.on('removed', onRunRemoved);
     tickets.on('ticket', onTicket);
     tickets.on('removed', onTicketRemoved);
@@ -62,6 +68,7 @@ export function registerEventRoutes(
     socket.on('close', () => {
       presence?.remove(id);
       runs.off('run', onRun);
+      notices?.off('change', onNotices);
       runs.off('removed', onRunRemoved);
       tickets.off('ticket', onTicket);
       tickets.off('removed', onTicketRemoved);

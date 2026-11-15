@@ -17,6 +17,7 @@ import { exitOnSecretsKeyError, forgetLogLine, startSecrets } from './secrets/st
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { startupWarnings } from './startup-warnings.js';
+import { NoticeService } from './notices/service.js';
 import { TicketService } from './tickets/service.js';
 
 const config = loadConfig();
@@ -58,9 +59,10 @@ const docker = new DockerEngine(config.dockerHost, {
 const runs = new RunService(db, config, ptyd, docker);
 const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);
+const notices = new NoticeService(db);
 
 const app = await buildServer(
-  { config, db, ptyd, ...(ops ? { opsPtyd: ops } : {}), runs, tickets, scheduler },
+  { config, db, ptyd, ...(ops ? { opsPtyd: ops } : {}), runs, tickets, scheduler, notices },
   { logger: { level: config.logLevel } },
 );
 if (secrets.source === 'created') {

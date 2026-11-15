@@ -47,6 +47,9 @@ export function LiveEvents(): null {
         case 'scheduler':
           client.setQueryData(liveKeys.scheduler, event.scheduler);
           break;
+        case 'notices':
+          client.setQueryData(['api', '/api/notices'], event.notices);
+          break;
         case 'project_notice':
           toastError(
             `An agent's ${event.notice.file} was ignored (${event.notice.issue}). It is kept as ${event.notice.rejectedAs}.`,
@@ -59,6 +62,7 @@ export function LiveEvents(): null {
       void client.invalidateQueries({ queryKey: ['tickets'] });
       void client.invalidateQueries({ queryKey: ['run-recovery'] });
       void client.invalidateQueries({ queryKey: liveKeys.scheduler });
+      void client.invalidateQueries({ queryKey: ['api', '/api/notices'] });
     },
   );
   return null;

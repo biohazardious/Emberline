@@ -21,6 +21,7 @@ import { deriveApiUrl, insertAccount, normalizeServerUrl } from './forge/account
 import { IssueSyncService } from './forge/issue-sync.js';
 import type { FetchLike } from './forge/issues.js';
 import { ForgeService } from './forge/service.js';
+import { NoticeService } from './notices/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { PtydBridge } from './ptyd-bridge.js';
 import { KeepMainPushed } from './repository/keep-pushed.js';
@@ -46,6 +47,8 @@ export interface TestApp {
   tickets: TicketService;
   scheduler: Scheduler;
   presence: PresenceRegistry;
+  /** The server's Inbox notices. */
+  notices: NoticeService;
   forge: ForgeService;
   /** The forge's fetch: tests assign `current` to fake the provider (the default is the global fetch). */
   forgeFetch: { current: FetchLike };
@@ -130,6 +133,7 @@ export async function createTestApp(
   // Pipelines run right after a Stop unless a test asks for the settle window.
   const tickets = new TicketService(opened.db, runs, scheduler, { pipelineSettleMs: 0, ...ticketOptions });
   const presence = new PresenceRegistry();
+  const notices = new NoticeService(opened.db);
   const forgeFetch: { current: FetchLike } = { current: (url, init) => globalThis.fetch(url, init) };
   const forge = new ForgeService(opened.db, runs, { fetch: (url, init) => forgeFetch.current(url, init) });
   const issueSync = new IssueSyncService(opened.db, tickets, runs, forge);
@@ -149,6 +153,7 @@ export async function createTestApp(
       tickets,
       scheduler,
       presence,
+      notices,
       forge,
       issueSync,
       postMerge,
@@ -169,6 +174,7 @@ export async function createTestApp(
     tickets,
     scheduler,
     presence,
+    notices,
     forge,
     forgeFetch,
     issueSync,

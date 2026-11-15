@@ -20,6 +20,7 @@ import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { requestUrlForLog } from './git-gateway/gateway.js';
 import { ForgeService } from './forge/service.js';
+import { NoticeService } from './notices/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
 import { registerOpsRoutes } from './ops.js';
@@ -35,6 +36,7 @@ import { registerForgeAccountRoutes } from './routes/forge-accounts.js';
 import { registerSshKeyRoutes } from './routes/ssh-keys.js';
 import { sshKeyMissingProjects } from './ssh-keys/remote.js';
 import { registerIssueRoutes } from './routes/issues.js';
+import { registerNoticeRoutes } from './routes/notices.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -78,6 +80,8 @@ export interface CoreDeps {
   scheduler: Scheduler;
   /** Which clients are looking at which run; a fresh registry when omitted. */
   presence?: PresenceRegistry;
+  /** Inbox notices (new models, unread model lists); built from `db` when omitted. */
+  notices?: NoticeService;
   /** The forge service; built from `db` and `runs` when omitted. */
   forge?: ForgeService;
   /** Issue label sync and write-back; built from the other services when omitted. */
@@ -141,6 +145,7 @@ export async function buildServer(
   });
   const startedAt = Date.now();
   const presence = deps.presence ?? new PresenceRegistry();
+  const notices = deps.notices ?? new NoticeService(deps.db);
   deps.runs.setLogger(app.log);
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, {
     presence,
@@ -334,7 +339,8 @@ export async function buildServer(
   registerIssueRoutes(app, new IssueImportService(deps.db, deps.tickets, forge, issueSync), issueSync);
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
-  registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence);
+  registerNoticeRoutes(app, notices);
+  registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence, notices);
 
   const { webDir } = deps.config;
   if (webDir && existsSync(webDir)) {

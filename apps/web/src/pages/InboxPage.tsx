@@ -18,6 +18,7 @@ import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProject
 import { AnswerDialog } from '../components/AnswerDialog';
 import { SearchInput } from '../components/BoardFilterBar';
 import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
+import { InboxNotices } from '../components/InboxNotices';
 import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
 import { PersonaBadge } from '../components/PersonaBadge';
 import { recoveryApplies } from '../holdRecovery';
@@ -222,6 +223,8 @@ export function InboxPage({
       </header>
 
       <MoreInOtherProjects count={elsewhere} onShow={() => setAll(true)} />
+
+      <InboxNotices />
 
       {Boolean(runsError && !runs) && (
         <ViewErrorBanner label="Could not load inbox items" error={runsError} onRetry={onRetryRuns} />

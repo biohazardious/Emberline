@@ -1,5 +1,6 @@
 /** API contracts: live events (`/api/events` WebSocket). */
 import { z } from 'zod';
+import { Notice } from './notices.js';
 import { Run } from './runs.js';
 import { SchedulerState } from './scheduler.js';
 import { Ticket } from './tickets.js';
@@ -25,6 +26,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ticket_removed'), id: z.string(), projectId: z.string() }),
   z.object({ type: z.literal('scheduler'), scheduler: SchedulerState }),
   z.object({ type: z.literal('project_notice'), notice: ProjectNotice }),
+  /** The Inbox notices changed: the whole current list. */
+  z.object({ type: z.literal('notices'), notices: z.array(Notice) }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 
