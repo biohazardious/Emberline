@@ -1,8 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { listCommandsFor, parseAgyModels, parseAiderModels } from './list-command.js';
+import {
+  COPILOT_MODELS_SCRIPT,
+  listCommandsFor,
+  parseAgyModels,
+  parseAiderModels,
+  parseCodexModels,
+  parseCopilotModels,
+} from './list-command.js';
+import { PickerParseError } from './parsers/errors.js';
 
-const fixture = readFileSync(new URL('./fixtures/agy-models.txt', import.meta.url), 'utf8');
+const read = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+const fixture = read('agy-models.txt');
 
 describe('parseAgyModels', () => {
   it('parses the captured listing', () => {
@@ -25,9 +34,89 @@ describe('parseAiderModels', () => {
   });
 });
 
+describe('parseCodexModels', () => {
+  // The capture (codex-cli 0.169.0, free ChatGPT account) with its long per-model prompts left out.
+  // The CLI prints it on one line.
+  const capture = JSON.stringify(JSON.parse(read('codex-debug-models-0.169.0.json')));
+
+  it('keeps the models the /model picker lists, in its order', () => {
+    expect(parseCodexModels(capture)).toEqual([
+      { id: 'gpt-6-luna', label: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks.' },
+      {
+        id: 'gpt-5.6-terra',
+        label: 'GPT-5.6-Terra',
+        description: 'Older balanced model for straightforward work.',
+      },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', description: 'Older fast and efficient model.' },
+    ]);
+  });
+
+  it('orders by priority, drops hidden and invalid slugs and duplicates, and reads around a notice', () => {
+    const models = [
+      { slug: 'b', display_name: 'B', visibility: 'list', priority: 2 },
+      { slug: 'hidden', visibility: 'hide', priority: 0 },
+      { slug: 'a', display_name: ' ', visibility: 'list', priority: 1 },
+      { slug: 'bad slug', visibility: 'list', priority: 0 },
+      { slug: 'b', display_name: 'B again', visibility: 'list', priority: 3 },
+      { slug: 'c', visibility: 'list' },
+      'noise',
+    ];
+    const text = `a notice\n${JSON.stringify({ models })}\n`;
+    expect(parseCodexModels(text)).toEqual([
+      { id: 'a', label: 'a' },
+      { id: 'b', label: 'B' },
+      { id: 'c', label: 'c' },
+    ]);
+  });
+
+  it('throws on output that holds no catalog', () => {
+    expect(() => parseCodexModels('error: not logged in')).toThrow(PickerParseError);
+    expect(() => parseCodexModels('{"data":[]}')).toThrow('`codex debug models` printed no model catalog');
+  });
+
+  it('finds no models when every entry is hidden (a failed read, not an empty list)', () => {
+    expect(parseCodexModels('{"models":[{"slug":"x","visibility":"hide"}]}')).toEqual([]);
+  });
+});
+
+describe('parseCopilotModels', () => {
+  it("drops Copilot's own auto and reads a free account's answer as no models of its own", () => {
+    expect(parseCopilotModels(read('copilot-models-1.0.112-free.txt'))).toBeNull();
+  });
+
+  it('keeps the other models once each, with their names', () => {
+    const text =
+      'auto\tAuto\r\ngpt-5.6-luna\tGPT-5.6 Luna\nclaude-sonnet-5\t\nbad id\tX\ngpt-5.6-luna\tAgain\n';
+    expect(parseCopilotModels(text)).toEqual([
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+      { id: 'claude-sonnet-5', label: 'claude-sonnet-5' },
+    ]);
+  });
+
+  it('finds nothing in output without models', () => {
+    expect(parseCopilotModels('\n')).toEqual([]);
+  });
+});
+
 describe('listCommandsFor', () => {
   afterEach(() => {
     delete process.env.EMBERLINE_ANTIGRAVITY_COMMAND;
+    delete process.env.EMBERLINE_CODEX_COMMAND;
+    delete process.env.EMBERLINE_COPILOT_COMMAND;
+  });
+  it("reads the account's Codex catalog, honouring the command override", () => {
+    expect(listCommandsFor('codex', { aiderPrefixes: [] })).toEqual([
+      { file: 'codex', args: ['-c', 'check_for_update_on_startup=false', 'debug', 'models'] },
+    ]);
+    process.env.EMBERLINE_CODEX_COMMAND = '/x/codex';
+    expect(listCommandsFor('codex', { aiderPrefixes: [] })[0]?.file).toBe('/x/codex');
+  });
+  it("runs the Copilot listing script against Copilot's command", () => {
+    expect(listCommandsFor('copilot', { aiderPrefixes: [] })).toEqual([
+      { file: COPILOT_MODELS_SCRIPT, args: ['copilot'] },
+    ]);
+    process.env.EMBERLINE_COPILOT_COMMAND = ' /x/copilot ';
+    expect(listCommandsFor('copilot', { aiderPrefixes: [] })[0]?.args).toEqual(['/x/copilot']);
   });
   it('lists agy models, honouring the command override', () => {
     expect(listCommandsFor('antigravity', { aiderPrefixes: [] })).toEqual([

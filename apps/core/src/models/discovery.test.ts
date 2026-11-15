@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type OpenedDb, openDb, setSetting } from '../db/index.js';
 import { NoticeService } from '../notices/service.js';
 import { ToolchainService } from '../toolchain/service.js';
+import { updateFactorySettings } from '../factory/settings.js';
 import { readCatalog } from './catalog.js';
 import {
+  DISCOVERY_JOBS,
   type DiscoveryJob,
   failureReason,
   listingJob,
@@ -26,6 +28,7 @@ import { PickerError, type PickerScript } from './picker.js';
 
 const FAKE_PICKER = fileURLToPath(new URL('./fixtures/fake-picker-cli.mjs', import.meta.url));
 const AGY_FIXTURE = fileURLToPath(new URL('./fixtures/agy-models.txt', import.meta.url));
+const CODEX_FIXTURE = fileURLToPath(new URL('./fixtures/codex-debug-models-0.169.0.json', import.meta.url));
 
 let opened: OpenedDb;
 let notices: NoticeService;
@@ -430,6 +433,8 @@ describe('jobs in a runner', () => {
   });
   afterEach(async () => {
     delete process.env.EMBERLINE_ANTIGRAVITY_COMMAND;
+    delete process.env.EMBERLINE_CODEX_COMMAND;
+    delete process.env.EMBERLINE_COPILOT_COMMAND;
     client.close();
     await server.close();
     rmSync(dir, { recursive: true, force: true });
@@ -473,6 +478,75 @@ describe('jobs in a runner', () => {
     const ids = readCatalog(opened.db).antigravity.models.map((m) => m.id);
     expect(ids).toContain('gemini-4-hydrogen-xhigh');
     expect(notices.list().find((n) => n.kind === 'new_models')?.title).toBe('AGY has 7 new models');
+  });
+
+  it("reads Codex's catalog with the stored key as Codex reads it, and knows the models it shipped with", async () => {
+    enable(['codex']);
+    updateFactorySettings(opened.db, { openaiApiKey: 'sk-test' });
+    const log = path.join(dir, 'codex.log');
+    const codex = path.join(dir, 'fake-codex');
+    writeFileSync(
+      codex,
+      `#!/bin/sh\necho "codex $* key=$CODEX_API_KEY" >> "${log}"\ntr -d '\\n' < "${CODEX_FIXTURE}"\n`,
+    );
+    chmodSync(codex, 0o755);
+    process.env.EMBERLINE_CODEX_COMMAND = codex;
+
+    const reads = await inRunner(
+      { codex: DISCOVERY_JOBS.codex },
+      { toolchain: fakeToolchain(['codex']) },
+    ).refresh();
+    expect(reads.codex).toMatchObject({ ok: true });
+    expect(readFileSync(log, 'utf8')).toBe(
+      'codex -c check_for_update_on_startup=false debug models key=sk-test\n',
+    );
+    expect(readCatalog(opened.db).codex.models.map((m) => m.id)).toEqual([
+      'gpt-6-luna',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]);
+    // Every model of the capture was known when this release was cut.
+    expect(notices.list().filter((n) => n.kind === 'new_models')).toEqual([]);
+  });
+
+  it("reads Copilot's models through the listing script; Copilot's own auto alone is an empty read", async () => {
+    enable(['copilot']);
+    const seedLog = path.join(dir, 'seed.log');
+    const seed = path.join(tools, 'bin', 'emberline-cli-seed.mjs');
+    writeFileSync(seed, `#!/bin/sh\necho "seed $1" >> "${seedLog}"\n`);
+    chmodSync(seed, 0o755);
+    const answer = path.join(dir, 'answer.txt');
+    const script = path.join(tools, 'bin', 'emberline-copilot-models.mjs');
+    writeFileSync(
+      script,
+      `#!/bin/sh\necho "list $1 update=$COPILOT_AUTO_UPDATE" >> "${seedLog}"\ncat "${answer}"\n`,
+    );
+    chmodSync(script, 0o755);
+    const job = () =>
+      inRunner({ copilot: DISCOVERY_JOBS.copilot }, { toolchain: fakeToolchain(['copilot']) });
+
+    writeFileSync(answer, 'auto\tAuto\ngpt-5.6-luna\tGPT-5.6 Luna\n');
+    expect((await job().refresh()).copilot).toMatchObject({ ok: true });
+    expect(readFileSync(seedLog, 'utf8')).toBe('seed copilot\nlist copilot update=false\n');
+    expect(readCatalog(opened.db).copilot.models).toMatchObject([{ id: 'gpt-5.6-luna', missingSince: null }]);
+
+    // A free account: the read works and lists nothing of Copilot's own, so the earlier model is
+    // marked missing (kept, not wiped) and no failure is recorded.
+    writeFileSync(answer, 'auto\tAuto\nauto\tAuto\n');
+    expect((await job().refresh()).copilot).toMatchObject({ ok: true, error: null });
+    expect(readCatalog(opened.db).copilot.models).toMatchObject([
+      { id: 'gpt-5.6-luna', missingSince: '2026-11-15T10:00:00.000Z' },
+    ]);
+    expect(notices.list().filter((n) => n.kind !== 'new_models')).toEqual([]);
+  });
+
+  it('counts a cut-off listing as a failure', async () => {
+    const agy = path.join(dir, 'fake-agy');
+    writeFileSync(agy, `#!/bin/sh\nhead -c 9000000 /dev/zero | tr '\\0' 'a'\n`);
+    chmodSync(agy, 0o755);
+    process.env.EMBERLINE_ANTIGRAVITY_COMMAND = agy;
+    const reads = await inRunner({ antigravity: listingJob((out) => parseAgyModels(out)) }).refresh();
+    expect(reads.antigravity?.error).toBe(`\`${agy}\` printed more than a model list can be`);
   });
 
   it('counts a list it cannot read as a failure, never as an empty list', async () => {

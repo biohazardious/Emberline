@@ -25,7 +25,13 @@ import {
   readCatalog,
   recordReadFailure,
 } from './catalog.js';
-import { listCommandsFor, parseAgyModels, parseAiderModels } from './list-command.js';
+import {
+  listCommandsFor,
+  parseAgyModels,
+  parseAiderModels,
+  parseCodexModels,
+  parseCopilotModels,
+} from './list-command.js';
 import { CLAUDE_PICKER, parseClaudePicker, type PickerModel } from './parsers/claude.js';
 import { PickerError, type PickerScript, readPicker } from './picker.js';
 
@@ -64,6 +70,7 @@ export function commandOverridden(agent: AgentId): boolean {
 const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
   claude: { CLAUDE_CODE_SANDBOXED: '1' },
   gemini: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
+  copilot: { COPILOT_AUTO_UPDATE: 'false' },
 };
 /** CLIs whose first-run questions `emberline-cli-seed` pre-answers in their config files. */
 const SEEDED = new Set<AgentId>(['antigravity', 'copilot', 'gemini']);
@@ -116,9 +123,13 @@ export type DiscoveryJob = (
   ctx: JobContext,
 ) => Promise<{ models: DiscoveryResult['models']; source: DiscoveryResult['source'] } | null>;
 
-/** A job that runs the provider's listing commands and parses what they print. */
+/**
+ * A job that runs the provider's listing commands and parses what they print. A parse that finds
+ * nothing is a failed read (the last list stays); `parse` returns null instead when the CLI's answer
+ * was read and offers no models beyond its own default, which is a read with an empty list.
+ */
 export function listingJob(
-  parse: (stdout: string, ctx: JobContext) => DiscoveryResult['models'],
+  parse: (stdout: string, ctx: JobContext) => DiscoveryResult['models'] | null,
 ): DiscoveryJob {
   return async (ctx) => {
     const commands = listCommandsFor(ctx.agent, { aiderPrefixes: ctx.aiderPrefixes });
@@ -143,6 +154,8 @@ export function listingJob(
       });
       running = undefined;
       if (result.timedOut) throw new Error(`\`${command.file}\` did not finish in time`);
+      // A cut-off listing could read as a shorter list, and the missing models as gone.
+      if (result.truncated) throw new Error(`\`${command.file}\` printed more than a model list can be`);
       if (result.exitCode !== 0) {
         const said = lastLines(result.stderr || result.stdout);
         throw new Error(
@@ -152,6 +165,7 @@ export function listingJob(
       stdout += `${result.stdout}\n`;
     }
     const models = parse(stdout, ctx);
+    if (models === null) return { models: [], source: 'cli' };
     if (models.length === 0) throw new Error(`\`${commands[0]!.file}\` listed no models it could read`);
     return { models, source: 'cli' };
   };
@@ -201,13 +215,12 @@ export function pickerJob(script: PickerScript, parse: (screens: string[]) => Pi
   };
 }
 
-/**
- * The providers discovery can read. Gemini CLI, Copilot and Codex get a `pickerJob` line each once
- * their picker parsers exist; until then their models are added by hand.
- */
+/** The providers discovery can read. Gemini CLI has none: its models are added by hand. */
 export const DISCOVERY_JOBS: Partial<Record<AgentId, DiscoveryJob>> = {
   claude: pickerJob(CLAUDE_PICKER, parseClaudePicker),
   antigravity: listingJob((stdout) => parseAgyModels(stdout)),
+  codex: listingJob((stdout) => parseCodexModels(stdout)),
+  copilot: listingJob((stdout) => parseCopilotModels(stdout)),
   aider: listingJob((stdout, ctx) => parseAiderModels(stdout, ctx.aiderPrefixes)),
 };
 
@@ -515,7 +528,12 @@ export class ModelDiscovery {
    */
   private envFor(agent: AgentId): Record<string, string> {
     const auth = getFactorySettings(this.deps.db).providerAuth?.[agent];
-    const credential = auth?.method === 'oauth_cli' ? {} : getProviderEnvFromSettings(this.deps.db, agent);
+    const credential: Record<string, string> =
+      auth?.method === 'oauth_cli' ? {} : getProviderEnvFromSettings(this.deps.db, agent);
+    // Codex reads CODEX_API_KEY, not OPENAI_API_KEY; runs export one as the other (adapter-codex).
+    if (agent === 'codex' && credential.OPENAI_API_KEY && !credential.CODEX_API_KEY) {
+      credential.CODEX_API_KEY = credential.OPENAI_API_KEY;
+    }
     return { ...credential, ...PROBE_ENV[agent] };
   }
 
