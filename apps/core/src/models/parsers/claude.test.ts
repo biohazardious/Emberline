@@ -64,6 +64,19 @@ describe('CLAUDE_PICKER', () => {
     for (const screen of [prompt, typedModel, closed, typedExit]) expect(cursorLines(screen)).toEqual([]);
   });
 
+  it('finds the cursor on the More models row whatever arrow the collapsed group draws', () => {
+    for (const arrow of ['▾', '▴', '▸', '▶', '›']) {
+      const collapsed = pastedCollapsed.replace('▾', arrow);
+      expect(collapsed).toContain(`❯ ${arrow}   More models`);
+      expect(cursorLines(collapsed)).toEqual([`   ❯ ${arrow}   More models`]);
+      expect(parseClaudePicker([collapsed]).map((m) => m.id)).toEqual(['opus', 'fable', 'sonnet', 'haiku']);
+    }
+    for (const line of ['❯', '❯ ', '❯\u00a0', '❯ /model', '❯\u00a0/model', '  ❯ /model   Set the AI model'])
+      expect(test(CLAUDE_PICKER.cursorRow, line)).toBe(false);
+    // A group row drawn with no arrow at all is still the group.
+    expect(test(CLAUDE_PICKER.cursorRow, '   ❯ More models')).toBe(true);
+  });
+
   it('finds the collapsed More models group by name', () => {
     const groups = pasted.split('\n').filter((l) => test(CLAUDE_PICKER.groupRow, l));
     expect(groups).toHaveLength(1);

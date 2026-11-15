@@ -35,9 +35,11 @@ export const CLAUDE_PICKER: PickerScript = {
   ready: /^❯[ \u00a0]*(?:Try "[^"\n]*")?$/m,
   picker: /Select model/,
   groupRow: /More models/,
-  // The picker's cursor sits before a numbered row or a group's ▾/▴. Claude's own prompt (`❯`,
-  // `❯ /model`) and the slash-command menu (`❯ /model  Set the AI model…`) never match.
-  cursorRow: /^\s*❯\s*(?:\d+\.|[▾▴])/,
+  // The picker's cursor sits before a numbered row or the More models row. The group's arrow, if
+  // any, is any one glyph: only the open group's `▾` has been seen, and a collapsed one may draw
+  // `▸`, `▶` or `›`. Claude's own prompt (`❯`, `❯ /model`) and the slash-command menu (`❯ /model  Set the AI
+  // model…`) never match.
+  cursorRow: /^\s*❯\s*(?:\d+\.|(?:[^\s\w]\s+)?More models)/,
   exit: '/exit',
   // A start after an update shows its release notes first and can take ~10 s before the prompt.
   stepTimeoutMs: 20_000,
