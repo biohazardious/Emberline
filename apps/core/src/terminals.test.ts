@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { setSetting } from './db/index.js';
 import { MODEL_PROBE_KIND, ModelDiscovery, pickerJob } from './models/discovery.js';
+import { commandTyped } from './models/picker.js';
 import { NoticeService } from './notices/service.js';
 import { slugify } from './routes/projects.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
@@ -133,6 +134,7 @@ describe('terminals', () => {
       picker: /Select model/,
       groupRow: /More models/,
       cursorRow: /^\s*❯/,
+      typedAtPrompt: commandTyped('>'),
       exit: '/exit',
       stepTimeoutMs: 30_000,
     };

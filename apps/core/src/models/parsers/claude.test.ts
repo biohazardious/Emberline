@@ -51,6 +51,33 @@ describe('CLAUDE_PICKER', () => {
     expect(test(CLAUDE_PICKER.ready, prompt.replace(/Try "[^"]*"$/m, 'Try "x" and more'))).toBe(false);
   });
 
+  it('presses Enter on /model or /exit only with that command alone at the prompt and highlighted in the menu', () => {
+    const typed = CLAUDE_PICKER.typedAtPrompt;
+    expect(typed(typedModel, '/model')).toBe(true);
+    expect(typed(typedExit, '/exit')).toBe(true);
+    // The transcript above shows `❯ /model`; only the prompt line counts.
+    expect(typed(typedExit, '/model')).toBe(false);
+    expect(typed(typedModel, '/exit')).toBe(false);
+    expect(typed(prompt, '/model')).toBe(false);
+    expect(typed(picker, '/model')).toBe(false);
+    // More than the command at the prompt.
+    expect(typed(typedModel.replace(/^(❯[ \u00a0]\/model)$/m, '$1 x'), '/model')).toBe(false);
+    // A person's own command that starts the same, highlighted: Enter would run it and send a prompt.
+    const own = typedModel
+      .replace(/^ {2}❯ \/model( +)/m, '    /model$1')
+      .replace(/^(❯[ \u00a0]\/model)$/m, '$1\n  ❯ /model-tweak   Mine');
+    expect(own).toContain('❯ /model-tweak');
+    expect(own).not.toMatch(/^\s+❯\s+\/model\s{2}/m);
+    expect(typed(own, '/model')).toBe(false);
+    // No menu at all, or one with nothing highlighted.
+    const noMenu = typedModel
+      .split('\n')
+      .filter((l) => !/^\s+[❯ ]\s*\/\S/.test(l))
+      .join('\n');
+    expect(noMenu).toMatch(/^❯[ \u00a0]\/model$/m);
+    expect(typed(noMenu, '/model')).toBe(false);
+  });
+
   it('tells the open picker from the prompt', () => {
     expect(test(CLAUDE_PICKER.picker, picker)).toBe(true);
     for (const screen of [prompt, typedModel, closed, typedExit])

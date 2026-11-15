@@ -194,6 +194,7 @@ export function pickerJob(script: PickerScript, parse: (screens: string[]) => Pi
       snapshot: (id, scrollback) => ctx.client.snapshot(id, scrollback),
       kill: (id, signal) => ctx.client.kill(id, signal),
       remove: (id) => ctx.client.remove(id),
+      list: () => ctx.client.list(),
     };
     const { file, args, env } = script.command;
     const { screens } = await readPicker(

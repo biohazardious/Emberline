@@ -5,11 +5,16 @@
  * `SAVED <id>` when Enter is pressed on a model row (Claude Code saves that model as the default for
  * new sessions) and `PROMPT <text>` when anything but a known command is submitted at the prompt.
  *
+ * Like Claude Code, a `/…` typed at the prompt opens a command menu below it, and Enter runs the
+ * menu's highlighted command, not the text typed.
+ *
  * `FAKE_PICKER_MODE`, comma-separated: `update` shows an update screen instead of the prompt; `stuck`
  * ignores Down in the picker; `skip` moves the cursor round the model rows only, never onto the group
  * row; `gaps` lays the picker out with cursor moves instead of spaces (as many TUIs do); `noisy`
  * redraws a status line at once on every key and applies the key itself only after a delay longer
- * than the reader's settle time.
+ * than the reader's settle time; `own-command` has a person's own `/model-tweak` command, listed and
+ * highlighted first in the menu; `two-cursors` draws a second cursor mark in the picker;
+ * `close-group` closes the picker on Enter on the group row; `stay` ignores the exit command.
  */
 import { appendFileSync } from 'node:fs';
 
@@ -38,6 +43,15 @@ let input = '';
 let expanded = false;
 let cursor = MODELS.findIndex((m) => m.current);
 
+const COMMANDS = [
+  ...(modes.has('own-command') ? [['/model-tweak', 'Your own command']] : []),
+  ['/model', 'Set the model'],
+  ['/exit', 'Exit the CLI'],
+  ['/help', 'Show help'],
+];
+/** The command menu for what is typed: the commands it starts, the first highlighted. */
+const menu = () => (input.startsWith('/') ? COMMANDS.filter(([name]) => name.startsWith(input)) : []);
+
 /** The picker's selectable rows, top to bottom: the models, the group row, then the group's models. */
 function rows() {
   const out = MODELS.map((m) => ({ kind: 'model', ...m }));
@@ -50,7 +64,7 @@ function pickerLines() {
   const lines = [' Select model', ' Switch between models. Applies to this session and future sessions.', ''];
   let n = 0;
   rows().forEach((row, i) => {
-    const mark = i === cursor ? '❯' : ' ';
+    const mark = i === cursor || (modes.has('two-cursors') && i === 0) ? '❯' : ' ';
     // `gaps`: skip blank cells with a cursor move (CSI n C), so the cells stay unwritten.
     const gap = (n) => (modes.has('gaps') ? `\x1b[${n}C` : ' '.repeat(n));
     if (row.kind === 'group') {
@@ -73,15 +87,19 @@ function render() {
     lines = pickerLines();
   } else {
     lines = [' Fake Picker CLI 1.0.0', '', `> ${input}`];
+    menu().forEach(([name, note], i) => lines.push(`  ${i === 0 ? '❯' : ' '} ${name.padEnd(16)}${note}`));
   }
   if (modes.has('noisy')) lines.push('', ` status: ${tick}`);
   process.stdout.write(`\x1b[H\x1b[2J${lines.join('\r\n')}`);
 }
 
 function submit() {
-  const text = input.trim();
+  const text = menu()[0]?.[0] ?? input.trim();
   input = '';
-  if (text === '/exit') process.exit(0);
+  if (text === '/exit') {
+    if (!modes.has('stay')) process.exit(0);
+    return;
+  }
   if (text === '/model') {
     screen = 'picker';
     cursor = MODELS.findIndex((m) => m.current);
@@ -122,7 +140,8 @@ function apply(name, char) {
     else if (name === 'enter') {
       const row = rows()[cursor];
       if (row.kind === 'group') {
-        expanded = !expanded;
+        if (modes.has('close-group')) screen = 'prompt';
+        else expanded = !expanded;
       } else {
         log(`SAVED ${row.id}`);
         screen = 'prompt';

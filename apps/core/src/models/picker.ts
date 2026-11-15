@@ -6,9 +6,11 @@
  * Safe by construction: in Claude Code, Enter on a model row saves that model as the default for new
  * sessions, so the only keys this ever types are `/model` and Enter at the CLI's prompt, Down, Enter
  * on a collapsed group row, Esc, and the exit command at the prompt. Enter in the picker is pressed
- * only when a fresh, settled snapshot shows the cursor on a group row, and every key waits for its
- * own effect (not just any change: a status line or a notice can redraw at any time) before the next
- * one is sent, so no key is still in flight when Enter goes.
+ * only when a fresh, settled snapshot shows the cursor on a group row; Enter at the prompt only when
+ * a fresh, settled snapshot shows exactly the command typed there, with the CLI's command menu (which
+ * runs its highlighted entry on Enter) on that same command. Every key waits for its own effect (not
+ * just any change: a status line or a notice can redraw at any time) before the next one is sent, so
+ * no key is still in flight when Enter goes.
  */
 import type { PtydClient } from '@emberline/ptyd/client';
 import { screenTextOf } from './screen-text.js';
@@ -23,6 +25,11 @@ export interface PickerScript {
   groupRow: RegExp;
   /** The row the picker's cursor is on. */
   cursorRow: RegExp;
+  /**
+   * The screen shows `text`, and nothing else, typed at the prompt, and Enter would run exactly that
+   * command (see {@link commandTyped}).
+   */
+  typedAtPrompt: (screen: string, text: string) => boolean;
   /** Typed at the prompt, then Enter, to quit the CLI. */
   exit: string;
   /** How long each step waits for the screen it expects. */
@@ -30,14 +37,16 @@ export interface PickerScript {
 }
 
 /** The step whose expected screen did not appear. */
-export type PickerStep = 'ready' | 'type' | 'picker' | 'group' | 'expand' | 'close';
+export type PickerStep = 'ready' | 'type' | 'picker' | 'group' | 'expand' | 'group_closed' | 'close';
 
 const STEP_FAILURES: Record<PickerStep, string> = {
   ready: 'its prompt did not appear',
-  type: 'typing /model at its prompt did not show',
+  type: 'typing /model at its prompt did not show /model alone, with its command menu on /model',
   picker: 'the /model picker did not open',
   group: 'the picker cursor could not be moved onto a collapsed group',
   expand: 'a collapsed group in the picker did not open',
+  group_closed:
+    "the picker closed when Enter was pressed on a group row, as if a model had been picked; check that the CLI's default model is still the one you chose",
   close: 'the picker did not close',
 };
 
@@ -52,7 +61,7 @@ export class PickerError extends Error {
   }
 }
 
-type PickerPtyd = Pick<PtydClient, 'spawn' | 'write' | 'snapshot' | 'kill' | 'remove'>;
+type PickerPtyd = Pick<PtydClient, 'spawn' | 'write' | 'snapshot' | 'kill' | 'remove' | 'list'>;
 
 const DOWN = '\x1b[B';
 const ENTER = '\r';
@@ -64,6 +73,8 @@ const MAX_DOWN_PRESSES = 40;
 const MAX_ESC_PRESSES = 3;
 /** Bounds a picker that keeps showing new groups. */
 const MAX_GROUPS = 10;
+/** How long the CLI gets to quit by itself after its exit command before it is killed. */
+const EXIT_WAIT_MS = 3_000;
 const POLL_MS = 50;
 /** A screen counts as drawn once it has not changed for this long. */
 const SETTLE_MS = 150;
@@ -82,6 +93,31 @@ function matches(re: RegExp, text: string): boolean {
 
 function tail(screen: string): string {
   return screen.split('\n').slice(-TAIL_LINES).join('\n').slice(-TAIL_CHARS);
+}
+
+/**
+ * A {@link PickerScript.typedAtPrompt} for a CLI whose prompt line starts with `promptMark` and whose
+ * command menu marks its highlighted entry with `❯` (Claude Code's layout): the last prompt line
+ * holds exactly `text`, and a menu, if one shows, has exactly one highlighted entry, `text` itself.
+ * A person's own command that starts the same (`/model-x`) and is highlighted would be run by Enter.
+ */
+export function commandTyped(promptMark: string): (screen: string, text: string) => boolean {
+  return (screen, text) => {
+    const lines = screen.replace(/\u00a0/g, ' ').split('\n');
+    const prompt = lines.findLast((l) => l.startsWith(promptMark));
+    if (prompt === undefined || prompt.slice(promptMark.length).trim() !== text) return false;
+    const highlighted = lines
+      .filter((l) => /^\s+❯\s+\//.test(l))
+      .map(
+        (l) =>
+          l
+            .trim()
+            .slice(1)
+            .trim()
+            .split(/\s{2,}/)[0],
+      );
+    return highlighted.length === 1 && highlighted[0] === text;
+  };
 }
 
 /** A group row's name: the pattern's first capture group, else the whole match. */
@@ -152,9 +188,26 @@ export async function readPicker(
     return at !== undefined && groupKey(script.groupRow, screen.split('\n')[at]!) === key;
   };
 
-  /** Typed text has shown up: it occurs more often than on the screen it was typed on. */
-  const echoed = (before: string, text: string) => (s: string) =>
-    s.split(text).length > before.split(text).length;
+  /**
+   * Types `text` at the prompt and waits for it to show alone, with the CLI's menu on it; false
+   * (nothing more typed) when that never shows. The last word goes to a snapshot taken right now.
+   */
+  const typeCommand = async (step: PickerStep, text: string): Promise<boolean> => {
+    await client.write(id, text);
+    const shown = await waitFor(step, (s) => script.typedAtPrompt(s, text)).catch(() => undefined);
+    return shown !== undefined && script.typedAtPrompt(await screenText(), text);
+  };
+
+  /** Whether the CLI quit by itself within `ms`. */
+  const exitedWithin = async (ms: number): Promise<boolean> => {
+    const end = Math.min(Date.now() + ms, deadline);
+    for (;;) {
+      const session = (await client.list()).sessions.find((s) => s.id === id);
+      if (!session || session.status === 'exited') return true;
+      if (Date.now() >= end) return false;
+      await sleep(POLL_MS);
+    }
+  };
 
   /** The first group row on the screen not opened yet. */
   const nextGroup = (screen: string, opened: Set<string>): string | undefined => {
@@ -165,12 +218,17 @@ export async function readPicker(
     return undefined;
   };
 
+  let exited = false;
   try {
     const screens: string[] = [];
     let screen = await waitFor('ready', atPrompt);
 
-    await client.write(id, '/model');
-    screen = await waitFor('type', echoed(screen, '/model'));
+    // Enter runs whatever the command menu has highlighted: a person's own `/model-…` command would
+    // send a prompt. Anything but `/model` itself is backed out of with Esc, and the read fails.
+    if (!(await typeCommand('type', '/model'))) {
+      await client.write(id, ESC).catch(() => undefined);
+      throw new PickerError('type', tail(await screenText()));
+    }
     await client.write(id, ENTER);
     screen = await waitFor('picker', (s) => matches(script.picker, s));
     screens.push(screen);
@@ -201,6 +259,8 @@ export async function readPicker(
         const now = s.split('\n');
         return cursorAt(s) !== at || now[at!] !== lines[at!] || now.length > lines.length;
       });
+      // A group that opens keeps the picker up; a picker that closes looks just like a model picked.
+      if (!matches(script.picker, screen)) throw new PickerError('group_closed', tail(screen));
       screens.push(screen);
     }
 
@@ -216,13 +276,16 @@ export async function readPicker(
       }
     }
 
-    // Enter only once the exit command shows at the prompt, so nothing else can be submitted.
-    await client.write(id, script.exit);
-    const typed = await waitFor('close', echoed(screen, script.exit)).catch(() => undefined);
-    if (typed !== undefined) await client.write(id, ENTER);
+    // Enter only once the exit command alone shows at the prompt, so nothing else can be submitted;
+    // otherwise the CLI is killed below. A CLI that quits by itself is not killed: Claude Code writes
+    // its state file on the way out, and every run shares that file.
+    if (await typeCommand('close', script.exit)) {
+      await client.write(id, ENTER);
+      exited = await exitedWithin(EXIT_WAIT_MS).catch(() => false);
+    }
     return { screens };
   } finally {
-    await client.kill(id).catch(() => {});
+    if (!exited) await client.kill(id).catch(() => {});
     await client.remove(id).catch(() => {});
   }
 }

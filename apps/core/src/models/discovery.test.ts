@@ -24,7 +24,7 @@ import {
   pickerJob,
 } from './discovery.js';
 import { parseAgyModels } from './list-command.js';
-import { PickerError, type PickerScript } from './picker.js';
+import { commandTyped, PickerError, type PickerScript } from './picker.js';
 
 const FAKE_PICKER = fileURLToPath(new URL('./fixtures/fake-picker-cli.mjs', import.meta.url));
 const AGY_FIXTURE = fileURLToPath(new URL('./fixtures/agy-models.txt', import.meta.url));
@@ -471,6 +471,7 @@ describe('jobs in a runner', () => {
       picker: /Select model/,
       groupRow: /More models/,
       cursorRow: /^\s*❯/,
+      typedAtPrompt: commandTyped('>'),
       exit: '/exit',
       stepTimeoutMs,
     };

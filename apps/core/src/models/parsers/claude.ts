@@ -12,7 +12,7 @@
  */
 import { CLAUDE_DIALOG_ENV } from '@emberline/adapter-claude';
 import { MODEL_ID_RE } from '@emberline/protocol';
-import type { PickerScript } from '../picker.js';
+import { commandTyped, type PickerScript } from '../picker.js';
 import { PickerParseError } from './errors.js';
 
 export type PickerModel = { id: string; label: string; description: string; group?: string };
@@ -52,6 +52,9 @@ export const CLAUDE_PICKER: PickerScript = {
   // `▸`, `▶` or `›`. Claude's own prompt (`❯`, `❯ /model`) and the slash-command menu (`❯ /model  Set the AI
   // model…`) never match.
   cursorRow: /^\s*❯\s*(?:\d+\.|(?:[^\s\w]\s+)?More models)/,
+  // `❯ /model` at the prompt, and the slash-command menu below it on `/model` (`  ❯ /model   Set the
+  // AI model…`), not on a command of the person's own that starts the same.
+  typedAtPrompt: commandTyped('❯'),
   exit: '/exit',
   // A start after an update shows its release notes first and can take ~10 s before the prompt.
   stepTimeoutMs: 20_000,
