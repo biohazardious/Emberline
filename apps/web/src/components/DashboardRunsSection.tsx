@@ -6,13 +6,13 @@ import {
   modelLabel,
   type PermissionMode,
   type Project,
-  resolveCliModel,
   type Run,
 } from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { modelAfterAgentChange } from '../runFormModel';
 import {
   countDashboardRunCategories,
   DASHBOARD_CATEGORY_LABELS,
@@ -364,13 +364,7 @@ export function StartRunForm({
               className={agent === a ? 'active' : ''}
               onClick={() => {
                 setAgent(a);
-                // Antigravity cannot run `auto`: start on its best model the CLI still offers.
-                if (a === 'antigravity' && model === 'auto') {
-                  const usable = getModelsForProvider(a).find((m) => resolveCliModel(a, m.id) !== null);
-                  if (usable) setModel(usable.id);
-                } else if (model !== 'auto' && !getModelsForProvider(a).some((m) => m.id === model)) {
-                  setModel('auto');
-                }
+                setModel(modelAfterAgentChange(a, model));
               }}
             >
               {a === 'claude'
