@@ -28,6 +28,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project_notice'), notice: ProjectNotice }),
   /** The Inbox notices changed: the whole current list. */
   z.object({ type: z.literal('notices'), notices: z.array(Notice) }),
+  /** The model catalog changed (a read, a refresh, an id added or removed): fetch `/api/models` again. */
+  z.object({ type: z.literal('models') }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 

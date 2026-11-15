@@ -51,6 +51,10 @@ export function LiveEvents(): null {
         case 'notices':
           client.setQueryData(['api', '/api/notices'], event.notices);
           break;
+        case 'models':
+          // A read in the background found other models: every picker and the provider cards list them.
+          void invalidateModelCatalog(client);
+          break;
         case 'project_notice':
           toastError(
             `An agent's ${event.notice.file} was ignored (${event.notice.issue}). It is kept as ${event.notice.rejectedAs}.`,

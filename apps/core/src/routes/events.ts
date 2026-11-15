@@ -8,6 +8,7 @@ import {
   type Ticket,
 } from '@emberline/protocol';
 import type { FastifyInstance } from 'fastify';
+import { catalogEvents } from '../models/catalog.js';
 import type { NoticeService } from '../notices/service.js';
 import type { PresenceRegistry } from '../notifications/presence.js';
 import type { RunService } from '../runs/service.js';
@@ -45,9 +46,11 @@ export function registerEventRoutes(
     const onNotice = (notice: ProjectNotice) => send({ type: 'project_notice', notice });
 
     const onNotices = (list: Notice[]) => send({ type: 'notices', notices: list });
+    const onModels = () => send({ type: 'models' });
 
     runs.on('run', onRun);
     notices?.on('change', onNotices);
+    catalogEvents.on('change', onModels);
     runs.on('removed', onRunRemoved);
     tickets.on('ticket', onTicket);
     tickets.on('removed', onTicketRemoved);
@@ -69,6 +72,7 @@ export function registerEventRoutes(
       presence?.remove(id);
       runs.off('run', onRun);
       notices?.off('change', onNotices);
+      catalogEvents.off('change', onModels);
       runs.off('removed', onRunRemoved);
       tickets.off('ticket', onTicket);
       tickets.off('removed', onTicketRemoved);

@@ -13,6 +13,7 @@ import {
   rankFromName,
   setModelCatalog,
 } from '@emberline/protocol';
+import { EventEmitter } from 'node:events';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 
 const SETTINGS_KEY = 'models.catalog';
@@ -51,6 +52,14 @@ export function providerListRead(db: Db, agent: AgentId): boolean {
   return entry.read?.ok === true || entry.models.some((m) => m.source !== 'manual');
 }
 
+/**
+ * `change` fires each time the catalog is published: a read in the background, a refresh, or an id
+ * added or removed. The events socket tells the browsers, which fetch the list again.
+ */
+export const catalogEvents = new EventEmitter<{ change: [] }>();
+// One listener per open events socket.
+catalogEvents.setMaxListeners(0);
+
 /** Gives the protocol the stored entries; the built-ins are merged on its side. */
 export function publishCatalog(db: Db): void {
   const stored = readCatalog(db);
@@ -59,6 +68,7 @@ export function publishCatalog(db: Db): void {
       AGENTS.map((a) => [a, stored[a].models.map(({ firstSeen: _f, lastSeen: _l, ...m }) => m)]),
     ) as ModelCatalog,
   );
+  catalogEvents.emit('change');
 }
 
 function newEntry(

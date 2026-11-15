@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
+import WebSocket from 'ws';
+import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
 let t: TestApp;
 let cookie: string;
@@ -66,5 +67,26 @@ describe('models routes', () => {
     const res = await call('POST', '/api/models/refresh', {});
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ reads: {} });
+  });
+
+  it('tells the open events sockets when the catalog changes, so the browsers fetch it again', async () => {
+    const address = await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const ws = new WebSocket(`${address.replace('http', 'ws')}/api/events`, wsProtocols(cookie), {
+      headers: { cookie, origin: address },
+    });
+    const events: { type: string }[] = [];
+    ws.on('message', (raw) => events.push(JSON.parse(String(raw)) as { type: string }));
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    try {
+      expect((await call('POST', '/api/models/copilot/manual', { id: 'gpt-9-preview' })).statusCode).toBe(
+        200,
+      );
+      await expect.poll(() => events.filter((e) => e.type === 'models')).toEqual([{ type: 'models' }]);
+    } finally {
+      ws.close();
+    }
   });
 });

@@ -8,11 +8,25 @@ import { apiRoutes, cleanup, click, getButton, renderDom, typeInto, waitFor } fr
 import { ProviderModels } from './components/settings/ProviderModels';
 import { RouteChainEditor } from './components/RouteChainEditor';
 import { useModelCatalog, type StoredCatalog, type StoredModel } from './modelCatalog';
+import { LiveEvents } from './hooks/liveData';
+import type * as EventHubModule from './hooks/eventHub';
+import type { ServerEvent } from '@emberline/protocol';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
   api: vi.fn(),
 }));
+
+/** The events socket, replaced by a hook that hands each pushed event to the subscribers. */
+const pushed = vi.hoisted(() => ({ listeners: new Set<{ onEvent: (e: unknown) => void }>() }));
+vi.mock('./hooks/eventHub', async (importOriginal) => ({
+  ...(await importOriginal<typeof EventHubModule>()),
+  subscribeEvents: (listener: { onEvent: (e: unknown) => void }) => {
+    pushed.listeners.add(listener);
+    return () => pushed.listeners.delete(listener);
+  },
+}));
+const push = (event: ServerEvent) => pushed.listeners.forEach((l) => l.onEvent(event));
 
 const AT = '2026-11-14T10:00:00.000Z';
 const model = (id: string, over: Partial<StoredModel> = {}): StoredModel => ({
@@ -83,6 +97,7 @@ afterEach(async () => {
 function Harness() {
   useModelCatalog();
   return createElement('div', null, [
+    createElement(LiveEvents, { key: 'live' }),
     createElement(ProviderModels, { key: 'm', providerId: 'copilot' }),
     createElement(RouteChainEditor, {
       key: 'r',
@@ -127,5 +142,20 @@ describe('a provider card lists its models', () => {
     await click(container.querySelector('button[aria-label="Remove mine-1"]')!);
     await waitFor(() => expect(posts.at(-1)?.path).toBe('delete'));
     await waitFor(() => expect(picker()).not.toContain('mine-1'));
+  });
+
+  it('lists the models a read in the background found, once core says the catalog changed', async () => {
+    const { container } = await renderDom(createElement(Harness));
+    await waitFor(() => expect(container.textContent).toContain('GPT 9 Preview'));
+    const picker = () =>
+      [...container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(
+        (o) => o.value,
+      );
+    catalog.copilot.models.push(model('gpt-10-luna', { label: 'GPT 10 Luna' }));
+    expect(container.textContent).not.toContain('GPT 10 Luna');
+
+    push({ type: 'models' });
+    await waitFor(() => expect(container.textContent).toContain('GPT 10 Luna'));
+    await waitFor(() => expect(picker()).toContain('gpt-10-luna'));
   });
 });
