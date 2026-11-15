@@ -8,7 +8,7 @@ import type { ModelRank, ProviderModelInfo } from './provider-registry.js';
 import type { AgentId, AgentModelId, ModelCapabilityTier } from './runs.js';
 
 /** A model id is one safe shell word: it is passed to a CLI as an argument, never interpreted. */
-export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/;
+export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$/;
 
 const AGENT_IDS = Object.keys(PROVIDER_REGISTRY) as AgentId[];
 
@@ -105,12 +105,17 @@ export function modelLabel(agent: AgentId, id: string): string {
   return getModelsForProvider(agent).find((m) => m.id === id)?.label ?? id;
 }
 
-/** Index of `needle` as a run of consecutive tokens in `hay`, or -1. */
-function tokenRun(hay: string[], needle: string[]): number {
-  for (let i = 0; i + needle.length <= hay.length; i++) {
-    if (needle.every((t, j) => hay[i + j] === t)) return i;
+/** Index of the last token of `needle` when its tokens appear in `hay` in order (gaps allowed), or -1. */
+function tokenSubsequenceEnd(hay: string[], needle: string[]): number {
+  let at = 0;
+  let last = -1;
+  for (const t of needle) {
+    const i = hay.indexOf(t, at);
+    if (i < 0) return -1;
+    last = i;
+    at = i + 1;
   }
-  return -1;
+  return last;
 }
 
 /**
@@ -129,12 +134,14 @@ export function resolveCliModel(agent: AgentId, id: string): string | null {
   const matches = (catalog[agent] ?? [])
     .map((m) => {
       const tokens = m.id.split('-');
-      const at = tokenRun(tokens, family);
-      return at < 0 ? null : { m, tail: tokens.length - at - family.length };
+      const end = tokenSubsequenceEnd(tokens, family);
+      return end < 0 ? null : { m, tail: tokens.length - 1 - end, extra: tokens.length - family.length };
     })
-    .filter((x): x is { m: ProviderModelInfo; tail: number } => x !== null);
+    .filter((x): x is { m: ProviderModelInfo; tail: number; extra: number } => x !== null);
   if (matches.length === 0) return null;
-  matches.sort((a, b) => b.m.rank - a.m.rank || a.tail - b.tail || (a.m.id < b.m.id ? -1 : 1));
+  matches.sort(
+    (a, b) => b.m.rank - a.m.rank || a.tail - b.tail || a.extra - b.extra || (a.m.id < b.m.id ? -1 : 1),
+  );
   const best = matches[0]!.m;
   return best.cliId ?? best.id;
 }

@@ -37,7 +37,7 @@ describe('AgentModelId', () => {
     expect(AgentModelId.safeParse('gemini-4-hydrogen-xhigh').success).toBe(true);
   });
   it('rejects ids that are unsafe as one shell word or too long', () => {
-    for (const bad of ['a b', '$(x)', '', 'a'.repeat(129)]) {
+    for (const bad of ['a b', '$(x)', 'a+b', '', 'a'.repeat(129)]) {
       expect(AgentModelId.safeParse(bad).success, bad).toBe(false);
     }
   });
@@ -118,6 +118,17 @@ describe('resolveCliModel', () => {
       antigravity: [entry('gemini-4-argon-high', 4), entry('gemini-pro-orchestrator-argon', 4)],
     } as never);
     expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-pro-orchestrator-argon');
+  });
+  it('matches a family by ordered tokens with gaps', () => {
+    setModelCatalog({
+      antigravity: [
+        entry('gemini-3.8-flash-low', 2),
+        entry('gemini-3.8-flash-medium', 3),
+        entry('gemini-3.8-flash-high', 4),
+      ],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-flash')).toBe('gemini-3.8-flash-high');
+    expect(resolveCliModel('antigravity', 'gemini-flash-lite')).toBeNull();
   });
   it('returns null with no family entry', () => {
     expect(resolveCliModel('antigravity', 'argon')).toBeNull();
