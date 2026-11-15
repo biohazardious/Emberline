@@ -1,10 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FactorySettings, Run } from '@emberline/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runCrossProviderCritic, selectRivalCriticAgent } from './factory/slop-guard.js';
+import {
+  getSavedCrossCriticResult,
+  runCrossProviderCritic,
+  selectRivalCriticAgent,
+} from './factory/slop-guard.js';
 import { rmTemp } from './test-rm.js';
 
 let dir: string;
@@ -100,6 +104,25 @@ describe('cross-provider critic', () => {
     const res = await runCrossProviderCritic({ run: run('gemini'), workspacePath: repo, settings });
     expect(res).toMatchObject({ authorAgent: 'gemini', reviewerAgent: 'antigravity' });
     expect(res.reviewSource).toBe('deterministic');
+  });
+
+  it('still reads a saved verdict that Gemini CLI reviewed before it was removed', async () => {
+    mkdirSync(path.join(repo, '.emberline'), { recursive: true });
+    const saved = {
+      runId: 'run-claude',
+      authorAgent: 'claude',
+      reviewerAgent: 'gemini',
+      reviewerModel: 'gemini-pro',
+      verdict: 'PASS',
+      score: 88,
+      summary: 'gemini (gemini-pro) review: fine.',
+      issues: [],
+      followUpPrompt: null,
+      reviewSource: 'rival',
+      reviewedAt: '2026-11-01T10:00:00.000Z',
+    };
+    writeFileSync(path.join(repo, '.emberline', 'cross-critic-run-claude.json'), JSON.stringify(saved));
+    expect(await getSavedCrossCriticResult(repo, 'run-claude')).toEqual(saved);
   });
 
   it('falls back to the deterministic audit and says why when the rival cannot review', async () => {

@@ -63,7 +63,8 @@ export const CrossCriticResult = z.object({
   runId: z.string(),
   /** The run's agent as it ran; a saved result may name one that is gone since (Gemini CLI). */
   authorAgent: z.string(),
-  reviewerAgent: AgentId,
+  /** Gemini CLI reviewed as a rival before it was removed; its saved verdicts still read. */
+  reviewerAgent: z.string(),
   reviewerModel: AgentModelId,
   verdict: z.enum(['PASS', 'NEEDS_FIX']),
   score: z.number().int().min(0).max(100),
