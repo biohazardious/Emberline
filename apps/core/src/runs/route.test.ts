@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { setModelCatalog } from '@emberline/protocol';
+import { afterEach, describe, expect, it } from 'vitest';
 import { currentRoute, parseRouteTag, runModel, runRoutes } from './route.js';
+
+afterEach(() => setModelCatalog(null));
 
 const legacy = {
   agent: 'antigravity',
@@ -24,6 +27,46 @@ describe('run routes', () => {
       agent: 'copilot',
       model: 'Claude-Opus-4.5-Preview',
     });
+  });
+
+  it("folds a hand-typed tag's case to the one id the agent knows that way", () => {
+    expect(parseRouteTag('[Preferred Agent: claude · Model: Opus]')).toEqual({
+      agent: 'claude',
+      model: 'opus',
+    });
+    // An id no CLI or built-in knows is left as typed, for the run's coercion.
+    expect(parseRouteTag('[Preferred Agent: claude · Model: Opus-Max]')?.model).toBe('Opus-Max');
+  });
+
+  it('keeps a mixed-case id the agent has exactly, even when another id differs only in case', () => {
+    const manual = (id: string) => ({
+      id,
+      label: id,
+      shortLabel: id,
+      rank: 4,
+      tier: 'high',
+      badge: '',
+      capabilities: ['code'],
+      description: '',
+      source: 'manual',
+    });
+    setModelCatalog({ copilot: [manual('Claude-Opus-4.5-Preview')] } as never);
+    expect(parseRouteTag('[Preferred Agent: copilot · Model: Claude-Opus-4.5-Preview]')?.model).toBe(
+      'Claude-Opus-4.5-Preview',
+    );
+    expect(parseRouteTag('[Preferred Agent: copilot · Model: claude-opus-4.5-preview]')?.model).toBe(
+      'Claude-Opus-4.5-Preview',
+    );
+    setModelCatalog({
+      copilot: [manual('Claude-Opus-4.5-Preview'), manual('claude-opus-4.5-preview')],
+    } as never);
+    expect(parseRouteTag('[Preferred Agent: copilot · Model: Claude-Opus-4.5-Preview]')?.model).toBe(
+      'Claude-Opus-4.5-Preview',
+    );
+    // Two ids match ignoring case, so neither is guessed.
+    expect(parseRouteTag('[Preferred Agent: copilot · Model: CLAUDE-OPUS-4.5-PREVIEW]')?.model).toBe(
+      'CLAUDE-OPUS-4.5-PREVIEW',
+    );
   });
 
   it('reads a pre-0.2.0 row: model from the tag, a one-step chain', () => {

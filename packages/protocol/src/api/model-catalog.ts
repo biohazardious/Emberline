@@ -129,9 +129,28 @@ function tokenSubsequenceEnd(hay: string[], needle: string[]): number {
   return last;
 }
 
+/** A date stamp such as `20250514`: six or more digits are a release date, never a version number. */
+const DATE_TOKEN = /^\d{6,}$/;
+
 /** The numbers of an id's version tokens in order (`gemini-3.8-flash` → [3, 8]; `claude-opus-4-5` → [4, 5]). */
 function versionOf(tokens: string[]): number[] {
-  return tokens.filter((t) => /^\d+(?:\.\d+)*$/.test(t)).flatMap((t) => t.split('.').map(Number));
+  return tokens
+    .filter((t) => /^\d+(?:\.\d+)*$/.test(t) && !DATE_TOKEN.test(t))
+    .flatMap((t) => t.split('.').map(Number));
+}
+
+/**
+ * An id's date stamp (`claude-sonnet-4-20250514` → 20250514), or null. Read apart from the version
+ * so `claude-sonnet-4-20250514` does not count as newer than `claude-sonnet-4-5-20250929`.
+ */
+function dateOf(tokens: string[]): number | null {
+  const date = tokens.find((t) => DATE_TOKEN.test(t));
+  return date === undefined ? null : Number(date);
+}
+
+/** Newer date first; only two dated ids are compared, so an undated alias falls to the later tie-breaks. */
+function compareDatesNewestFirst(a: number | null, b: number | null): number {
+  return a === null || b === null ? 0 : b - a;
 }
 
 /** Newer version first; an id without one counts as older than any id with one. */
@@ -163,7 +182,13 @@ export function resolveCliModel(agent: AgentId, id: string): string | null {
   if (!builtin) return direct ? direct.id : null;
   if (agent === 'claude' || agent === 'aider') return id;
   const family = id.split('-');
-  type Match = { m: ProviderModelInfo; tail: number; extra: number; version: number[] };
+  type Match = {
+    m: ProviderModelInfo;
+    tail: number;
+    extra: number;
+    version: number[];
+    date: number | null;
+  };
   const matches = (catalog[agent] ?? [])
     .filter((m) => m.source !== 'manual')
     .map((m): Match | null => {
@@ -175,6 +200,7 @@ export function resolveCliModel(agent: AgentId, id: string): string | null {
         tail: tokens.length - 1 - end,
         extra: tokens.length - family.length,
         version: versionOf(tokens),
+        date: dateOf(tokens),
       };
     })
     .filter((x): x is Match => x !== null);
@@ -185,6 +211,7 @@ export function resolveCliModel(agent: AgentId, id: string): string | null {
     (a, b) =>
       b.m.rank - a.m.rank ||
       compareVersionsNewestFirst(a.version, b.version) ||
+      compareDatesNewestFirst(a.date, b.date) ||
       a.tail - b.tail ||
       a.extra - b.extra ||
       (a.m.id < b.m.id ? -1 : 1),

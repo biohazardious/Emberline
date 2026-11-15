@@ -147,6 +147,19 @@ describe('resolveCliModel', () => {
     } as never);
     expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-high');
   });
+  it('reads a date stamp as a date, not a version number', () => {
+    // claude-sonnet-4-20250514 is Sonnet 4, older than Sonnet 4.5 whatever its date says.
+    setModelCatalog({
+      copilot: [entry('claude-sonnet-4-20250514', 3), entry('claude-sonnet-4-5-20250929', 3)],
+    } as never);
+    expect(resolveCliModel('copilot', 'sonnet')).toBe('claude-sonnet-4-5-20250929');
+  });
+  it('on an equal version, picks the newer date', () => {
+    setModelCatalog({
+      copilot: [entry('claude-sonnet-4-5-20250929', 3), entry('claude-sonnet-4-5-20251101', 3)],
+    } as never);
+    expect(resolveCliModel('copilot', 'sonnet')).toBe('claude-sonnet-4-5-20251101');
+  });
   it('rank still comes before version', () => {
     setModelCatalog({
       antigravity: [entry('gemini-3.8-flash-high', 4), entry('gemini-4-flash-low', 2)],

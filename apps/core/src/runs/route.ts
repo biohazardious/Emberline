@@ -1,4 +1,12 @@
-import { type AgentId, BUILTIN_MODELS, MODEL_ID_RE, resolveCliModel, type Route } from '@emberline/protocol';
+import {
+  type AgentId,
+  BUILTIN_MODELS,
+  getModelsForProvider,
+  MODEL_ID_RE,
+  PROVIDER_REGISTRY,
+  resolveCliModel,
+  type Route,
+} from '@emberline/protocol';
 import type { runs } from '../db/schema.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -11,10 +19,26 @@ export const ROUTE_TAG = new RegExp(
   'i',
 );
 
-/** The agent and model a route tag names. Agent ids are lowercase; a model id keeps its case (ids are case-sensitive). */
+/**
+ * The id a tag's model names for `agent`. Ids are case-sensitive, so an id the agent knows exactly
+ * stays as written (a hand-added `Claude-Opus-4.5-Preview` keeps its case). A person typing a tag
+ * may still capitalise a known id (`Opus`), so when only one of the agent's ids matches ignoring
+ * case, that id is meant. Anything else is left for the run's coercion.
+ */
+function tagModelFor(agent: string, model: string): string {
+  if (!Object.hasOwn(PROVIDER_REGISTRY, agent)) return model;
+  const ids = getModelsForProvider(agent as AgentId).map((m) => m.id);
+  if (ids.includes(model)) return model;
+  const folded = ids.filter((id) => id.toLowerCase() === model.toLowerCase());
+  return folded.length === 1 ? folded[0]! : model;
+}
+
+/** The agent and model a route tag names. Agent ids are lowercase; a model id keeps its case unless it only differs in case from one the agent knows. */
 export function parseRouteTag(text: string): { agent: string; model: string } | undefined {
   const match = ROUTE_TAG.exec(text);
-  return match?.[1] && match[2] ? { agent: match[1].toLowerCase(), model: match[2] } : undefined;
+  if (!match?.[1] || !match[2]) return undefined;
+  const agent = match[1].toLowerCase();
+  return { agent, model: tagModelFor(agent, match[2]) };
 }
 
 /** The run's model; legacy rows keep it only in the prompt's route tag. */
