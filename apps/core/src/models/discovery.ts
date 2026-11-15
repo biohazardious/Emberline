@@ -46,6 +46,17 @@ const READER_MARGIN_MS = 5_000;
 const STOP_GRACE_MS = 10_000;
 const REASON_CHARS = 300;
 
+/** Env vars that point a provider at a stand-in command (the e2e stack's fakes). */
+const COMMAND_OVERRIDES: Partial<Record<AgentId, string>> = {
+  claude: 'EMBERLINE_CLAUDE_COMMAND',
+  antigravity: 'EMBERLINE_ANTIGRAVITY_COMMAND',
+};
+/** A provider whose command is overridden counts as installed: the tools volume has no such CLI to find. */
+export function commandOverridden(agent: AgentId): boolean {
+  const name = COMMAND_OVERRIDES[agent];
+  return !!name && !!process.env[name]?.trim();
+}
+
 /** First-run questions each CLI asks, answered for the probe the way runs answer them. */
 const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
   claude: { CLAUDE_CODE_SANDBOXED: '1' },
@@ -395,7 +406,7 @@ export class ModelDiscovery {
     if (!getFactorySettings(this.deps.db).enabledProviders.includes(agent)) return null;
     const tool = await this.deps.toolchain.getToolStatus(agent);
     // An install in progress triggers its own read when it is done.
-    if (!tool.installed || tool.installing) return null;
+    if ((!tool.installed && !commandOverridden(agent)) || tool.installing) return null;
     // `installed` is what the toolchain says when it cannot tell the version without running the CLI.
     const cliVersion = tool.version && tool.version !== 'installed' ? tool.version : null;
 

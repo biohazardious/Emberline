@@ -128,6 +128,17 @@ describe('refresh', () => {
     expect(reads.claude).toMatchObject({ ok: true, cliVersion: '1.2.3' });
   });
 
+  it('reads a provider whose command is overridden even when the toolchain does not know it', async () => {
+    const d = discovery({
+      toolchain: fakeToolchain([]),
+      jobs: { claude: listed('c-1'), antigravity: listed('a-1') },
+    });
+    expect(Object.keys(await d.refresh())).toEqual([]);
+    vi.stubEnv('EMBERLINE_ANTIGRAVITY_COMMAND', '/e2e/fake-agy.mjs');
+    expect(Object.keys(await d.refresh())).toEqual(['antigravity']);
+    vi.unstubAllEnvs();
+  });
+
   it('joins a read of the same provider that is still queued', async () => {
     const calls: AgentId[] = [];
     const d = discovery({

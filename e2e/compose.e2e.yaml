@@ -12,12 +12,16 @@ services:
       EMBERLINE_DOCKER_ENGINE: '0'
       # The agent of every run is the scripted stand-in the UI regression suite drives (e2e/ui/run.mjs).
       EMBERLINE_CLAUDE_COMMAND: /e2e/fake-claude.mjs
+      # Model discovery reads this stand-in's list (core builds the command it sends to the runner).
+      EMBERLINE_ANTIGRAVITY_COMMAND: /e2e/fake-agy.mjs
   runner:
     image: emberline/runner:${EMBERLINE_E2E_TAG:-e2e}
     # Preview ports stay unpublished: a running Emberline already holds them.
     ports: !reset []
     volumes:
       - ./e2e:/e2e:ro
+      # The list fake-agy prints by default: the real `agy models` output the parser tests use.
+      - ./apps/core/src/models/fixtures/agy-models.txt:/e2e-fixtures/agy-models.txt:ro
   ops:
     image: emberline/runner:${EMBERLINE_E2E_TAG:-e2e}
   docker:

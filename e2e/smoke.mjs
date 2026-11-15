@@ -640,6 +640,38 @@ await step('ticket changes are pushed over /api/events', async () => {
   ws.close();
 });
 
+await step('models: discovery adds new models and the Inbox says so', async () => {
+  const before = (await api('GET', '/api/factory/settings')).json;
+  const enabled = before.enabledProviders;
+  try {
+    const on = await api('PATCH', '/api/factory/settings', {
+      enabledProviders: [...new Set([...enabled, 'antigravity'])],
+      antigravityTermsAcknowledged: true,
+    });
+    assert.equal(on.status, 200, on.text);
+    const refreshed = await api('POST', '/api/models/refresh', { agent: 'antigravity' });
+    assert.equal(refreshed.status, 200, refreshed.text);
+    assert.equal(refreshed.json.reads.antigravity?.ok, true, refreshed.text);
+    const ids = (await api('GET', '/api/models')).json.catalog.antigravity.models.map((m) => m.id);
+    assert.ok(ids.includes('gemini-4-hydrogen-xhigh'), ids.join(', '));
+    const newModels = async () =>
+      (await api('GET', '/api/notices')).json.filter(
+        (n) => n.kind === 'new_models' && n.key.startsWith('new_models:antigravity:'),
+      );
+    const notices = await newModels();
+    assert.equal(notices.length, 1, JSON.stringify(notices));
+    assert.match(notices[0].text, /Gemini 4 Hydrogen \(XHigh\)/);
+    assert.doesNotMatch(notices[0].text, /Gemini 4 Argon \(High\)/);
+    const again = await api('POST', '/api/models/refresh', { agent: 'antigravity' });
+    assert.equal(again.status, 200, again.text);
+    assert.equal((await newModels()).length, 1, 'a second read adds no notice');
+  } finally {
+    // The steps after this one run with the providers they started with.
+    const off = await api('PATCH', '/api/factory/settings', { enabledProviders: enabled });
+    assert.equal(off.status, 200, off.text);
+  }
+});
+
 await step('deep health is green and metrics need the bearer token', async () => {
   const deep = await api('GET', '/api/health/deep');
   assert.equal(deep.status, 200, deep.text);
