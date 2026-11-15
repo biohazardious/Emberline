@@ -477,6 +477,52 @@ describe('jobs in a runner', () => {
     ).toBe('');
   });
 
+  const leftover = (kind = MODEL_PROBE_KIND) =>
+    client.spawn({ file: '/bin/sh', args: ['-c', 'sleep 30'], cwd: dir, meta: { kind } });
+  const sessionKinds = async () => (await client.list()).sessions.map((s) => s.meta.kind);
+
+  it('removes probe terminals a previous core left behind before its first read', async () => {
+    const probe = await leftover();
+    const shell = await leftover('shell');
+    ptyd.status = 'connecting';
+    const remove = vi.spyOn(client, 'remove');
+    const job = vi.fn(listed('a-1'));
+    const d = inRunner({ antigravity: job });
+    d.start();
+    ptyd.connect();
+    await vi.waitFor(() => expect(job).toHaveBeenCalledTimes(1));
+    // The sweep ran before the read.
+    expect(remove).toHaveBeenCalledWith(probe.id);
+    expect(remove.mock.invocationCallOrder[0]).toBeLessThan(job.mock.invocationCallOrder[0]!);
+    const ids = (await client.list()).sessions.map((s) => s.id);
+    expect(ids).not.toContain(probe.id);
+    expect(ids).toContain(shell.id);
+    await d.stop();
+  });
+
+  it('sweeps a leftover probe on a reconnect while no job runs', async () => {
+    const d = inRunner({});
+    d.start();
+    await d.refresh();
+    await leftover();
+    expect(await sessionKinds()).toContain(MODEL_PROBE_KIND);
+    ptyd.connect();
+    await vi.waitFor(async () => expect(await sessionKinds()).not.toContain(MODEL_PROBE_KIND));
+    await d.stop();
+  });
+
+  it("spares the running job's probe terminal when a reconnect sweeps", async () => {
+    const script = fakeScript({ FAKE_PICKER_MODE: 'update' }, 30_000);
+    const d = inRunner({ claude: pickerJob(script, () => []) });
+    const reads = d.refresh('claude');
+    await vi.waitFor(async () => expect(await sessionKinds()).toContain(MODEL_PROBE_KIND));
+    await d.sweep();
+    expect(await sessionKinds()).toContain(MODEL_PROBE_KIND);
+    await d.stop();
+    await reads;
+    expect(await sessionKinds()).not.toContain(MODEL_PROBE_KIND);
+  });
+
   it('kills and removes the probe terminal when the hard timeout fires', async () => {
     // A ptyd request that never answers (until its session is gone) is outside the reader's own
     // step times; only the hard timeout ends it.

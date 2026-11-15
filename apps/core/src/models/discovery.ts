@@ -75,7 +75,7 @@ const PROBE_SCRIPT = [
 
 export type ProbeClient = Pick<
   PtydClient,
-  'spawn' | 'write' | 'snapshot' | 'kill' | 'remove' | 'exec' | 'execCancel'
+  'spawn' | 'write' | 'snapshot' | 'kill' | 'remove' | 'exec' | 'execCancel' | 'list'
 >;
 
 /** What a job is handed. */
@@ -93,6 +93,8 @@ export interface JobContext {
   deadlineMs: number;
   /** Registers how to stop the job when its hard timeout fires (kill its terminal, cancel its command). */
   onStop(stop: () => Promise<void>): void;
+  /** Names the terminal the job opened, so a sweep of leftover probes spares it. */
+  onSession(id: string): void;
 }
 
 /** A provider's read: the models found, or null when there is nothing to read (aider without a key). */
@@ -163,6 +165,7 @@ export function pickerJob(script: PickerScript, parse: (screens: string[]) => Pi
           meta: { ...params.meta, kind: MODEL_PROBE_KIND, title: `Model discovery · ${ctx.agent}` },
         });
         session = info.id;
+        ctx.onSession(info.id);
         if (stopped) {
           await end(info.id);
           throw new Error('stopped');
@@ -273,6 +276,8 @@ export class ModelDiscovery {
   private readonly queued = new Map<AgentId, Promise<ProviderRead | null>>();
   /** Stops the job running now (shutdown). */
   private stopCurrent: (() => void) | null = null;
+  /** The running job: when it started (ISO, as ptyd stamps sessions) and the terminal it opened. */
+  private current: { startedAt: string; session: string | null } | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private ranOnConnect = false;
@@ -299,6 +304,29 @@ export class ModelDiscovery {
     this.deps.ptyd.on('status', this.onStatus);
     this.deps.ops?.on('status', this.onStatus);
     this.onStatus();
+  }
+
+  /**
+   * Ends probe terminals no job of this process is driving: ptyd keeps a session when core's
+   * connection drops, so a probe outlives a core that was killed or lost the runner mid-job, and the
+   * terminals list hides it. The running job's terminal, and any opened since it started (its spawn
+   * may still be on the way back), are spared.
+   */
+  async sweep(): Promise<void> {
+    if (this.deps.ptyd.status !== 'connected') return;
+    try {
+      const client = this.deps.ptyd.get();
+      const { sessions } = await client.list();
+      const current = this.current;
+      for (const s of sessions) {
+        if (s.meta.kind !== MODEL_PROBE_KIND) continue;
+        if (current && (s.id === current.session || s.createdAt >= current.startedAt)) continue;
+        if (s.status === 'running') await client.kill(s.id).catch(() => undefined);
+        await client.remove(s.id);
+      }
+    } catch (err) {
+      this.deps.log('removing leftover model-discovery terminals failed', err);
+    }
   }
 
   /** No new job starts; the running one is stopped and waited for. */
@@ -328,13 +356,17 @@ export class ModelDiscovery {
     return this.deps.ptyd.status === 'connected' && this.deps.ptyd.available !== false;
   }
 
-  /** The first time the runner is ready (either bridge's status can make it so), read every provider. */
+  /**
+   * Each time the runner connects, leftover probes go; the first time it is ready (either bridge's
+   * status can make it so), every provider is read, after that sweep.
+   */
   private readonly onStatus = () => {
-    if (this.ranOnConnect || this.stopped || !this.runnerReady()) return;
-    this.ranOnConnect = true;
-    this.deps.ptyd.off('status', this.onStatus);
-    this.deps.ops?.off('status', this.onStatus);
-    this.refreshInBackground();
+    if (this.stopped || this.deps.ptyd.status !== 'connected') return;
+    const firstRead = !this.ranOnConnect && this.runnerReady();
+    if (firstRead) this.ranOnConnect = true;
+    void this.sweep().then(() => {
+      if (firstRead) this.refreshInBackground();
+    });
   };
 
   private refreshInBackground(): void {
@@ -398,6 +430,8 @@ export class ModelDiscovery {
     const timer = setTimeout(() => interrupt('timeout'), this.timeoutMs);
     timer.unref?.();
     this.stopCurrent = () => interrupt('shutdown');
+    const current = { startedAt: new Date().toISOString(), session: null as string | null };
+    this.current = current;
     try {
       const running = settle(
         Promise.resolve().then(() =>
@@ -411,6 +445,9 @@ export class ModelDiscovery {
             deadlineMs: Math.max(1_000, this.timeoutMs - READER_MARGIN_MS),
             onStop: (stop) => {
               stopJob = stop;
+            },
+            onSession: (id) => {
+              current.session = id;
             },
           }),
         ),
@@ -434,6 +471,7 @@ export class ModelDiscovery {
     } finally {
       clearTimeout(timer);
       this.stopCurrent = null;
+      this.current = null;
     }
   }
 

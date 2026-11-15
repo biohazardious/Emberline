@@ -287,7 +287,10 @@ export async function buildServer(
   app.addHook('onClose', async () => {
     deps.ptyd.off('status', onPtydStatus);
     ops.off('status', onPtydStatus);
-    // The Git page first: once its pulls, heals, drafts and release jobs are stopping, none of them
+    // Model discovery first (none of the rest depends on it): its probe terminal is ended before a
+    // compose stop's grace can run out and leave it behind.
+    await discovery.stop();
+    // Then the Git page: once its pulls, heals, drafts and release jobs are stopping, none of them
     // starts a step while the services below shut down (and a merge waiting for a release gives up).
     await gitSync.stop();
     cron.stop();
@@ -297,7 +300,6 @@ export async function buildServer(
     await issueSync.stop();
     await postMerge.stop();
     await mainPush.stop();
-    await discovery.stop();
   });
 
   installErrorHandler(app);
