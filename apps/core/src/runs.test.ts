@@ -1657,6 +1657,42 @@ describe('runs', () => {
       expect(providerListRead(t.db, 'codex')).toBe(true);
     });
 
+    it('refuses a run asked for with a model its agent does not offer, naming the ones it does', async () => {
+      const project = await createProject('Typo model', false);
+      const typo = await api('POST', '/api/runs', { projectId: project.id, agent: 'claude', model: 'opsu' });
+      expect(typo.statusCode).toBe(400);
+      expect(typo.json().message).toBe(
+        'opsu is not a Claude model Emberline knows. Add it in Settings → Providers, or pick one of: fable, opus, sonnet, haiku.',
+      );
+      // Another provider's model on a named agent is refused too.
+      expect(
+        (await api('POST', '/api/runs', { projectId: project.id, agent: 'codex', model: 'opus' })).statusCode,
+      ).toBe(400);
+      // With no agent, only an id no provider knows is refused.
+      expect(
+        (await api('POST', '/api/runs', { projectId: project.id, model: 'no-such-model' })).statusCode,
+      ).toBe(400);
+      // A model the catalog has is one the agent offers.
+      catalogWith('copilot', ['gpt-9-typed']);
+      const typed = await api('POST', '/api/runs', {
+        projectId: project.id,
+        agent: 'copilot',
+        model: 'gpt-9-typed',
+      });
+      expect(typed.statusCode).toBe(201);
+      expect(typed.json().model).toBe('gpt-9-typed');
+    });
+
+    it('a route tag in a prompt is still coerced, not refused: agents write those', async () => {
+      const project = await createProject('Tagged typo', false);
+      const res = await api('POST', '/api/runs', {
+        projectId: project.id,
+        prompt: 'Do it\n\n[Preferred Agent: claude · Model: opsu]',
+      });
+      expect(res.statusCode).toBe(201);
+      expect(['fable', 'opus', 'sonnet', 'haiku']).toContain(res.json().model);
+    });
+
     it('an id that is not one safe word never reaches a command line', async () => {
       // Rejected by the schema at the API...
       const project = await createProject('Quoted model', false);

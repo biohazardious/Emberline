@@ -153,6 +153,7 @@ import {
   getProviderEnvFromSettings,
   resolveMcpServersForPersona,
   resolveModelForPersona,
+  refuseUnknownRunModel,
   resolveRunRoutes,
   resolveSkillPluginPromptForPersona,
 } from '../factory/service.js';
@@ -1182,6 +1183,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const route = routes[routeIndex] ?? routes[0]!;
     const prompt = (body.prompt ?? '').replaceAll(new RegExp(ROUTE_TAG.source, 'gi'), '').trim();
     return { persona, routes, routeIndex, route, prompt };
+  }
+
+  /** Refuses (400) a run asked for with a model its agent does not offer; see refuseUnknownRunModel. */
+  refuseUnknownModel(body: unknown): void {
+    if (body && typeof body === 'object') refuseUnknownRunModel(this.db, body);
   }
 
   /**

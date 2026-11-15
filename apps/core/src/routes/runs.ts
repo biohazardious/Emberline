@@ -55,6 +55,7 @@ export function registerRunRoutes(
 
   /** Queues the run; it starts right away when a slot and quota are available. */
   app.post('/api/runs', async (request, reply): Promise<Run> => {
+    runs.refuseUnknownModel(request.body);
     const run = await scheduler.submit(request.body as never);
     reply.code(201);
     return run;

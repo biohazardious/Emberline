@@ -567,21 +567,52 @@ export function effectiveFactorySettings(db: Db, projectId: string): FactorySett
   return { ...getFactorySettings(db), ...readProjectGates(db, projectId) };
 }
 
-/** A saved route names a model its agent's catalog has (built-in, discovered or added by hand), else it is refused. */
+/** The refusal of a model `agent`'s catalog (built-in, discovered or added by hand) does not have. */
+function unknownModel(agent: AgentId, model: string): HttpError {
+  const ids = getModelsForProvider(agent)
+    .map((m) => m.id)
+    .join(', ');
+  return new HttpError(
+    400,
+    'unknown_model',
+    `${model} is not a ${PROVIDER_REGISTRY[agent].shortLabel} model Emberline knows. Add it in Settings → Providers, or pick one of: ${ids}.`,
+  );
+}
+
+/** A saved route names a model its agent's catalog has, else it is refused. */
 function refuseUnknownRouteModels(routes: UpdateFactorySettingsBody['personaRoutes']): void {
   for (const chain of Object.values(routes ?? {})) {
     for (const step of chain ?? []) {
       if (step.model === 'auto' || isModelValidForProvider(step.agent, step.model)) continue;
-      const ids = getModelsForProvider(step.agent)
-        .map((m) => m.id)
-        .join(', ');
-      throw new HttpError(
-        400,
-        'unknown_model',
-        `${step.model} is not a ${PROVIDER_REGISTRY[step.agent].shortLabel} model Emberline knows. Add it in Settings → Providers, or pick one of: ${ids}.`,
-      );
+      throw unknownModel(step.agent, step.model);
     }
   }
+}
+
+/**
+ * A run asked for with a model (`POST /api/runs`) names one its agent's catalog has, else it is
+ * refused, so a typo never runs on another model. Without an agent the persona's first route takes
+ * the model, mapped onto that route's agent as always; only an id no provider knows is refused then.
+ * Route tags in a prompt are not checked here: agents write them, and they are coerced.
+ */
+export function refuseUnknownRunModel(
+  db: Db,
+  body: { agent?: unknown; model?: unknown; persona?: unknown },
+): void {
+  const model = AgentModelId.safeParse(body.model).data;
+  // No model, `auto`, or a malformed one (the body's schema refuses that).
+  if (!model || model === 'auto') return;
+  const agent = AgentId.safeParse(body.agent);
+  if (agent.success) {
+    if (!isModelValidForProvider(agent.data, model)) throw unknownModel(agent.data, model);
+    return;
+  }
+  if ((Object.keys(PROVIDER_REGISTRY) as AgentId[]).some((a) => isModelValidForProvider(a, model))) return;
+  const routes = getFactorySettings(db).personaRoutes;
+  const persona = (
+    typeof body.persona === 'string' && body.persona in routes ? body.persona : 'coder'
+  ) as keyof typeof routes;
+  throw unknownModel(routes[persona][0]?.agent ?? 'claude', model);
 }
 
 export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody): FactorySettings {
