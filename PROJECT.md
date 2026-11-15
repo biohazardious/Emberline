@@ -64,6 +64,11 @@ Each story names where it is verified today (tests listed in [`docs/TESTING.md`]
   working branch into main and release it (tag, CHANGELOG.md, forge release with agent-drafted notes) only when I
   approve. _Edge cases:_ a switch is refused while runs are live or waiting to merge; a conflicting pull leaves the
   branch as it was; a rewritten origin waits for **Match origin**, which keeps a backup ref; no push is ever forced.
+- **US-10 Calm, scannable screens (EMB-39).** As the operator, every page tells me its state and my next step at a
+  glance: short plain labels, one line of help per control, details one click away, and nothing I could do before is
+  gone. Settings → Providers shows one row per agent CLI with a single status and a single next step. Rules in §3.6,
+  acceptance criteria in M6. _Edge cases:_ a stored secret stays visible and removable while its provider is off; a
+  failed install or sign-in shows on the collapsed row; unsaved settings are never lost by switching a tab or view.
 
 ### 1.3 Milestone 1 user stories (workspace, layering, wire contracts)
 
@@ -252,6 +257,36 @@ Every value that crosses a process boundary is parsed with its zod schema on arr
 The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`; `pnpm run lint`, `pnpm run typecheck` and
 `pnpm run format:check`; and, as its test check, `docker build --target check .`, the same check stage CI runs.
 
+### 3.6 UI copy and density standards (EMB-39)
+
+Users found the 0.9.3 screens too wordy and too complicated. The theme (tokens, colours, type) stays; these rules
+govern every web surface and are what a UI ticket is reviewed against. **Nothing useful is removed**: a setting,
+action, status or explanation shown in 0.9.3 stays reachable, at most one click away.
+
+- **Progressive disclosure.** The default view shows state and the next step. Explanations, rarely used actions and
+  advanced fields go behind a `Disclosure`, a row expansion, a `HelpHint` or a **More** menu
+  (`apps/web/src/components/ui/`). Anything that needs attention (an error, a warning, a blocked state) is never hidden.
+- **Headings.** One `h1` per page: a plain noun of at most three words ("Settings", "Board"). No eyebrow that repeats
+  the title, no chained headings ("A & B + C"), no marketing words ("Studio", "Hub", "Matrix", "Multiplexer", "Control Center").
+- **Labels.** Sentence case everywhere. Buttons start with a verb and have at most three words; no `✓`, `+` or emoji
+  prefixes. One primary button per view. A toolbar shows at most five actions; the rest go into **More**.
+- **Help text.** At most one visible sentence (about 90 characters) per control. Longer text moves behind a disclosure
+  and is shortened, not deleted, when it says something the UI does not say elsewhere.
+- **Status.** One composite status per object (for a provider: off, not installed, installing, not signed in, ready,
+  error) instead of several badges side by side. Colour is never the only signal.
+- **Essential information is not tooltip-only.** `title=` may repeat a visible label; it never carries the only copy
+  of a fact, since touch and keyboard users cannot reach it.
+- **Legibility and tokens.** No text below `0.8rem`. Colours, radii and fonts come from the tokens in `index.css`; no
+  hardcoded hex in new CSS. Static styles live in CSS classes, not in `style={{…}}`; numbers use tabular numerals.
+- **Interaction states.** Every list and form has loading, empty, error and busy states. On/off controls are
+  `role="switch"`, disclosures carry `aria-expanded`, menus work with arrow keys and Esc, and focus is visible.
+- **Stable anchors.** Deep links (`/settings?tab=<id>` with the eight existing ids), element ids and the labels the
+  Playwright suite uses (`e2e/ui/run.mjs`) keep working. The loading, empty and error strings pinned by the shared
+  view tests (`sectionStates.test.ts`) stay as they are.
+- **Density guard.** `apps/web/src/uxDensity.ts` counts the visible words of a rendered view (closed disclosures,
+  `hidden` and `aria-hidden` content excluded). Each redesigned surface has a `*Density.test.ts` that pins its default
+  view to a word budget, so text cannot creep back.
+
 ---
 
 ## 4. Reference Specifications & Domain Context
@@ -369,3 +404,36 @@ The factory build gate (`.emberline/worktree.yml`) runs `pnpm run build`; `pnpm 
       | AC-5.5 | `sync-worktree` on a conflicting run returns `ok: false` with a `resolution` other than `manual` whenever a layer took over, and the drawer says what happens next.                 | `m3-workflows.test.ts`, web tests             |
       | AC-5.6 | With 2 parallel slots, a ready ticket claiming `apps/x/a.ts` waits while a run that changed `apps/x/a.ts` is busy, and its card names the ticket it waits for; a claim on `PROJECT.md` alone never waits. | `ticket-overlap.test.ts`, web tests           |
       | AC-5.7 | The heal runs git in the ops container on the agent-writable worktree with the same refusals as the merge (no planted links in the git dir, no hooks run: `core.hooksPath=/dev/null`). | `factory/conflict-heal.test.ts`               |
+
+- [ ] **M6 — Calm UI: less text, simpler screens, a new Providers tab (EMB-39):**
+      User feedback on 0.9.3: too much text and too complicated to use, while the theme is good. Every web surface is
+      reworked against §3.6 without removing a function, and Settings → Providers (`/settings?tab=providers`) is redesigned.
+      Shared primitives come first (`apps/web/src/components/ui/`: `PageHeader`, `Disclosure`, `HelpHint`, `SettingRow`,
+      `Switch`, `MoreMenu`, `SaveBar`; styles in `apps/web/src/ui.css`), then one ticket per surface, each with its own
+      CSS file and density test, then a cleanup of orphaned CSS and the QA pass.
+
+      **Providers tab.** Three views inside the tab, kept in the address as `view=agents|routing|sdks` (default `agents`):
+
+      1. **Agents**: one row per CLI (Claude Code, Antigravity, Codex, Copilot, Aider) with its mark, name, one composite
+      status, the CLI version, an on/off switch and at most one next-step button (Install → Sign in → none when ready).
+      Expanding a row shows what the 0.9.3 card showed: description, terms and risk, sign-in and the `make …-login`
+      command, the API key field, CLI maintenance (update, run in a terminal, uninstall) and the model list.
+      2. **Routing**: one row per persona with its first route (provider, model, credential), the number of fallbacks
+      and the capability rank; expanding a row opens the route chain editor and the tier quick-match. The five presets
+      are one **Apply preset** menu; the two quota-policy selects sit above the rows with their explanation in a `HelpHint`.
+      3. **SDKs**: the project SDK toolchain list.
+
+      A sticky `SaveBar` appears when the draft differs from the saved settings, with **Discard** and **Save**; the
+      payload of `PATCH /api/factory/settings` is unchanged.
+
+      | AC     | Given / when / then                                                                                                                                                                         | Guard                                                         |
+      | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+      | AC-6.1 | Every setting, action, status and link of 0.9.3 is still reachable, at most one click (expansion, disclosure or **More**) away; the settings save payload has the same keys and values.        | view tests per surface, `conflictTimelineAndSettingsView.test.ts` |
+      | AC-6.2 | The Agents view shows, per provider, exactly one status, one switch and at most one next-step button until its row is expanded; an install error, an auth warning and a stored key show on the collapsed row. | `providersView.test.ts`, `providerKeys.test.ts`               |
+      | AC-6.3 | Enabling Antigravity without the risk acknowledgement expands its row and asks for it; turning off the last enabled provider is refused with a message; turning a provider off reroutes its personas as before. | `providersView.test.ts`, `removedAgent.test.ts`               |
+      | AC-6.4 | A change in any Providers view shows the save bar; **Discard** restores the saved values; switching view or tab keeps the draft; saving sends one `PATCH` and hides the bar.                 | `providersView.test.ts`                                       |
+      | AC-6.5 | The default view (nothing expanded) of the Providers tab has at most 50% of its 0.9.3 visible words, every other Settings tab at most 60%, and the Overview, board header, roadmap header, Git, Docker, Build outputs, Project settings, Inbox and Fleet headers at most 75%. | `*Density.test.ts` (baseline and budget recorded in each)     |
+      | AC-6.6 | No page has more than one `h1` or one primary button per view; no toolbar shows more than five actions; nav, tab, heading and button labels follow §3.6 (sentence case, no chained headings, at most three words on a button). | `uxCopy.test.ts`                                              |
+      | AC-6.7 | No `font-size` below `0.8rem` and no hardcoded hex colour in the CSS files M6 adds, and no `fontSize` below `0.8rem` in any `apps/web/src/**/*.tsx` inline style.                         | `uxCopy.test.ts` (source scan)                                |
+      | AC-6.8 | Switches, disclosures and menus are operable by keyboard alone and expose `role="switch"`/`aria-checked`, `aria-expanded` and `role="menu"`; at 390 px width no redesigned page scrolls sideways. | `uiPrimitives.test.ts`, `e2e/ui/run.mjs`                      |
+      | AC-6.9 | `/settings?tab=<id>` opens the same section for all eight existing ids, and the Playwright suite passes with the selectors it used in 0.9.3.                                                 | `settingsShell.test.ts`, `e2e/ui/run.mjs`                     |
