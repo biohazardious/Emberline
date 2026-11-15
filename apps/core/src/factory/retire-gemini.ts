@@ -1,23 +1,20 @@
 /**
  * Gemini CLI is no longer a provider. At every start this step rewrites what an older core stored
  * under its name (enabled providers, the default agent, route steps, the model catalog, quota
- * windows) and posts one Inbox notice naming the routes that moved. It works on the stored JSON as
- * plain strings: `gemini` is not an `AgentId` any more, so nothing here may index a map by it.
+ * windows), ends the Gemini runs nothing can carry on, and posts one Inbox notice naming the routes
+ * that fell back. It works on the stored JSON as plain strings: `gemini` is not an `AgentId` any
+ * more, so nothing here may index a map by it.
  */
 import { PERSONA_CATALOG } from '@emberline/adapter-claude';
-import {
-  AgentId,
-  AgentModelId,
-  type AgentPersona,
-  coerceModelForProvider,
-  PROVIDER_RUNTIME,
-} from '@emberline/protocol';
-import { eq } from 'drizzle-orm';
+import { AgentId, type AgentPersona } from '@emberline/protocol';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { type Db, getSetting, setSetting } from '../db/index.js';
 import { quotaWindows, runs } from '../db/schema.js';
 import { publishCatalog } from '../models/catalog.js';
 import { NoticeService, providerName } from '../notices/service.js';
-import { DEFAULT_PERSONA_MODELS } from './settings.js';
+import { applyRunEvent } from '../runs/lifecycle.js';
+import { AGENT_REMOVED } from '../runs/service.js';
+import { ACTIVE_RUN_STATES } from '../tickets/columns.js';
 
 const GEMINI = 'gemini';
 const ANTIGRAVITY = 'antigravity';
@@ -41,85 +38,82 @@ export interface RetireGeminiResult {
   lines: string[];
   /** Runs on Gemini exist; they stay listed. */
   hadRuns: boolean;
+  /** Open runs on an agent this core does not know that were ended now. */
+  endedRuns: string[];
 }
 
 const personaLabel = (persona: string, index: number) =>
   `${PERSONA_CATALOG[persona as AgentPersona]?.label ?? persona}${index > 0 ? ` (fallback ${index})` : ''}`;
 
-/** The model a Gemini step runs on Antigravity: the same id when Antigravity has it, else its pick for the persona. */
-const antigravityModel = (model: unknown, persona: string) =>
-  coerceModelForProvider(
-    ANTIGRAVITY,
-    AgentModelId.safeParse(model).data ?? 'auto',
-    persona in PERSONA_CATALOG ? (persona as AgentPersona) : undefined,
-  );
-
-/** The credential an Antigravity step runs with once read (settings.ts coerces the same way). */
-const antigravityCredential = (credential: unknown) =>
-  (PROVIDER_RUNTIME.antigravity.credentials as readonly unknown[]).includes(credential)
-    ? credential
-    : PROVIDER_RUNTIME.antigravity.credentials[0];
-
-/** Rewrites one stored chain; null when it names no Gemini step. */
+/**
+ * Rewrites one stored chain; null when it names no Gemini step. A Gemini step is dropped and the
+ * chain's next step (or, for an emptied chain, the default agent) takes over. It is never moved to
+ * Antigravity: Emberline does not add Antigravity to a chain for the person (README, Provider terms).
+ */
 function retireChain(
   chain: StoredStep[],
   persona: string,
-  antigravity: boolean,
   geminiRan: boolean,
 ): { chain: StoredStep[]; lines: string[] } | null {
   if (!chain.some((step) => step?.agent === GEMINI)) return null;
-  const out: StoredStep[] = [];
   const lines: string[] = [];
   chain.forEach((step, i) => {
-    if (step?.agent !== GEMINI) {
-      out.push(step);
-      return;
-    }
     // A step on a provider that was not enabled never ran; it goes without a word.
-    if (!geminiRan) return;
-    const label = personaLabel(persona, i);
-    if (!antigravity) {
-      lines.push(`${label} → next in its chain`);
-      return;
-    }
-    const moved = { agent: ANTIGRAVITY, model: antigravityModel(step.model, persona), credential: 'login' };
-    // Against the steps already there and the ones already moved (two Gemini steps may meet).
-    const repeats = [...chain, ...out].some(
-      (other) =>
-        other?.agent === ANTIGRAVITY &&
-        antigravityModel(other.model, persona) === moved.model &&
-        antigravityCredential(other.credential) === moved.credential,
-    );
-    if (repeats) {
-      lines.push(`${label} → next in its chain`);
-      return;
-    }
-    out.push(moved);
-    lines.push(`${label} → Antigravity ${moved.model}`);
+    if (step?.agent === GEMINI && geminiRan) lines.push(`${personaLabel(persona, i)} → next in its chain`);
   });
-  return { chain: out, lines };
+  return { chain: chain.filter((step) => step?.agent !== GEMINI), lines };
 }
 
 /**
  * Idempotent: a second run finds nothing to rewrite. The notice is posted once (the notice service
  * keeps the flag), only when settings changed or old Gemini runs exist, so a fresh install sees none.
+ * Every write is one transaction, so a start cut short leaves either all of it or none of it, and
+ * the next start tells what it did.
  */
 export function retireGemini(
   db: Db,
   opts: { now: Date; notices?: Pick<NoticeService, 'geminiRemoved' | 'geminiRemovedNoticeShown'> },
 ): RetireGeminiResult {
   const notices = opts.notices ?? new NoticeService(db);
-  removeCatalogAndQuota(db);
+  return db.transaction(() => {
+    removeCatalogAndQuota(db);
 
-  const raw = getSetting<StoredSettings>(db, FACTORY_SETTINGS_KEY);
-  const { settings, lines } = raw ? rewriteSettings(raw) : { settings: null, lines: [] };
-  if (settings) setSetting(db, FACTORY_SETTINGS_KEY, settings);
-  const changed = settings !== null;
+    const raw = getSetting<StoredSettings>(db, FACTORY_SETTINGS_KEY);
+    const { settings, lines } = raw ? rewriteSettings(raw) : { settings: null, lines: [] };
+    if (settings) setSetting(db, FACTORY_SETTINGS_KEY, settings);
+    const changed = settings !== null;
 
-  const hadRuns =
-    db.select({ id: runs.id }).from(runs).where(eq(runs.agent, GEMINI)).limit(1).get() !== undefined;
-  if ((changed || hadRuns) && !notices.geminiRemovedNoticeShown()) notices.geminiRemoved(lines, opts.now);
-  return { changed, lines, hadRuns };
+    const endedRuns = endRemovedAgentRuns(db, opts.now);
+    const hadRuns =
+      db.select({ id: runs.id }).from(runs).where(eq(runs.agent, GEMINI)).limit(1).get() !== undefined;
+    if ((changed || hadRuns) && !notices.geminiRemovedNoticeShown()) notices.geminiRemoved(lines, opts.now);
+    return { changed, lines, hadRuns, endedRuns };
+  });
+}
+
+/**
+ * Open runs on an agent this core does not have (Gemini CLI) can never start, resume or be moved
+ * by the scheduler, yet a queued or waiting one held one of its project's ticket slots for ever,
+ * and a queued one could not even be handed off. They end here as failed, with the reason on the
+ * run, and not as stopped: a stopped run cannot be handed off, and the hand-off is how its work
+ * goes on. The upgrade replaced the runner, so no terminal of theirs is left to close.
+ */
+function endRemovedAgentRuns(db: Db, now: Date): string[] {
+  const open = db
+    .select({ id: runs.id, endedAt: runs.endedAt })
+    .from(runs)
+    .where(and(notInArray(runs.agent, [...AgentId.options]), inArray(runs.state, [...ACTIVE_RUN_STATES])))
+    .all();
+  for (const run of open) {
+    applyRunEvent(db, run.id, {
+      source: 'system',
+      type: 'agent_removed',
+      state: 'failed',
+      payload: { message: AGENT_REMOVED },
+      patch: { endedAt: run.endedAt ?? now, ptydSessionId: null, autoRetryAt: null },
+    });
+  }
+  return open.map((run) => run.id);
 }
 
 /** The catalog's Gemini entry and Gemini's quota windows: nothing reads them any more. */
@@ -130,7 +124,6 @@ function removeCatalogAndQuota(db: Db): void {
     setSetting(db, CATALOG_KEY, rest);
   }
   db.delete(quotaWindows).where(eq(quotaWindows.agent, GEMINI)).run();
-  // Before any model is coerced: a model Antigravity's last list read has counts as its own.
   publishCatalog(db);
 }
 
@@ -141,10 +134,9 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   let changed = false;
 
   // Without a stored list the providers were detected from keys and logins (Gemini among them), so a
-  // Gemini route may well have run; Antigravity is never detected, only enabled by hand.
+  // Gemini route may well have run.
   const storedList = Array.isArray(raw.enabledProviders) ? (raw.enabledProviders as unknown[]) : null;
   const geminiRan = storedList === null || storedList.includes(GEMINI);
-  const antigravity = storedList?.includes(ANTIGRAVITY) ?? false;
   if (storedList?.includes(GEMINI)) {
     next.enabledProviders = storedList.filter((id) => id !== GEMINI);
     changed = true;
@@ -152,8 +144,10 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   const enabledNow = (next.enabledProviders as unknown[] | undefined) ?? [];
 
   if (raw.defaultAgent === GEMINI) {
-    const firstKnown = enabledNow.find((id) => AgentId.safeParse(id).success) as AgentId | undefined;
-    next.defaultAgent = antigravity ? ANTIGRAVITY : (firstKnown ?? 'claude');
+    // Not Antigravity, for the same reason no step moves there.
+    const firstOther = enabledNow.find((id) => id !== ANTIGRAVITY && AgentId.safeParse(id).success) as
+      AgentId | undefined;
+    next.defaultAgent = firstOther ?? 'claude';
     changed = true;
     lines.push(`Default agent → ${providerName(next.defaultAgent as AgentId)}`);
   }
@@ -162,7 +156,7 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   const nextRoutes: Record<string, unknown> = { ...routes };
   for (const [persona, chain] of Object.entries(routes)) {
     if (!Array.isArray(chain)) continue;
-    const retired = retireChain(chain as StoredStep[], persona, antigravity, geminiRan);
+    const retired = retireChain(chain as StoredStep[], persona, geminiRan);
     if (!retired) continue;
     nextRoutes[persona] = retired.chain;
     lines.push(...retired.lines);
@@ -178,17 +172,10 @@ function rewriteSettings(raw: StoredSettings): { settings: StoredSettings | null
   for (const [persona, agent] of Object.entries(agents)) {
     if (agent !== GEMINI) continue;
     changed = true;
-    const model = models[persona] ?? DEFAULT_PERSONA_MODELS[persona as AgentPersona] ?? 'auto';
-    const moved = antigravity && geminiRan ? antigravityModel(model, persona) : null;
-    if (moved) {
-      nextAgents[persona] = ANTIGRAVITY;
-      nextModels[persona] = moved;
-    } else {
-      delete nextAgents[persona];
-      delete nextModels[persona];
-    }
-    if (!geminiRan || Array.isArray(routes[persona])) continue;
-    lines.push(`${personaLabel(persona, 0)} → ${moved ? `Antigravity ${moved}` : 'next in its chain'}`);
+    delete nextAgents[persona];
+    delete nextModels[persona];
+    if (geminiRan && !Array.isArray(routes[persona]))
+      lines.push(`${personaLabel(persona, 0)} → next in its chain`);
   }
   if (raw.personaAgents) next.personaAgents = nextAgents;
   if (raw.personaModels) next.personaModels = nextModels;

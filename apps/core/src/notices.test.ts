@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setSetting } from './db/index.js';
 import { runs } from './db/schema.js';
 import { noticeFableRoutes } from './factory/fable-routes.js';
 import { storedRoadmapItems } from './factory/roadmap.js';
@@ -78,17 +79,17 @@ describe('notice copy', () => {
 });
 
 describe('the Gemini CLI notice', () => {
-  it('names where each route went, keeps the key for Aider, and shows once across restarts', () => {
+  const tail =
+    ' Gemini steps were dropped, not moved; Antigravity can be added to a route by hand in Settings. Old Gemini runs stay in the list, and any still open were ended; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.';
+
+  it('names each route that fell back, keeps the key for Aider, and shows once across restarts', () => {
     const at = new Date('2026-11-15T10:00:00Z');
-    notices.geminiRemoved(
-      ['QA & Test Engineer → Antigravity gemini-flash', 'Software Engineer → next in its chain'],
-      at,
-    );
+    notices.geminiRemoved(['QA & Test Engineer → next in its chain', 'Default agent → Claude Code'], at);
     expect(notices.list()[0]).toMatchObject({
       kind: 'gemini_removed',
       key: 'gemini_removed',
       title: 'Gemini CLI was removed',
-      text: 'Emberline no longer runs Gemini CLI; Antigravity stays. What changed: QA & Test Engineer → Antigravity gemini-flash; Software Engineer → next in its chain. Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.',
+      text: `Emberline no longer runs Gemini CLI; Antigravity stays. What changed: QA & Test Engineer → next in its chain; Default agent → Claude Code.${tail}`,
       link: '/settings?tab=providers',
       createdAt: at.toISOString(),
     });
@@ -100,11 +101,19 @@ describe('the Gemini CLI notice', () => {
     expect(restarted.list()[0]!.dismissedAt).not.toBeNull();
   });
 
-  it('without routes it still says the key stays', () => {
+  it('without routes it still says Antigravity is added by hand and the key stays', () => {
     notices.geminiRemoved([]);
-    expect(notices.list()[0]!.text).toBe(
-      'Emberline no longer runs Gemini CLI; Antigravity stays. Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.',
-    );
+    expect(notices.list()[0]!.text).toBe(`Emberline no longer runs Gemini CLI; Antigravity stays.${tail}`);
+  });
+
+  it('is not marked shown when storing it failed, so the next start tells', () => {
+    setSetting(t.db, 'inbox.notices', 'not a list');
+    expect(() => notices.geminiRemoved(['QA & Test Engineer → next in its chain'])).toThrow();
+    expect(notices.geminiRemovedNoticeShown()).toBe(false);
+    setSetting(t.db, 'inbox.notices', []);
+    notices.geminiRemoved(['QA & Test Engineer → next in its chain']);
+    expect(notices.list().map((n) => n.kind)).toEqual(['gemini_removed']);
+    expect(notices.geminiRemovedNoticeShown()).toBe(true);
   });
 });
 

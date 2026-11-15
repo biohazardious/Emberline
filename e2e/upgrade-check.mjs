@@ -181,7 +181,8 @@ async function seed(oldDir, label) {
   sqlite
     .prepare('insert into settings (key, value) values (?, ?)')
     .run('updates.config', JSON.stringify({ githubToken: stored }));
-  // Every release stored factory settings that name Gemini CLI: its routes move to Antigravity.
+  // Every release stored factory settings that name Gemini CLI: its route steps are dropped (never
+  // moved to Antigravity, even with it enabled).
   sqlite.prepare('insert into settings (key, value) values (?, ?)').run(
     'factory.settings',
     JSON.stringify({
@@ -368,16 +369,17 @@ async function api(base, expect) {
   assert.equal(git.status, 200, `GET /git answered ${git.status}`);
   assert.equal(git.json.autoPull, true, 'auto-pull is on after the upgrade');
   assert.equal(git.json.workingBranch, git.json.defaultBranch, 'the working branch is the default branch');
-  // Stored settings that named Gemini CLI: it is gone, its route step moved to Antigravity, and one
-  // Inbox notice says so (also after the rollback drill, which restores the pre-upgrade database).
+  // Stored settings that named Gemini CLI: it is gone, its route step dropped (not moved to the
+  // enabled Antigravity), and one Inbox notice says so (also after the rollback drill, which
+  // restores the pre-upgrade database).
   const settings = await call('GET', '/api/factory/settings');
   assert.equal(settings.status, 200, `GET /api/factory/settings answered ${settings.status}`);
   assert.ok(!settings.json.enabledProviders.includes('gemini'), 'gemini is no longer an enabled provider');
   assert.ok(settings.json.enabledProviders.includes('antigravity'), 'antigravity stays enabled');
   assert.deepEqual(
-    settings.json.personaRoutes.qa[0],
-    { agent: 'antigravity', model: 'gemini-pro', credential: 'login' },
-    'the Gemini route step is now Antigravity gemini-pro on its login',
+    settings.json.personaRoutes.qa,
+    [{ agent: 'claude', model: 'sonnet', credential: 'login' }],
+    'the Gemini route step is gone and qa starts with its claude step',
   );
   const notices = await call('GET', '/api/notices');
   assert.equal(notices.status, 200, `GET /api/notices answered ${notices.status}`);

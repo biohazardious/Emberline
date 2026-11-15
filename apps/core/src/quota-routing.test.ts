@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as orchestration from './factory/orchestration.js';
 import { quotaWindows, runs as runsTable, tickets as ticketsTable } from './db/schema.js';
 import { computeProjectRecommendations } from './factory/workspace-status.js';
+import { retireGemini } from './factory/retire-gemini.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 import { rmTemp } from './test-rm.js';
@@ -1271,6 +1272,26 @@ describe('an old Gemini CLI run', () => {
     expect(successor).toMatchObject({ agent: 'claude', model: 'sonnet', predecessorRunId: run.id });
     expect(successor.routes.map((r) => r.agent)).not.toContain('gemini');
     expect(await getRun(run.id)).toMatchObject({ handedOffTo: successor.id });
+  });
+
+  it('one left queued is ended at start with the reason, and its hand-off then works', async () => {
+    const run = await geminiRun();
+    t.db.update(runsTable).set({ state: 'queued', endedAt: null }).where(eq(runsTable.id, run.id)).run();
+    const route = { agent: 'claude', model: 'sonnet', credential: 'login' };
+    // A queued run cannot be handed off, and nothing would ever start it.
+    expect((await api('POST', `/api/runs/${run.id}/handoff`, { route })).statusCode).toBe(409);
+
+    retireGemini(t.db, { now: new Date(), notices: t.notices });
+    const ended = await getRun(run.id);
+    expect(ended).toMatchObject({ state: 'failed', cancelled: false });
+    expect(ended.events.at(-1)).toMatchObject({
+      type: 'agent_removed',
+      payload: { message: REMOVED },
+    });
+
+    const res = await api('POST', `/api/runs/${run.id}/handoff`, { route });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ agent: 'claude', predecessorRunId: run.id });
   });
 
   it('a ticket tagged for Gemini CLI runs on its persona route', async () => {

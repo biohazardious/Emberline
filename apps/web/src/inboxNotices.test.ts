@@ -72,13 +72,13 @@ describe('Inbox notices', () => {
         kind: 'gemini_removed',
         key: 'gemini_removed',
         title: 'Gemini CLI was removed',
-        text: 'What changed: QA & Test Engineer → Antigravity gemini-flash. The Gemini API key stays for Aider.',
+        text: 'What changed: QA & Test Engineer → next in its chain. Antigravity can be added to a route by hand in Settings. The Gemini API key stays for Aider.',
       }),
     ];
     const { container } = await renderDom(page());
     await waitFor(() => expect(container.textContent).toContain('Gemini CLI was removed'));
     const item = container.querySelector('[data-kind="gemini_removed"]')!;
-    expect(item.textContent).toContain('QA & Test Engineer → Antigravity gemini-flash');
+    expect(item.textContent).toContain('QA & Test Engineer → next in its chain');
     expect(item.querySelector('a[href="/settings?tab=providers"]')).not.toBeNull();
   });
 

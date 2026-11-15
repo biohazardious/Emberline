@@ -40,6 +40,7 @@ export const EVENT_LABEL: Record<string, string> = {
   headless_needs_auto: 'failed: needs Autonomous mode',
   stall_detected: 'stalled',
   waiting_input_timeout: 'stopped: nobody answered',
+  agent_removed: 'ended: agent removed',
   auto_nudged: 'nudged to continue',
   ticket_complete: 'Completed',
   completion_tool_ready: 'Completion tool available',

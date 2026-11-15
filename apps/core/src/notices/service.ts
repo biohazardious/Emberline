@@ -112,21 +112,25 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     return getSetting<boolean>(this.db, GEMINI_REMOVED_SHOWN_KEY) === true;
   }
 
-  /** Once, after the upgrade that removed Gemini CLI: where each route that used it went. */
+  /**
+   * Once, after the upgrade that removed Gemini CLI: which routes fell back. Gemini steps were
+   * dropped, never moved to Antigravity, so the notice says it can be added by hand.
+   */
   geminiRemoved(lines: string[], now = new Date()): void {
     if (this.geminiRemovedNoticeShown()) return;
-    setSetting(this.db, GEMINI_REMOVED_SHOWN_KEY, true);
-    const moved = lines.length > 0 ? ` What changed: ${lines.join('; ')}.` : '';
+    const changed = lines.length > 0 ? ` What changed: ${lines.join('; ')}.` : '';
     this.add(
       {
         kind: 'gemini_removed',
         key: 'gemini_removed',
         title: 'Gemini CLI was removed',
-        text: `Emberline no longer runs Gemini CLI; Antigravity stays.${moved} Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.`,
+        text: `Emberline no longer runs Gemini CLI; Antigravity stays.${changed} Gemini steps were dropped, not moved; Antigravity can be added to a route by hand in Settings. Old Gemini runs stay in the list, and any still open were ended; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.`,
         link: SETTINGS_LINK,
       },
       now,
     );
+    // After the notice is stored: a failure adding it leaves the flag unset, so the next start tells.
+    setSetting(this.db, GEMINI_REMOVED_SHOWN_KEY, true);
   }
 
   /** False when there is no such notice. */
