@@ -56,10 +56,8 @@ done
 
 # Approval prompts are only skipped when the run's permission mode is `auto` or `bypassPermissions`.
 SKIP_APPROVALS=()
-GEMINI_APPROVALS=()
 if [ "${EMBERLINE_AUTO_APPROVE:-0}" = "1" ]; then
   SKIP_APPROVALS=("--dangerously-skip-permissions")
-  GEMINI_APPROVALS=("--yolo")
 fi
 
 if [ -s "/home/node/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "/home/node/.config/antigravity/plugin-secrets.json" ]; then
@@ -69,14 +67,8 @@ if [ -s "/home/node/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "
   else
     exec "$AGY_BIN" "${SKIP_APPROVALS[@]}" ${CONTINUE_FLAG} "${ARGS[@]}"
   fi
-elif [ -n "$GEMINI_API_KEY" ] || [ -s "/home/node/.gemini/oauth_creds.json" ]; then
-  if [ -n "$PROMPT" ]; then
-    exec gemini "${GEMINI_APPROVALS[@]}" -p "$PROMPT"
-  else
-    exec gemini
-  fi
 else
-  echo "❌ Google Antigravity CLI (agy) is not signed in yet, and no GEMINI_API_KEY is configured." >&2
+  echo "❌ Google Antigravity CLI (agy) is not signed in yet." >&2
   echo "👉 Go to Settings & Keys -> Google Antigravity -> click Console Login, select 1. Google OAuth, and paste the authorization code." >&2
   exit 41
 fi

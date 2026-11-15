@@ -1161,6 +1161,7 @@ export function registerProjectRoutes(
   );
 
   if (process.env.NODE_ENV === 'production') {
+    void toolchain.removeRetiredTools();
     toolchain.ensureEnabledProvidersInstalled();
   }
 

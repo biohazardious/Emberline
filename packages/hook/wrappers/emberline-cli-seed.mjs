@@ -60,19 +60,6 @@ function seed(file, apply) {
   if (apply(current.data)) write(file, current.head, current.data);
 }
 
-if (agent === 'gemini' || agent === 'antigravity') {
-  // Gemini CLI (also the agy fallback): no update offers; with an API key and no auth choice yet,
-  // skip the "how would you like to authenticate?" picker.
-  seed(path.join(home, '.gemini', 'settings.json'), (data) => {
-    let changed = ensure(data, ['general', 'enableAutoUpdate'], false);
-    changed = ensure(data, ['general', 'enableAutoUpdateNotification'], false) || changed;
-    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
-      changed = ensure(data, ['security', 'auth', 'selectedType'], 'gemini-api-key') || changed;
-    }
-    return changed;
-  });
-}
-
 if (agent === 'antigravity') {
   // agy asks "Do you trust the contents of this project?" for every new folder (an exact-path list;
   // /workspaces does not cover its subfolders) before an interactive session. Trust this run's

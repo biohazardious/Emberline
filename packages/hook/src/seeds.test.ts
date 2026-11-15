@@ -74,19 +74,10 @@ describe('claude-seed', () => {
 });
 
 describe('emberline-cli-seed', () => {
-  it('gemini: no update offers, API-key auth preselected, user choices kept', () => {
+  it('gemini: no longer seeds anything', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
-    mkdirSync(path.join(home, '.gemini'));
-    writeFileSync(
-      path.join(home, '.gemini', 'settings.json'),
-      JSON.stringify({ general: { enableAutoUpdate: true }, ui: { theme: 'x' } }),
-    );
     run('emberline-cli-seed.mjs', home, { GEMINI_API_KEY: 'k' }, ['gemini']);
-    expect(json(path.join(home, '.gemini', 'settings.json'))).toEqual({
-      general: { enableAutoUpdate: true, enableAutoUpdateNotification: false },
-      ui: { theme: 'x' },
-      security: { auth: { selectedType: 'gemini-api-key' } },
-    });
+    expect(existsSync(path.join(home, '.gemini'))).toBe(false);
   });
 
   it('copilot: trusts /workspaces and keeps the leading comments of its config file', () => {

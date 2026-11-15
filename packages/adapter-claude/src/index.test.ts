@@ -307,12 +307,6 @@ describe('secondary CLIs start without first-run questions', () => {
   const base = { runId: 'r1234567', hookToken: 't', coreUrl: 'http://core:7420', prompt: 'do it' };
   const script = (spec: { args: string[] }) => spec.args[1] ?? '';
 
-  it('the agy fallback to Gemini CLI trusts the worktree', () => {
-    expect(
-      buildSecondaryCliLaunchSpec({ ...base, agent: 'antigravity' }).env.GEMINI_CLI_TRUST_WORKSPACE,
-    ).toBe('true');
-  });
-
   it('copilot: unattended runs may use every tool and never ask; no auto-update', () => {
     const auto = buildSecondaryCliLaunchSpec({ ...base, agent: 'copilot', permissionMode: 'auto' });
     expect(script(auto)).toContain('--allow-all --no-ask-user -p');

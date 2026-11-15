@@ -87,8 +87,6 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   if (options.agent === 'antigravity') {
     const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
     const continueFlag = options.resumeSessionId ? '-c ' : '';
-    // The agy wrapper may fall back to Gemini CLI, which refuses untrusted folders.
-    extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
     cliCmd = options.prompt
       ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; elif command -v antigravity >/dev/null 2>&1; then antigravity ${continueFlag}${modelFlag}-p "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
       : `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${continueFlag}; else claude --model ${fallbackModel}; fi`;

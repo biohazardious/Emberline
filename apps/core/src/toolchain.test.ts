@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import path from 'node:path';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getSetting } from './db/index.js';
 import { createTestApp, type TestApp } from './test-utils.js';
 import {
   ensureSetupPackageManager,
@@ -54,6 +55,52 @@ afterEach(async () => {
 });
 
 describe('ToolchainService', () => {
+  describe('removeRetiredTools', () => {
+    const geminiDir = () =>
+      path.join(t.dir, 'ai-tools', 'npm', 'lib', 'node_modules', '@google', 'gemini-cli');
+    const flag = () => getSetting<boolean>(t.db, 'toolchain.geminiRemoved');
+    // A fake npm on the runner's PATH that records what it is asked to do.
+    const fakeNpm = (exit: number) => {
+      const bin = path.join(t.dir, 'ai-tools', 'bin');
+      mkdirSync(bin, { recursive: true });
+      const log = path.join(t.dir, 'npm-calls');
+      writeFileSync(
+        path.join(bin, 'npm'),
+        `#!/usr/bin/env bash\necho "$@" >> ${JSON.stringify(log)}\nexit ${exit}\n`,
+      );
+      chmodSync(path.join(bin, 'npm'), 0o755);
+      return () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
+    };
+
+    it('uninstalls the Gemini CLI once when it is there', async () => {
+      const calls = fakeNpm(0);
+      mkdirSync(geminiDir(), { recursive: true });
+      const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+      await toolchain.removeRetiredTools();
+      expect(calls()).toEqual(['uninstall -g @google/gemini-cli']);
+      expect(flag()).toBe(true);
+      await toolchain.removeRetiredTools();
+      expect(calls()).toHaveLength(1);
+    });
+
+    it('sets the flag and runs nothing when it is not installed', async () => {
+      const calls = fakeNpm(0);
+      await new ToolchainService(t.db, t.ptyd, t.config.workspacesDir).removeRetiredTools();
+      expect(calls()).toEqual([]);
+      expect(flag()).toBe(true);
+    });
+
+    it('a failing uninstall does not throw and is not retried', async () => {
+      const calls = fakeNpm(1);
+      mkdirSync(geminiDir(), { recursive: true });
+      const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+      await expect(toolchain.removeRetiredTools()).resolves.toBeUndefined();
+      expect(flag()).toBe(true);
+      await toolchain.removeRetiredTools();
+      expect(calls()).toHaveLength(1);
+    });
+  });
+
   it('runs CLI installs as runner sessions and reports their output', async () => {
     const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
     const res = await toolchain.executeAction('codex', {

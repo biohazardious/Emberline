@@ -15,7 +15,7 @@ import {
   type ToolchainActionResponse,
   type ToolchainStatusResponse,
 } from '@emberline/protocol';
-import type { Db } from '../db/index.js';
+import { type Db, getSetting, setSetting } from '../db/index.js';
 import { conflict } from '../errors.js';
 import { getFactorySettings } from '../factory/service.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
@@ -125,6 +125,9 @@ interface ToolRuntimeState {
   lastError: string | null;
   cachedVersion: string | null;
 }
+
+const GEMINI_REMOVED_KEY = 'toolchain.geminiRemoved';
+const GEMINI_CLI_PACKAGE = '@google/gemini-cli';
 
 export class ToolchainService {
   private readonly toolsDir: string;
@@ -529,5 +532,40 @@ export class ToolchainService {
         }
       }
     })();
+  }
+
+  /**
+   * Tools Emberline no longer offers are taken off the tools volume, once. Today that is the Gemini
+   * CLI; the flag is set after the check whether or not anything was there, so a later manual
+   * install is never undone. Waits for the runner; if it never connects the flag stays unset and
+   * the next start tries again. Never throws: a failed uninstall only logs.
+   */
+  async removeRetiredTools(): Promise<void> {
+    try {
+      if (getSetting<boolean>(this.db, GEMINI_REMOVED_KEY) === true) return;
+      const installed =
+        existsSync(path.join(this.toolsDir, 'npm', 'lib', 'node_modules', GEMINI_CLI_PACKAGE)) ||
+        existsSync(path.join(this.toolsDir, 'npm', 'bin', 'gemini'));
+      if (installed) {
+        await this.ptyd.waitUntilConnected(60_000);
+        try {
+          const { exitCode, output } = await this.runInRunner(
+            `${this.toolsEnvSetup()}; npm uninstall -g ${GEMINI_CLI_PACKAGE}`,
+            '📦 Uninstall · Gemini CLI',
+            180_000,
+          );
+          if (exitCode === 0) console.info('Removed the retired Gemini CLI from the tools volume.');
+          else
+            console.warn(
+              `Removing the retired Gemini CLI exited with code ${exitCode ?? 'unknown'}: ${output.slice(-500)}`,
+            );
+        } catch (err) {
+          console.warn('Removing the retired Gemini CLI failed.', err);
+        }
+      }
+      setSetting(this.db, GEMINI_REMOVED_KEY, true);
+    } catch (err) {
+      console.warn('Checking for retired tools failed.', err);
+    }
   }
 }
