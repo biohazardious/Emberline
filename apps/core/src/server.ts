@@ -66,7 +66,7 @@ import type { TicketService } from './tickets/service.js';
 import { ToolchainService } from './toolchain/service.js';
 import { UpdateService } from './updates/service.js';
 
-export const VERSION = '0.9.2';
+export const VERSION = '0.9.3';
 
 export interface CoreDeps {
   config: CoreConfig;

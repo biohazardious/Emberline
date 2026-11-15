@@ -4,6 +4,8 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-15
+
 ### Added
 
 - **Model discovery.** Emberline reads each CLI's own model list, so a new model shows in the pickers without an Emberline release. Claude Code is read from its `/model` picker, Antigravity from its own listing, Codex from `codex debug models` (only with a Codex login: signed out, the CLI lists a catalog that is not yours) and Copilot from its own session. It reads when a runner first connects, once a day, after a CLI is installed or updated, and on **Refresh models**. Reading a picker opens it in a background terminal and changes none of the CLI's settings.
@@ -787,7 +789,8 @@ First public preview.
 - Health checks, Prometheus metrics, online SQLite backups and automatic pre-migration snapshots.
 - Images for `linux/amd64` on the GitHub Container Registry: `emberline-core` and `emberline-runner`. `deploy/compose.yaml` runs them from a single file.
 
-[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/biohazardious/emberline/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/biohazardious/emberline/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/biohazardious/emberline/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/biohazardious/emberline/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/biohazardious/emberline/compare/v0.8.0...v0.9.0
