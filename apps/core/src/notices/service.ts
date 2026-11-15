@@ -5,6 +5,7 @@ import { type Db, getSetting, setSetting } from '../db/index.js';
 
 const NOTICES_KEY = 'inbox.notices';
 const FABLE_SHOWN_KEY = 'notices.fableShown';
+const GEMINI_REMOVED_SHOWN_KEY = 'notices.geminiRemovedShown';
 /** Dismissed notices are kept so they do not come back; only this many of them. */
 const KEPT_DISMISSED = 200;
 
@@ -33,7 +34,7 @@ interface NoticeServiceEvents {
   change: [notices: Notice[]];
 }
 
-/** Inbox notices: new models, an unread model list, and the one-time Fable notice. Stored in settings. */
+/** Inbox notices: new models, an unread model list, and the one-time Fable and Gemini CLI notices. Stored in settings. */
 export class NoticeService extends EventEmitter<NoticeServiceEvents> {
   constructor(private readonly db: Db) {
     super();
@@ -106,6 +107,28 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     });
   }
 
+  /** Whether the Gemini CLI notice had its one chance already. */
+  geminiRemovedNoticeShown(): boolean {
+    return getSetting<boolean>(this.db, GEMINI_REMOVED_SHOWN_KEY) === true;
+  }
+
+  /** Once, after the upgrade that removed Gemini CLI: where each route that used it went. */
+  geminiRemoved(lines: string[], now = new Date()): void {
+    if (this.geminiRemovedNoticeShown()) return;
+    setSetting(this.db, GEMINI_REMOVED_SHOWN_KEY, true);
+    const moved = lines.length > 0 ? ` What changed: ${lines.join('; ')}.` : '';
+    this.add(
+      {
+        kind: 'gemini_removed',
+        key: 'gemini_removed',
+        title: 'Gemini CLI was removed',
+        text: `Emberline no longer runs Gemini CLI; Antigravity stays.${moved} Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.`,
+        link: SETTINGS_LINK,
+      },
+      now,
+    );
+  }
+
   /** False when there is no such notice. */
   dismiss(id: string): boolean {
     const all = this.load();
@@ -118,7 +141,7 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     return true;
   }
 
-  private add(fields: Pick<Notice, 'kind' | 'key' | 'title' | 'text' | 'link'>): void {
+  private add(fields: Pick<Notice, 'kind' | 'key' | 'title' | 'text' | 'link'>, now = new Date()): void {
     const all = this.load();
     const existing = all.find((n) => n.key === fields.key);
     // A failure closed by a recovery may happen again and is news again; anything else is a repeat.
@@ -127,7 +150,7 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     kept.unshift({
       id: randomUUID(),
       ...fields,
-      createdAt: new Date().toISOString(),
+      createdAt: now.toISOString(),
       dismissedAt: null,
     });
     this.save(kept);

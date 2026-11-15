@@ -75,6 +75,15 @@ describe('persona routes', () => {
     ]);
   });
 
+  it('reads stored providers and a default agent this core does not know without failing', () => {
+    storeRaw({ enabledProviders: ['claude', 'bogus'], defaultAgent: 'bogus' });
+    const read = getFactorySettings(t.db);
+    expect(read.enabledProviders).toEqual(['claude']);
+    expect(read.defaultAgent).toBe('claude');
+    storeRaw({ enabledProviders: ['bogus'] });
+    expect(getFactorySettings(t.db).enabledProviders).toEqual(['claude']);
+  });
+
   it('normalizes saved chains: disabled providers dropped, credentials coerced, duplicates removed, max 4', () => {
     updateFactorySettings(t.db, {
       enabledProviders: ['claude', 'antigravity'],

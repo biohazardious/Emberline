@@ -1,7 +1,7 @@
 /** API contracts: Inbox notices, the second kind of Inbox item besides runs. */
 import { z } from 'zod';
 
-export const NoticeKind = z.enum(['new_models', 'models_unread', 'fable_now_fable']);
+export const NoticeKind = z.enum(['new_models', 'models_unread', 'fable_now_fable', 'gemini_removed']);
 export type NoticeKind = z.infer<typeof NoticeKind>;
 
 /** A note for the Inbox that needs no action; it is never counted in the topbar's "need you". */

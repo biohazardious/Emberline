@@ -19,6 +19,7 @@ import { buildServer } from './server.js';
 import { startupWarnings } from './startup-warnings.js';
 import { ModelDiscovery } from './models/discovery.js';
 import { noticeFableRoutes } from './factory/fable-routes.js';
+import { retireGemini } from './factory/retire-gemini.js';
 import { NoticeService } from './notices/service.js';
 import { TicketService } from './tickets/service.js';
 import { ToolchainService } from './toolchain/service.js';
@@ -36,6 +37,15 @@ try {
     exit: (code) => process.exit(code),
   });
   throw error; // unreachable for a key refusal (the process exited); other errors were rethrown above
+}
+const notices = new NoticeService(db);
+// Once secrets open, before any service reads settings: what an older core stored for
+// Gemini CLI is rewritten once (and told once in the Inbox). A failure must not stop the start.
+let retireGeminiError: unknown;
+try {
+  retireGemini(db, { now: new Date(), notices });
+} catch (err) {
+  retireGeminiError = err;
 }
 // Core's own commands (git, the merge's file steps, the Docker CLI) run in the ops container; none
 // without it (an old compose file): everything is refused with ops_missing until it answers. The dev
@@ -62,7 +72,6 @@ const docker = new DockerEngine(config.dockerHost, {
 const runs = new RunService(db, config, ptyd, docker);
 const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);
-const notices = new NoticeService(db);
 const toolchain = new ToolchainService(db, ptyd, config.workspacesDir);
 let logDiscovery: (message: string, err?: unknown) => void = () => undefined;
 // Reads each CLI's models once the runner first connects, then daily and after an install or update.
@@ -112,6 +121,9 @@ if (forgotten) app.log[forgotten.level](forgotten.message);
 for (const warning of startupWarnings(process.env, config)) {
   if (warning.data) app.log.warn(warning.data, warning.message);
   else app.log.warn(warning.message);
+}
+if (retireGeminiError !== undefined) {
+  app.log.error({ err: retireGeminiError }, 'could not move the stored Gemini CLI settings');
 }
 logDiscovery = (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message));
 logDocker = (status) => {

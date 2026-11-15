@@ -66,7 +66,7 @@ const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'g
   copilot: [],
 };
 
-const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
+export const DEFAULT_PERSONA_MODELS: Record<AgentPersona, AgentModelId> = {
   product_owner: 'fable',
   architect: 'fable',
   ui_ux: 'opus',
@@ -449,21 +449,25 @@ export function getFactorySettings(db: Db): FactorySettings {
   });
 
   // Derive active/enabled providers: Claude is always available by default via Host CLI Auth / API key.
-  const enabledSet = new Set<AgentId>(
-    Array.isArray(raw.enabledProviders) && raw.enabledProviders.length > 0
-      ? raw.enabledProviders
-      : ['claude'],
-  );
-  if (enabledSet.size === 0) enabledSet.add('claude');
+  // A stored id this core does not know (a provider removed since, or written by an older core after
+  // a downgrade) is skipped rather than failing every settings read.
+  const storedEnabled = Array.isArray(raw.enabledProviders)
+    ? raw.enabledProviders.flatMap((id) => {
+        const known = AgentId.safeParse(id);
+        return known.success ? [known.data] : [];
+      })
+    : [];
+  const enabledSet = new Set<AgentId>(storedEnabled.length > 0 ? storedEnabled : ['claude']);
   if (!Array.isArray(raw.enabledProviders)) {
     if (openaiKeyConfigured || providerAuth.codex.authenticated) enabledSet.add('codex');
     if (geminiKeyConfigured || providerAuth.gemini.authenticated) enabledSet.add('gemini');
   }
   const enabledProviders = Array.from(enabledSet);
 
+  const storedDefault = AgentId.safeParse(raw.defaultAgent);
   const defaultAgent: AgentId =
-    raw.defaultAgent && enabledSet.has(raw.defaultAgent)
-      ? raw.defaultAgent
+    storedDefault.success && enabledSet.has(storedDefault.data)
+      ? storedDefault.data
       : (enabledProviders[0] ?? 'claude');
 
   const personaRoutes = {} as Record<AgentPersona, Route[]>;

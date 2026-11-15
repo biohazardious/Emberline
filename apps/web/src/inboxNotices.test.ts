@@ -66,6 +66,22 @@ describe('Inbox notices', () => {
     expect(dismissed).toEqual(['n1']);
   });
 
+  it('shows the Gemini CLI notice with its routes and the Settings link', async () => {
+    list = [
+      notice({
+        kind: 'gemini_removed',
+        key: 'gemini_removed',
+        title: 'Gemini CLI was removed',
+        text: 'What changed: QA & Test Engineer → Antigravity gemini-flash. The Gemini API key stays for Aider.',
+      }),
+    ];
+    const { container } = await renderDom(page());
+    await waitFor(() => expect(container.textContent).toContain('Gemini CLI was removed'));
+    const item = container.querySelector('[data-kind="gemini_removed"]')!;
+    expect(item.textContent).toContain('QA & Test Engineer → Antigravity gemini-flash');
+    expect(item.querySelector('a[href="/settings?tab=providers"]')).not.toBeNull();
+  });
+
   it('shows nothing for dismissed notices and does not change the runs empty state', async () => {
     list = [notice({ dismissedAt: new Date().toISOString() })];
     const { container } = await renderDom(page());

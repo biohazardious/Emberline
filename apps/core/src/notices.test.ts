@@ -77,6 +77,37 @@ describe('notice copy', () => {
   });
 });
 
+describe('the Gemini CLI notice', () => {
+  it('names where each route went, keeps the key for Aider, and shows once across restarts', () => {
+    const at = new Date('2026-11-15T10:00:00Z');
+    notices.geminiRemoved(
+      ['QA & Test Engineer → Antigravity gemini-flash', 'Software Engineer → next in its chain'],
+      at,
+    );
+    expect(notices.list()[0]).toMatchObject({
+      kind: 'gemini_removed',
+      key: 'gemini_removed',
+      title: 'Gemini CLI was removed',
+      text: 'Emberline no longer runs Gemini CLI; Antigravity stays. What changed: QA & Test Engineer → Antigravity gemini-flash; Software Engineer → next in its chain. Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.',
+      link: '/settings?tab=providers',
+      createdAt: at.toISOString(),
+    });
+    notices.dismiss(notices.list()[0]!.id);
+    const restarted = new NoticeService(t.db);
+    expect(restarted.geminiRemovedNoticeShown()).toBe(true);
+    restarted.geminiRemoved([]);
+    expect(restarted.list()).toHaveLength(1);
+    expect(restarted.list()[0]!.dismissedAt).not.toBeNull();
+  });
+
+  it('without routes it still says the key stays', () => {
+    notices.geminiRemoved([]);
+    expect(notices.list()[0]!.text).toBe(
+      'Emberline no longer runs Gemini CLI; Antigravity stays. Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.',
+    );
+  });
+});
+
 describe('dedup and dismissal', () => {
   it('the same key twice is one notice, whatever the order of the models', () => {
     notices.newModels('antigravity', [hydrogen, carbon]);
