@@ -12,7 +12,7 @@ import type { RunService } from '../runs/service.js';
 import { healThenMerge, mergeTarget, type RunMerge } from '../runs/worktree.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { clipText } from '../text/control-chars.js';
-import { occupiesTicketSlot } from './columns.js';
+import { occupiesTicketSlot, onKnownAgent } from './columns.js';
 
 /** Automatic conflict requests into one run's own session (each after main moved again). */
 export const CONFLICT_ATTEMPT_CAP = 3;
@@ -238,7 +238,7 @@ export class ConflictLadder {
     return this.deps.db
       .select({ state: runs.state })
       .from(runs)
-      .where(eq(runs.worktreePath, worktreePath))
+      .where(and(eq(runs.worktreePath, worktreePath), onKnownAgent()))
       .all()
       .some((r) => occupiesTicketSlot(r.state as Run['state']));
   }

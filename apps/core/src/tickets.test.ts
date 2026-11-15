@@ -290,6 +290,29 @@ describe('tickets', () => {
     expect(usage.days.at(-1).estimatedRuns).toBe(1);
   });
 
+  it('a queued run on an agent this core no longer has (Gemini CLI) holds no ticket slot', async () => {
+    await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
+    const project = await createProject();
+    await createTicket(project.id, { title: 'Old', status: 'ready' });
+    const [old] = await t.tickets.dispatchNextReadyTicket(project.id);
+    await t.runs.stop(old!.run.id);
+    await expect
+      .poll(async () => {
+        await t.runs.reconcile();
+        return t.runs.getRun(old!.run.id).endedAt;
+      })
+      .not.toBeNull();
+    // As an older core left it: queued on Gemini CLI, which nothing will ever start.
+    t.db
+      .update(runs)
+      .set({ agent: 'gemini', state: 'queued', endedAt: null, cancelledAt: null })
+      .where(eq(runs.id, old!.run.id))
+      .run();
+    await createTicket(project.id, { title: 'New', status: 'ready' });
+    const started = await t.tickets.dispatchNextReadyTicket(project.id);
+    expect(started.map((s) => s.ticket.title)).toEqual(['New']);
+  });
+
   it('dispatches one ticket per project even when dispatches race', async () => {
     await api('PATCH', '/api/factory/settings', { maxParallelTicketsPerProject: 1 });
     const project = await createProject();

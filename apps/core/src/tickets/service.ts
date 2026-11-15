@@ -64,7 +64,13 @@ import { applyBulkTicketAction, liveRun } from './bulk.js';
 import { ConflictLadder } from './conflict-ladder.js';
 import { buildTicketExport } from './export.js';
 import { mapIssueToTicket } from './issue-mapping.js';
-import { ACTIVE_RUN_STATES, columnForRun, edgePosition, occupiesTicketSlot } from './columns.js';
+import {
+  ACTIVE_RUN_STATES,
+  columnForRun,
+  edgePosition,
+  occupiesTicketSlot,
+  onKnownAgent,
+} from './columns.js';
 import { BranchFootprints, type BusyFootprint, busyFootprint, claimedPaths, overlapWait } from './overlap.js';
 import {
   type CreatedDraft,
@@ -1202,6 +1208,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
             isNotNull(runs.ticketId),
             isNull(runs.handedOffTo),
             inArray(runs.state, [...ACTIVE_RUN_STATES]),
+            onKnownAgent(),
           ),
         )
         .get()?.n ?? 0
@@ -1985,6 +1992,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           eq(runs.projectId, projectId),
           isNotNull(runs.ticketId),
           isNull(runs.handedOffTo),
+          onKnownAgent(),
           pending.length > 0 ? or(busyState, inArray(runs.id, pending)) : busyState,
         ),
       )

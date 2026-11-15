@@ -1,7 +1,7 @@
-import type { Run, TicketStatus } from '@emberline/protocol';
-import { and, eq, max, min } from 'drizzle-orm';
+import { AgentId, type Run, type TicketStatus } from '@emberline/protocol';
+import { and, eq, inArray, max, min } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { tickets } from '../db/schema.js';
+import { runs, tickets } from '../db/schema.js';
 
 /** Gap between neighbours so most moves need a single row update. */
 export const POSITION_STEP = 1024;
@@ -14,6 +14,12 @@ export const ACTIVE_RUN_STATES: ReadonlySet<Run['state']> = new Set<Run['state']
   'waiting_input',
   'rate_limited',
 ]);
+
+/**
+ * Runs on an agent this core has. One an older core started on Gemini CLI can never start or move
+ * again, so it holds no slot (the upgrade ends the open ones; one written since must not count).
+ */
+export const onKnownAgent = () => inArray(runs.agent, [...AgentId.options]);
 
 /** Whether a run in `state` occupies one of its project's parallel ticket slots. */
 export const occupiesTicketSlot = (state: Run['state']): boolean => ACTIVE_RUN_STATES.has(state);

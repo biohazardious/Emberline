@@ -31,6 +31,7 @@ import { providerAdapter } from '../runs/providers.js';
 import { providerListRead } from '../models/catalog.js';
 import { cliModelOf, currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
+import { onKnownAgent } from '../tickets/columns.js';
 import { MAX_TIMER_MS, nextWakeAt } from './next-wake.js';
 
 type WindowRow = typeof quotaWindows.$inferSelect;
@@ -359,7 +360,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       // Re-read: a limit hit by a run we just started closes its lane synchronously.
       const closed = this.openWindows();
       const row = this.db.select().from(runs).where(eq(runs.id, candidate.id)).get();
-      // A run on an agent that is gone (Gemini CLI) is refused on every resume; it takes no slot.
+      // A run on an agent that is gone (Gemini CLI) is refused on every resume. The upgrade ended the
+      // open ones (retire-gemini); one an older core wrote since is skipped and holds no slot either.
       if (!row || row.handedOffTo || !isKnownAgent(row.agent)) continue;
       if (this.laneClosed(laneOf(currentRoute(row)), closed)) {
         // Rate-limited runs wait for their own lane; a queued run may start on a fallback route.
@@ -474,6 +476,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       .where(
         and(
           isNull(runs.endedAt),
+          onKnownAgent(),
           sql`(${runs.state} in ('starting', 'working') or (${runs.state} = 'waiting_input' and ${runs.lastEvent} = 'SessionStart' and ${runs.prompt} != ''))`,
         ),
       )
