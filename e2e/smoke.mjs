@@ -665,6 +665,8 @@ await step('models: discovery adds new models and the Inbox says so', async () =
     const again = await api('POST', '/api/models/refresh', { agent: 'antigravity' });
     assert.equal(again.status, 200, again.text);
     assert.equal((await newModels()).length, 1, 'a second read adds no notice');
+    const unread = (await api('GET', '/api/notices')).json.filter((n) => n.kind === 'models_unread');
+    assert.equal(unread.length, 0, JSON.stringify(unread));
   } finally {
     // The steps after this one run with the providers they started with.
     const off = await api('PATCH', '/api/factory/settings', { enabledProviders: enabled });

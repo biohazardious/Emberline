@@ -46,12 +46,15 @@ const READER_MARGIN_MS = 5_000;
 const STOP_GRACE_MS = 10_000;
 const REASON_CHARS = 300;
 
-/** Env vars that point a provider at a stand-in command (the e2e stack's fakes). */
+/**
+ * Env vars that point a provider at a stand-in command (the e2e stack's fakes). Only providers read
+ * by a listing command belong here: a picker read needs the real CLI's screens, so a stand-in
+ * (fake-claude) does not make that provider readable.
+ */
 const COMMAND_OVERRIDES: Partial<Record<AgentId, string>> = {
-  claude: 'EMBERLINE_CLAUDE_COMMAND',
   antigravity: 'EMBERLINE_ANTIGRAVITY_COMMAND',
 };
-/** A provider whose command is overridden counts as installed: the tools volume has no such CLI to find. */
+/** A listing-command provider whose command is overridden counts as installed: the tools volume has no such CLI. */
 export function commandOverridden(agent: AgentId): boolean {
   const name = COMMAND_OVERRIDES[agent];
   return !!name && !!process.env[name]?.trim();

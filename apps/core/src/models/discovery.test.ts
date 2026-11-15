@@ -139,6 +139,13 @@ describe('refresh', () => {
     vi.unstubAllEnvs();
   });
 
+  it('does not read a picker provider just because its command is overridden', async () => {
+    vi.stubEnv('EMBERLINE_CLAUDE_COMMAND', '/e2e/fake-claude.mjs');
+    const d = discovery({ toolchain: fakeToolchain([]), jobs: { claude: listed('c-1') } });
+    expect(Object.keys(await d.refresh())).toEqual([]);
+    vi.unstubAllEnvs();
+  });
+
   it('joins a read of the same provider that is still queued', async () => {
     const calls: AgentId[] = [];
     const d = discovery({
