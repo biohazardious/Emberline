@@ -451,6 +451,37 @@ describe('Claude and Copilot sign-in detection', () => {
     );
   });
 
+  it('an Anthropic Console login (its key in ~/.claude.json) is a login', () => {
+    withHome(
+      {
+        '.claude.json': JSON.stringify({
+          primaryApiKey: 'sk-ant-console',
+          oauthAccount: { emailAddress: 'someone@example.com' },
+        }),
+      },
+      () => expect(auth().claude).toMatchObject({ authenticated: true, method: 'oauth_cli' }),
+    );
+  });
+
+  it('an empty or missing Console key with an emptied credentials file is not a login', () => {
+    for (const primaryApiKey of ['', '   ', null, 42]) {
+      withHome(
+        {
+          '.claude/.credentials.json': loggedOutClaude,
+          '.claude.json': JSON.stringify({
+            primaryApiKey,
+            oauthAccount: { emailAddress: 'someone@example.com' },
+          }),
+        },
+        () =>
+          expect(auth().claude, String(primaryApiKey)).toMatchObject({
+            authenticated: false,
+            method: 'none',
+          }),
+      );
+    }
+  });
+
   it('the ~/.copilot folder Copilot creates on its first start is not a login', () => {
     withHome(
       {

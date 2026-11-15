@@ -20,7 +20,7 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - A route whose model matches nothing the provider lists runs with the CLI's default model, and the run says so.
 - Switching the agent on the run form keeps the model if the new agent has it, and otherwise picks that agent's default.
 - Codex and Copilot sign in with a device code (`make codex-login` and `make copilot-login` too): the browser's redirect went to localhost on the runner, never reached it, and the login never finished.
-- A Claude whose credentials were emptied (after a logout or a failed refresh) and a fresh `~/.copilot` folder no longer show as signed in, so routing no longer picks them and runs no longer sit at a sign-in screen. Claude needs a token in its credentials file; Copilot needs a user in its config or a `gh` token.
+- A Claude whose credentials were emptied (after a logout or a failed refresh) and a fresh `~/.copilot` folder no longer show as signed in, so routing no longer picks them and runs no longer sit at a sign-in screen. Claude needs a token in its credentials file, or the key an Anthropic Console login keeps; Copilot needs a user in its config or a `gh` token.
 - A pull that stopped keeps the ticket **Resolve with a ticket** made for it when origin moves on in the meantime: asking again answers with the same ticket instead of a second one, and **Match origin…** closes it instead of sending it back to Backlog.
 
 ## [0.9.2] - 2026-11-15

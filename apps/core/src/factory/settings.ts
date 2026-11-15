@@ -200,19 +200,26 @@ function hasValidGeminiOAuth(home: string): boolean {
   return false;
 }
 
-/** A Claude login is an OAuth token in ~/.claude/.credentials.json. The file and ~/.claude.json's
- * `oauthAccount` both stay behind after a logout or a failed refresh, with the tokens emptied. */
+/**
+ * A Claude login is an OAuth token in ~/.claude/.credentials.json (a Claude account), or the API key
+ * an Anthropic Console login keeps as `primaryApiKey` in ~/.claude.json. The credentials file and
+ * ~/.claude.json's `oauthAccount` both stay behind after a logout or a failed refresh, with the
+ * tokens emptied, so neither counts on its own.
+ */
 function hasClaudeTokens(home: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8')) as {
-      claudeAiOauth?: { accessToken?: unknown; refreshToken?: unknown } | null;
-    };
-    const oauth = parsed?.claudeAiOauth;
-    const filled = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
-    return Boolean(oauth && (filled(oauth.accessToken) || filled(oauth.refreshToken)));
-  } catch {
-    return false;
-  }
+  const filled = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+  const readJson = (file: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  };
+  const oauth = readJson(path.join(home, '.claude', '.credentials.json'))?.claudeAiOauth as
+    { accessToken?: unknown; refreshToken?: unknown } | null | undefined;
+  if (oauth && (filled(oauth.accessToken) || filled(oauth.refreshToken))) return true;
+  return filled(readJson(path.join(home, '.claude.json'))?.primaryApiKey);
 }
 
 /** Copilot CLI creates ~/.copilot on its first start, signed in or not. A login is a user recorded in
