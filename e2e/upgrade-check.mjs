@@ -12,7 +12,8 @@
  *   matrix                           every migration step of this release: from any database state, the
  *                                    upgrade snapshots first and breaks no seeded row
  *   api <base-url> ops-missing|ops-ok  what the web app's banner reads (GET /api/system), and the Git
- *                                    page's defaults for the seeded project (GET /api/projects/:id/git)
+ *                                    page's defaults for the seeded project (GET /api/projects/:id/git),
+ *                                    and the Gemini CLI retirement (settings rewritten, one notice)
  */
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
@@ -180,6 +181,20 @@ async function seed(oldDir, label) {
   sqlite
     .prepare('insert into settings (key, value) values (?, ?)')
     .run('updates.config', JSON.stringify({ githubToken: stored }));
+  // Every release stored factory settings that name Gemini CLI: its routes move to Antigravity.
+  sqlite.prepare('insert into settings (key, value) values (?, ?)').run(
+    'factory.settings',
+    JSON.stringify({
+      enabledProviders: ['claude', 'gemini', 'antigravity'],
+      antigravityTermsAcknowledged: true,
+      personaRoutes: {
+        qa: [
+          { agent: 'gemini', model: 'gemini-pro', credential: 'api_key' },
+          { agent: 'claude', model: 'sonnet', credential: 'login' },
+        ],
+      },
+    }),
+  );
   sqlite.close();
   writeFileSync(
     MANIFEST,
@@ -353,6 +368,22 @@ async function api(base, expect) {
   assert.equal(git.status, 200, `GET /git answered ${git.status}`);
   assert.equal(git.json.autoPull, true, 'auto-pull is on after the upgrade');
   assert.equal(git.json.workingBranch, git.json.defaultBranch, 'the working branch is the default branch');
+  // Stored settings that named Gemini CLI: it is gone, its route step moved to Antigravity, and one
+  // Inbox notice says so (also after the rollback drill, which restores the pre-upgrade database).
+  const settings = await call('GET', '/api/factory/settings');
+  assert.equal(settings.status, 200, `GET /api/factory/settings answered ${settings.status}`);
+  assert.ok(!settings.json.enabledProviders.includes('gemini'), 'gemini is no longer an enabled provider');
+  assert.ok(settings.json.enabledProviders.includes('antigravity'), 'antigravity stays enabled');
+  assert.deepEqual(
+    settings.json.personaRoutes.qa[0],
+    { agent: 'antigravity', model: 'gemini-pro', credential: 'login' },
+    'the Gemini route step is now Antigravity gemini-pro on its login',
+  );
+  const notices = await call('GET', '/api/notices');
+  assert.equal(notices.status, 200, `GET /api/notices answered ${notices.status}`);
+  const removed = notices.json.filter((n) => n.kind === 'gemini_removed');
+  assert.equal(removed.length, 1, `expected one gemini_removed notice, found ${removed.length}`);
+  assert.equal(removed[0].title, 'Gemini CLI was removed');
   console.log(
     `api: ops banner ${wantMissing ? 'shown' : 'clear'}; seeded project listed; Git page: auto-pull on, working branch ${git.json.workingBranch}`,
   );
