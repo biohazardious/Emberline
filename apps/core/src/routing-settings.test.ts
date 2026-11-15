@@ -419,6 +419,16 @@ describe('the Gemini key after Gemini CLI', () => {
     });
   });
 
+  it("a PATCH with only geminiApiKey: null removes the stored key (the Aider card's Remove key)", () => {
+    withHome({}, () => {
+      updateFactorySettings(t.db, { geminiApiKey: 'k' });
+      const before = getFactorySettings(t.db);
+      const cfg = updateFactorySettings(t.db, { geminiApiKey: null });
+      expect(cfg).toMatchObject({ geminiKeyStored: false, geminiKeyConfigured: false });
+      expect(cfg.enabledProviders).toEqual(before.enabledProviders);
+    });
+  });
+
   it('an Antigravity step on the API key runs on its login', () => {
     withHome({}, () => {
       storeRaw(

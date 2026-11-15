@@ -15,6 +15,8 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
+import { useState } from 'react';
+import { api, errorMessage } from '../../api';
 import { ProviderMark } from '../ProviderMark';
 import { ProviderModels } from './ProviderModels';
 import { ico } from '../SectionState';
@@ -103,6 +105,19 @@ export function ProviderCard({
         : false;
   const isAuthReady = Boolean(authStatus?.authenticated || isKeyConfigured);
   const makeLoginCmd = MAKE_LOGIN_CMD[providerId];
+  const [removingKey, setRemovingKey] = useState(false);
+  const removeGeminiKey = async () => {
+    setRemovingKey(true);
+    try {
+      form.setSettings(await api<FactorySettings>('/api/factory/settings', 'PATCH', { geminiApiKey: null }));
+      patchApiKeys({ gemini: '' });
+      form.setNotice('Gemini API key removed.');
+    } catch (err) {
+      form.setError(errorMessage(err));
+    } finally {
+      setRemovingKey(false);
+    }
+  };
 
   return (
     <div
@@ -365,15 +380,30 @@ export function ProviderCard({
           />
         )}
 
-        {/* Aider is the only CLI that reads the Gemini key; agy signs in with its own Google login. */}
-        {isEnabled && providerId === 'aider' && (
-          <ApiKeyField
-            label="Google Gemini API Key (Optional · for Aider's Gemini models)"
-            configured={Boolean(settings.geminiKeyConfigured)}
-            placeholder="AIzaSy..."
-            value={apiKeys.gemini}
-            onChange={(gemini) => patchApiKeys({ gemini })}
-          />
+        {/* Aider is the only CLI that reads the Gemini key; agy signs in with its own Google login.
+            A stored key shows even with Aider off: it used to sit on the Gemini CLI card, and a
+            secret Emberline keeps must stay visible and removable somewhere. */}
+        {providerId === 'aider' && (isEnabled || settings.geminiKeyStored) && (
+          <>
+            <ApiKeyField
+              label="Google Gemini API Key (Optional · for Aider's Gemini models)"
+              configured={Boolean(settings.geminiKeyConfigured)}
+              placeholder="AIzaSy..."
+              value={apiKeys.gemini}
+              onChange={(gemini) => patchApiKeys({ gemini })}
+            />
+            {settings.geminiKeyStored && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ alignSelf: 'flex-start', fontSize: '0.72rem' }}
+                disabled={removingKey}
+                onClick={() => void removeGeminiKey()}
+              >
+                {ico(Trash2)} Remove key
+              </button>
+            )}
+          </>
         )}
 
         {isEnabled && providerId === 'codex' && (
