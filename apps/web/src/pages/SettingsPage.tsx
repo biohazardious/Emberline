@@ -1,6 +1,5 @@
 import {
   type AgentId,
-  DEFAULT_COMMIT_IDENTITY,
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
   type FactorySettings,
@@ -8,6 +7,7 @@ import {
   type PersonaRouteMap,
   type QuotaPolicy,
   type SkillPluginEntry,
+  type UpdateFactorySettingsBody,
 } from '@emberline/protocol';
 import {
   Bell,
@@ -17,13 +17,11 @@ import {
   KeySquare,
   type LucideIcon,
   Plug,
-  Settings,
   Timer,
   Zap,
 } from 'lucide-react';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { clampQuotaGb } from '../buildOutputs';
 import { ico } from '../components/SectionState';
 import { AccountSection } from '../components/settings/AccountSection';
 import { AutopilotSection } from '../components/settings/AutopilotSection';
@@ -33,15 +31,21 @@ import { ProvidersSection } from '../components/settings/ProvidersSection';
 import { QuotaSection } from '../components/settings/QuotaSection';
 import { SshKeySection } from '../components/settings/SshKeySection';
 import {
-  type AutopilotDraft,
-  clampParallel,
-  type ProviderSectionForm,
-} from '../components/settings/settingsMeta';
+  autopilotDraftFrom,
+  buildSettingsPatch,
+  isAutopilotDirty,
+  isMcpDraftDirty,
+  isProviderDraftDirty,
+  mcpDraftFrom,
+  providerDraftFrom,
+} from '../components/settings/settingsDraft';
+import { type AutopilotDraft, type ProviderSectionForm } from '../components/settings/settingsMeta';
 import { UpdatesSection } from '../components/settings/UpdatesSection';
+import { PageHeader } from '../components/ui/PageHeader';
 import { useQueryParam } from '../hooks/navigation';
 import { useFactorySettings } from '../hooks/useFactorySettings';
 
-const SETTINGS_TABS = [
+export const SETTINGS_TABS = [
   'autopilot',
   'providers',
   'mcp_plugins',
@@ -51,18 +55,20 @@ const SETTINGS_TABS = [
   'updates',
   'account',
 ] as const;
-type SettingsTab = (typeof SETTINGS_TABS)[number];
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const SETTINGS_TAB_ITEMS: ReadonlyArray<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
-  { id: 'autopilot', label: 'Auto-Pilot & Theme', icon: Zap },
-  { id: 'providers', label: 'Multi-Agent & Model Matrix', icon: Bot },
-  { id: 'mcp_plugins', label: 'MCP & Plugins', icon: Plug },
-  { id: 'quota', label: 'Quota & Concurrency', icon: Timer },
-  { id: 'notifications', label: 'Forge & Webhooks', icon: Bell },
+  { id: 'autopilot', label: 'Automation', icon: Zap },
+  { id: 'providers', label: 'Providers', icon: Bot },
+  { id: 'mcp_plugins', label: 'MCP and skills', icon: Plug },
+  { id: 'quota', label: 'Usage limits', icon: Timer },
+  { id: 'notifications', label: 'Forges and webhooks', icon: Bell },
   { id: 'ssh_key', label: 'SSH key', icon: KeySquare },
   { id: 'updates', label: 'Updates', icon: CircleArrowUp },
   { id: 'account', label: 'Account', icon: KeyRound },
 ];
+
+const SAVED_NOTICE = 'Settings saved.';
 
 export function SettingsPage({
   theme,
@@ -77,31 +83,13 @@ export function SettingsPage({
     ? (tabParam as SettingsTab)
     : 'autopilot';
   const setActiveTab = (tab: SettingsTab) => setTabParam(tab === 'autopilot' ? null : tab);
+  const tabListRef = useRef<HTMLDivElement>(null);
 
   const settingsQuery = useFactorySettings(false);
   const settings = settingsQuery.data;
 
   const [hydrated, setHydrated] = useState(false);
-  const [autopilot, setAutopilot] = useState<AutopilotDraft>({
-    themePref: theme,
-    autoPickupReady: true,
-    autoPickupBacklog: false,
-    autoSyncToMain: true,
-    autoResolveAdditiveConflicts: true,
-    serializeOverlappingTickets: true,
-    selfHealingBuildGate: true,
-    antiSlopGate: true,
-    secretGuardGate: true,
-    requireCompletionSignal: true,
-    crossProviderCritic: false,
-    autoMoveToDone: true,
-    maxTicketDepth: 3,
-    maxParallelTickets: '2',
-    buildOutputsQuotaGb: '5',
-    maxAutoRunsPerDay: 40,
-    commitName: DEFAULT_COMMIT_IDENTITY.name,
-    commitEmail: DEFAULT_COMMIT_IDENTITY.email,
-  });
+  const [autopilot, setAutopilot] = useState<AutopilotDraft>(() => autopilotDraftFrom(undefined, theme));
   const [defaultAgent, setDefaultAgent] = useState<AgentId>('claude');
   const [enabledProviders, setEnabledProviders] = useState<AgentId[]>(['claude']);
   const [personaRoutes, setPersonaRoutes] = useState<PersonaRouteMap | null>(null);
@@ -114,37 +102,87 @@ export function SettingsPage({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const syncFromSettings = (source: FactorySettings) => {
+    setAutopilot(autopilotDraftFrom(source));
+    const prov = providerDraftFrom(source);
+    setDefaultAgent(prov.defaultAgent);
+    setEnabledProviders(prov.enabledProviders);
+    setAntigravityAck(prov.antigravityAck);
+    setPersonaRoutes(prov.personaRoutes);
+    setQuotaPolicy(prov.quotaPolicy);
+    setApiKeys(prov.apiKeys);
+    const mcp = mcpDraftFrom(source);
+    setMcpServers(mcp.mcpServers);
+    setSkillPlugins(mcp.skillPlugins);
+  };
+
   useEffect(() => {
     if (!settings || hydrated) return;
     setHydrated(true);
-    setAutopilot({
-      themePref: settings.theme,
-      autoPickupReady: settings.autoPickupReady,
-      autoPickupBacklog: settings.autoPickupBacklog,
-      autoSyncToMain: settings.autoSyncToMain,
-      autoResolveAdditiveConflicts: settings.autoResolveAdditiveConflicts ?? true,
-      serializeOverlappingTickets: settings.serializeOverlappingTickets ?? true,
-      selfHealingBuildGate: settings.selfHealingBuildGate,
-      antiSlopGate: settings.antiSlopGate ?? true,
-      secretGuardGate: settings.secretGuardGate ?? true,
-      requireCompletionSignal: settings.requireCompletionSignal ?? true,
-      crossProviderCritic: settings.crossProviderCritic ?? false,
-      autoMoveToDone: settings.autoMoveToDone,
-      maxTicketDepth: settings.maxTicketDepth,
-      maxAutoRunsPerDay: settings.maxAutoRunsPerProjectPerDay,
-      maxParallelTickets: String(settings.maxParallelTicketsPerProject ?? 2),
-      buildOutputsQuotaGb: String(settings.buildOutputsQuotaGb ?? 5),
-      commitName: settings.commitIdentity?.name ?? DEFAULT_COMMIT_IDENTITY.name,
-      commitEmail: settings.commitIdentity?.email ?? DEFAULT_COMMIT_IDENTITY.email,
-    });
-    setDefaultAgent(settings.defaultAgent);
-    setEnabledProviders(settings.enabledProviders?.length ? settings.enabledProviders : ['claude']);
-    setAntigravityAck(settings.antigravityTermsAcknowledged ?? false);
-    setPersonaRoutes(settings.personaRoutes);
-    if (settings.quotaPolicy) setQuotaPolicy(settings.quotaPolicy);
-    if (settings.mcpServers?.length) setMcpServers(settings.mcpServers);
-    if (settings.skillPlugins?.length) setSkillPlugins(settings.skillPlugins);
+    syncFromSettings(settings);
   }, [settings, hydrated]);
+
+  const clearSavedNotice = () => {
+    setNotice((prev) => (prev === SAVED_NOTICE ? null : prev));
+  };
+
+  const autopilotDirty = isAutopilotDirty(autopilot, settings);
+  const providerDirty = isProviderDraftDirty(
+    {
+      defaultAgent,
+      enabledProviders,
+      antigravityAck,
+      personaRoutes,
+      quotaPolicy,
+      apiKeys,
+    },
+    settings,
+  );
+  const mcpDirty = isMcpDraftDirty({ mcpServers, skillPlugins }, settings);
+  const anyDirty = autopilotDirty || providerDirty || mcpDirty;
+
+  useEffect(() => {
+    if (!anyDirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [anyDirty]);
+
+  const handleDiscardAutopilot = () => {
+    if (!settings) return;
+    const next = autopilotDraftFrom(settings);
+    setAutopilot(next);
+    if (next.themePref === 'light' || next.themePref === 'dark') {
+      onChangeTheme(next.themePref);
+    }
+    clearSavedNotice();
+    setError(null);
+  };
+
+  const handleDiscardProviders = () => {
+    if (!settings) return;
+    const next = providerDraftFrom(settings);
+    setDefaultAgent(next.defaultAgent);
+    setEnabledProviders(next.enabledProviders);
+    setAntigravityAck(next.antigravityAck);
+    setPersonaRoutes(next.personaRoutes);
+    setQuotaPolicy(next.quotaPolicy);
+    setApiKeys(next.apiKeys);
+    clearSavedNotice();
+    setError(null);
+  };
+
+  const handleDiscardMcp = () => {
+    if (!settings) return;
+    const next = mcpDraftFrom(settings);
+    setMcpServers(next.mcpServers);
+    setSkillPlugins(next.skillPlugins);
+    clearSavedNotice();
+    setError(null);
+  };
 
   const handleSaveFactorySettings = async (e: FormEvent) => {
     e.preventDefault();
@@ -152,50 +190,29 @@ export function SettingsPage({
     setNotice(null);
     setError(null);
     try {
-      const payload: Record<string, unknown> = {
-        theme: autopilot.themePref,
-        autoPickupReady: autopilot.autoPickupReady,
-        autoPickupBacklog: autopilot.autoPickupBacklog,
-        autoSyncToMain: autopilot.autoSyncToMain,
-        autoResolveAdditiveConflicts: autopilot.autoResolveAdditiveConflicts,
-        serializeOverlappingTickets: autopilot.serializeOverlappingTickets,
-        selfHealingBuildGate: autopilot.selfHealingBuildGate,
-        antiSlopGate: autopilot.antiSlopGate,
-        secretGuardGate: autopilot.secretGuardGate,
-        requireCompletionSignal: autopilot.requireCompletionSignal,
-        crossProviderCritic: autopilot.crossProviderCritic,
-        autoMoveToDone: autopilot.autoMoveToDone,
-        maxTicketDepth: autopilot.maxTicketDepth,
-        maxAutoRunsPerProjectPerDay: autopilot.maxAutoRunsPerDay,
-        maxParallelTicketsPerProject: clampParallel(autopilot.maxParallelTickets),
-        buildOutputsQuotaGb: clampQuotaGb(autopilot.buildOutputsQuotaGb),
-        commitIdentity: { name: autopilot.commitName.trim(), email: autopilot.commitEmail.trim() },
-        defaultAgent,
-        enabledProviders,
-        antigravityTermsAcknowledged: antigravityAck,
-        personaRoutes,
-        quotaPolicy,
-        mcpServers,
-        skillPlugins,
-      };
-      if (apiKeys.anthropic.trim()) payload.anthropicApiKey = apiKeys.anthropic.trim();
-      if (apiKeys.openai.trim()) payload.openaiApiKey = apiKeys.openai.trim();
-      if (apiKeys.gemini.trim()) payload.geminiApiKey = apiKeys.gemini.trim();
+      const payload: UpdateFactorySettingsBody = buildSettingsPatch(
+        autopilot,
+        {
+          defaultAgent,
+          enabledProviders,
+          antigravityAck,
+          personaRoutes,
+          quotaPolicy,
+          apiKeys,
+        },
+        {
+          mcpServers,
+          skillPlugins,
+        },
+      );
 
       const updated = await api<FactorySettings>('/api/factory/settings', 'PATCH', payload);
       settingsQuery.setData(updated);
-      setEnabledProviders(updated.enabledProviders?.length ? updated.enabledProviders : ['claude']);
-      setAntigravityAck(updated.antigravityTermsAcknowledged ?? false);
-      setDefaultAgent(updated.defaultAgent);
-      setPersonaRoutes(updated.personaRoutes);
-      setQuotaPolicy(updated.quotaPolicy);
-      if (updated.mcpServers?.length) setMcpServers(updated.mcpServers);
-      if (updated.skillPlugins?.length) setSkillPlugins(updated.skillPlugins);
-      setApiKeys({ anthropic: '', openai: '', gemini: '' });
+      syncFromSettings(updated);
       if (autopilot.themePref === 'light' || autopilot.themePref === 'dark') {
         onChangeTheme(autopilot.themePref);
       }
-      setNotice('Factory settings, active AI providers, MCP registry & skill plugins saved.');
+      setNotice(SAVED_NOTICE);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -203,21 +220,61 @@ export function SettingsPage({
     }
   };
 
+  const handleTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = SETTINGS_TABS.indexOf(activeTab);
+    let nextIndex = -1;
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % SETTINGS_TABS.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = SETTINGS_TABS.length - 1;
+    }
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    const nextTab = SETTINGS_TABS[nextIndex]!;
+    setActiveTab(nextTab);
+    const tabs = tabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[nextIndex]?.focus();
+  };
+
   const providerForm: ProviderSectionForm = {
     settings,
     setSettings: settingsQuery.setData,
     defaultAgent,
-    setDefaultAgent,
+    setDefaultAgent: (next) => {
+      clearSavedNotice();
+      setDefaultAgent(next);
+    },
     enabledProviders,
-    setEnabledProviders,
+    setEnabledProviders: (updater) => {
+      clearSavedNotice();
+      setEnabledProviders(updater);
+    },
     antigravityAck,
-    setAntigravityAck,
+    setAntigravityAck: (next) => {
+      clearSavedNotice();
+      setAntigravityAck(next);
+    },
     personaRoutes,
-    setPersonaRoutes,
+    setPersonaRoutes: (updater) => {
+      clearSavedNotice();
+      setPersonaRoutes(updater);
+    },
     quotaPolicy,
-    setQuotaPolicy,
+    setQuotaPolicy: (next) => {
+      clearSavedNotice();
+      setQuotaPolicy(next);
+    },
     apiKeys,
-    patchApiKeys: (patch) => setApiKeys((prev) => ({ ...prev, ...patch })),
+    patchApiKeys: (patch) => {
+      clearSavedNotice();
+      setApiKeys((prev) => ({ ...prev, ...patch }));
+    },
+    dirty: providerDirty,
+    onDiscard: handleDiscardProviders,
     saving,
     onSave: (e) => void handleSaveFactorySettings(e),
     setNotice,
@@ -225,40 +282,35 @@ export function SettingsPage({
   };
 
   return (
-    <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <header
-        className="panel"
-        style={{
-          padding: '16px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '12px',
-        }}
-      >
-        <div>
-          <span className="eyebrow">Control Center</span>
-          <h2 style={{ margin: '4px 0 0' }}>
-            {ico(Settings)} Factory Settings &amp; Multi-Agent Model Routing
-          </h2>
+    <div className="settings-page">
+      <PageHeader title="Settings">
+        <div
+          ref={tabListRef}
+          className="settings-tabs"
+          role="tablist"
+          aria-label="Settings sections"
+          onKeyDown={handleTabKeyDown}
+        >
+          {SETTINGS_TAB_ITEMS.map(({ id, label, icon }) => {
+            const selected = activeTab === id;
+            return (
+              <button
+                key={id}
+                id={`settings-tab-${id}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`settings-panel-${id}`}
+                tabIndex={selected ? 0 : -1}
+                className="settings-tab"
+                onClick={() => setActiveTab(id)}
+              >
+                {ico(icon)} {label}
+              </button>
+            );
+          })}
         </div>
-
-        <div className="settings-tabs" role="tablist" aria-label="Factory settings sections">
-          {SETTINGS_TAB_ITEMS.map(({ id, label, icon }) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === id}
-              className={`btn btn-sm ${activeTab === id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setActiveTab(id)}
-            >
-              {ico(icon)} {label}
-            </button>
-          ))}
-        </div>
-      </header>
+      </PageHeader>
 
       {error && (
         <div className="banner banner-error" role="alert">
@@ -271,49 +323,69 @@ export function SettingsPage({
         </div>
       )}
 
-      {activeTab === 'autopilot' && (
-        <AutopilotSection
-          settings={settings}
-          loading={settingsQuery.loading}
-          loadError={settingsQuery.error}
-          onRetry={settingsQuery.refresh}
-          theme={theme}
-          onChangeTheme={onChangeTheme}
-          draft={autopilot}
-          onChangeDraft={(patch) => setAutopilot((prev) => ({ ...prev, ...patch }))}
-          saving={saving}
-          onSave={(e) => void handleSaveFactorySettings(e)}
-        />
-      )}
+      <div
+        id={`settings-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`settings-tab-${activeTab}`}
+        className="settings-tabpanel"
+      >
+        {activeTab === 'autopilot' && (
+          <AutopilotSection
+            settings={settings}
+            loading={settingsQuery.loading}
+            loadError={settingsQuery.error}
+            onRetry={settingsQuery.refresh}
+            theme={theme}
+            onChangeTheme={onChangeTheme}
+            draft={autopilot}
+            onChangeDraft={(patch) => {
+              clearSavedNotice();
+              setAutopilot((prev) => ({ ...prev, ...patch }));
+            }}
+            dirty={autopilotDirty}
+            onDiscard={handleDiscardAutopilot}
+            saving={saving}
+            onSave={(e) => void handleSaveFactorySettings(e)}
+          />
+        )}
 
-      {activeTab === 'providers' && (
-        <ProvidersSection
-          form={providerForm}
-          loading={settingsQuery.loading}
-          loadError={settingsQuery.error}
-          onRetry={settingsQuery.refresh}
-        />
-      )}
+        {activeTab === 'providers' && (
+          <ProvidersSection
+            form={providerForm}
+            loading={settingsQuery.loading}
+            loadError={settingsQuery.error}
+            onRetry={settingsQuery.refresh}
+          />
+        )}
 
-      {activeTab === 'mcp_plugins' && (
-        <McpPluginsSection
-          mcpServers={mcpServers.length > 0 ? mcpServers : DEFAULT_MCP_SERVERS}
-          skillPlugins={skillPlugins.length > 0 ? skillPlugins : DEFAULT_SKILL_PLUGINS}
-          loading={settingsQuery.loading}
-          loadError={settingsQuery.error}
-          onRetry={settingsQuery.refresh}
-          onChangeMcpServers={setMcpServers}
-          onChangeSkillPlugins={setSkillPlugins}
-          onSave={(e) => void handleSaveFactorySettings(e)}
-          saving={saving}
-        />
-      )}
+        {activeTab === 'mcp_plugins' && (
+          <McpPluginsSection
+            mcpServers={mcpServers.length > 0 ? mcpServers : DEFAULT_MCP_SERVERS}
+            skillPlugins={skillPlugins.length > 0 ? skillPlugins : DEFAULT_SKILL_PLUGINS}
+            loading={settingsQuery.loading}
+            loadError={settingsQuery.error}
+            onRetry={settingsQuery.refresh}
+            onChangeMcpServers={(next) => {
+              clearSavedNotice();
+              setMcpServers(next);
+            }}
+            onChangeSkillPlugins={(next) => {
+              clearSavedNotice();
+              setSkillPlugins(next);
+            }}
+            dirty={mcpDirty}
+            onDiscard={handleDiscardMcp}
+            onSave={(e) => void handleSaveFactorySettings(e)}
+            saving={saving}
+          />
+        )}
 
-      {activeTab === 'quota' && <QuotaSection />}
-      {activeTab === 'notifications' && <ForgeAccountsSection />}
-      {activeTab === 'ssh_key' && <SshKeySection />}
-      {activeTab === 'updates' && <UpdatesSection />}
-      {activeTab === 'account' && <AccountSection />}
+        {activeTab === 'quota' && <QuotaSection />}
+        {activeTab === 'notifications' && <ForgeAccountsSection />}
+        {activeTab === 'ssh_key' && <SshKeySection />}
+        {activeTab === 'updates' && <UpdatesSection />}
+        {activeTab === 'account' && <AccountSection />}
+      </div>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import type { AgentPersona, McpServerEntry, McpServerTransport, SkillPluginEntry } from '@emberline/protocol';
-import { Plug, Plus, Save, X } from 'lucide-react';
+import { Plug, Plus, X } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { ico, SectionState } from '../SectionState';
+import { SaveBar } from '../ui/SaveBar';
 import { PersonaScopePills, SkillPluginsSection } from './SkillPluginsSection';
 import {
   ST_BADGE_64,
@@ -24,6 +25,8 @@ import {
 export interface McpPluginsSectionProps {
   mcpServers: McpServerEntry[];
   skillPlugins: SkillPluginEntry[];
+  dirty?: boolean;
+  onDiscard?: () => void;
   saving: boolean;
   loading?: boolean;
   loadError?: unknown;
@@ -36,6 +39,8 @@ export interface McpPluginsSectionProps {
 export function McpPluginsSection({
   mcpServers: servers,
   skillPlugins: skills,
+  dirty = false,
+  onDiscard = () => undefined,
   saving,
   loading,
   loadError,
@@ -369,11 +374,7 @@ export function McpPluginsSection({
 
       <SkillPluginsSection skills={skills} onChangeSkillPlugins={onChangeSkillPlugins} />
 
-      <div style={ST_SAVE_ROW}>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : <>{ico(Save)} Save MCP &amp; Plugin Configuration</>}
-        </button>
-      </div>
+      <SaveBar dirty={dirty} saving={saving} onDiscard={onDiscard} />
     </form>
   );
 }

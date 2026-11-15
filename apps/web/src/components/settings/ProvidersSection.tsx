@@ -7,7 +7,7 @@ import {
   type ToolchainActionResponse,
   type ToolchainStatusResponse,
 } from '@emberline/protocol';
-import { Cpu, Folder, LoaderCircle, RefreshCw, RotateCw, Save } from 'lucide-react';
+import { Cpu, Folder, LoaderCircle, RefreshCw, RotateCw } from 'lucide-react';
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../../api';
@@ -15,6 +15,7 @@ import { useClaudeUsage, useToolchainStatus } from '../../hooks/useSettingsQueri
 import { PERSONA_LIST } from '../PersonaBadge';
 import { SdkToolchainPanel } from '../SdkToolchainPanel';
 import { ico, SectionState } from '../SectionState';
+import { SaveBar } from '../ui/SaveBar';
 import { PersonaRoutingSection } from './PersonaRoutingSection';
 import { ProviderCard } from './ProviderCard';
 import {
@@ -25,7 +26,6 @@ import {
   ST_HR,
   ST_PANEL_FORM,
   ST_PANEL_PAD,
-  ST_SAVE_ROW,
 } from './settingsMeta';
 
 export function ProvidersSection({
@@ -48,6 +48,8 @@ export function ProvidersSection({
     setEnabledProviders,
     antigravityAck,
     setPersonaRoutes,
+    dirty,
+    onDiscard,
     saving,
     onSave,
     setNotice,
@@ -288,11 +290,7 @@ export function ProvidersSection({
 
       <PersonaRoutingSection form={form} claudeUsage={claudeUsage} />
 
-      <div style={ST_SAVE_ROW}>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : <>{ico(Save)} Save Active Providers &amp; Capability Matrix</>}
-        </button>
-      </div>
+      <SaveBar dirty={dirty} saving={saving} onDiscard={onDiscard} />
     </form>
   );
 }

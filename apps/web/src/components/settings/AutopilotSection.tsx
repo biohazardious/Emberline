@@ -1,9 +1,10 @@
 import type { FactorySettings } from '@emberline/protocol';
-import { FlaskConical, Lock, Moon, Save, Scale, Shield, Sun } from 'lucide-react';
+import { FlaskConical, Lock, Moon, Scale, Shield, Sun } from 'lucide-react';
 import type { FormEvent, ReactNode } from 'react';
 import { clampQuotaGb } from '../../buildOutputs';
 import { ico, SectionState } from '../SectionState';
-import { type AutopilotDraft, clampParallel, ST_HR, ST_PANEL_PAD, ST_SAVE_ROW } from './settingsMeta';
+import { SaveBar } from '../ui/SaveBar';
+import { type AutopilotDraft, clampParallel, ST_HR, ST_PANEL_PAD } from './settingsMeta';
 
 function GateToggle({
   checked,
@@ -81,6 +82,8 @@ export function AutopilotSection({
   onChangeTheme,
   draft,
   onChangeDraft,
+  dirty = false,
+  onDiscard = () => undefined,
   saving,
   onSave,
 }: {
@@ -92,6 +95,8 @@ export function AutopilotSection({
   onChangeTheme: (theme: 'dark' | 'light') => void;
   draft: AutopilotDraft;
   onChangeDraft: (patch: Partial<AutopilotDraft>) => void;
+  dirty?: boolean;
+  onDiscard?: () => void;
   saving: boolean;
   onSave: (e: FormEvent) => void;
 }) {
@@ -362,11 +367,12 @@ export function AutopilotSection({
         </label>
       </div>
 
-      <div style={ST_SAVE_ROW}>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : <>{ico(Save)} Save Auto-Pilot &amp; Theme Settings</>}
+      <SaveBar dirty={dirty} saving={saving} onDiscard={onDiscard} />
+      {(dirty || saving) && (
+        <button type="submit" hidden aria-hidden="true" tabIndex={-1}>
+          Save Auto-Pilot &amp; Theme Settings
         </button>
-      </div>
+      )}
     </form>
   );
 }

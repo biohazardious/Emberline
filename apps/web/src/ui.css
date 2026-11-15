@@ -1,0 +1,515 @@
+/* Shared M6 UI primitives and Settings shell layout. */
+
+/* --- PageHeader ------------------------------------------------------------ */
+
+.ui-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ui-page-header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.ui-page-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ui-page-header-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.ui-page-header-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ember-1);
+}
+
+.ui-page-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.ui-page-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-page-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.ui-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Disclosure ------------------------------------------------------------ */
+
+.ui-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-disclosure-trigger {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  margin-left: -6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.ui-disclosure-trigger:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.ui-disclosure-trigger:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+.ui-disclosure-chevron {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.ui-disclosure-chevron-open {
+  transform: rotate(90deg);
+}
+
+.ui-disclosure-panel {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* --- HelpHint -------------------------------------------------------------- */
+
+.ui-help-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.ui-help-trigger {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ui-help-trigger:hover,
+.ui-help-trigger[aria-expanded='true'] {
+  color: var(--text);
+  border-color: var(--ember-1);
+  background: var(--surface-hover);
+}
+
+.ui-help-trigger:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.ui-help-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: min(300px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.45;
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--bg) 75%, transparent);
+}
+
+/* --- Switch ---------------------------------------------------------------- */
+
+.ui-switch-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-switch-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ui-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  padding: 2px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.ui-switch:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.ui-switch:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.ui-switch.ui-switch-checked {
+  background: var(--ember-1);
+  border-color: var(--ember-1);
+}
+
+.ui-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-switch-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.15s ease;
+}
+
+.ui-switch.ui-switch-checked .ui-switch-thumb {
+  transform: translateX(16px);
+  background: var(--on-accent);
+}
+
+/* --- SettingRow ------------------------------------------------------------ */
+
+.ui-setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-setting-row:last-child {
+  border-bottom: 0;
+}
+
+.ui-setting-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+
+.ui-setting-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-setting-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ui-setting-summary {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.ui-setting-control {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- MoreMenu -------------------------------------------------------------- */
+
+.ui-more {
+  position: relative;
+  display: inline-flex;
+}
+
+.ui-more-trigger.active {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.ui-more-Trigger:focus-visible,
+.ui-more-trigger:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.ui-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 200px;
+  max-width: min(300px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 75%, transparent);
+}
+
+.ui-more-menu-left {
+  right: auto;
+  left: 0;
+}
+
+.ui-more-item {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.ui-more-item:hover:not(:disabled),
+.ui-more-item:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+.ui-more-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ember-2);
+}
+
+.ui-more-item.danger {
+  color: var(--bad);
+}
+
+.ui-more-item:disabled,
+.ui-more-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-more-item-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.ui-more-item.danger .ui-more-item-icon {
+  color: var(--bad);
+}
+
+.ui-more-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-more-item-label {
+  font-weight: 500;
+}
+
+.ui-more-item-desc {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+/* --- SaveBar --------------------------------------------------------------- */
+
+.ui-save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 25;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in hsl, var(--ember-1) 45%, var(--border));
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: 0 -4px 18px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.ui-save-bar-msg {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ui-save-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* --- Settings page shell --------------------------------------------------- */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  max-width: 100%;
+}
+
+.settings-tab {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.settings-tab:hover {
+  color: var(--text);
+}
+
+.settings-tab[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--ember-1);
+  font-weight: 600;
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.settings-tabpanel {
+  min-width: 0;
+}
+
+/* --- Phone-width hit targets (>= 44px) ------------------------------------- */
+
+@media (max-width: 640px) {
+  .ui-page-header-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-setting-main {
+    flex-wrap: wrap;
+  }
+
+  .ui-disclosure-trigger,
+  .ui-help-trigger,
+  .ui-switch,
+  .ui-more-trigger,
+  .ui-more-item,
+  .ui-save-bar .btn,
+  .settings-tab {
+    min-height: 44px;
+  }
+
+  .ui-help-trigger,
+  .ui-switch {
+    min-width: 44px;
+  }
+}
