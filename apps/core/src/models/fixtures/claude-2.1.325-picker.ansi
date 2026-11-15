@@ -1,0 +1,60 @@
+[?1049h[H
+[38;2;215;119;87m ▐[48;2;0;0;0m▛███▛█[0m[3C[1mClaude Code[1C[38;2;153;153;153;22mv2.1.325
+[38;2;215;119;87m▝▜[48;2;0;0;0m█████[49m█▀[2C[38;2;153;153;153mOpus 5.5 · API Usage Billing
+[38;2;215;119;87m ▝▝   ▝▝ [2C[38;2;153;153;153m/tmp/emberline-model-probe
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;2;177;185;249m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[1C[38;2;153;153;153m◐ medium · /effort[38;2;177;185;249m ▔
+[3C[1mSelect model
+[3C[38;2;153;153;153;22mSwitch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.
+
+[3C[38;2;177;185;249m❯[1C[38;2;153;153;153m1. [38;2;78;186;101mDefault (recommended)[1C✔[2C[38;2;153;153;153mUse the default model (currently Opus 5.5) · $4/$20 per Mtok
+[5C2. [0mOpus[21C[38;2;153;153;153mOpus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok
+[2C[0m   [38;2;153;153;153m3. [0mFable                    [38;2;153;153;153mFable 5.1 · Most capable for your hardest and longest-running tasks
+[2C[0m   [38;2;153;153;153m4. [0mSonnet                   [38;2;153;153;153mSonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok
+[2C[0m   [38;2;153;153;153m5. [0mHaiku                    [38;2;153;153;153mHaiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)
+
+[2C[0m [38;2;215;119;87m◐[38;2;153;153;153m Medium effort (default) ←/→ to adjust
+
+[0m   [38;2;153;153;153mUse [1m/fast[22m to turn on Fast mode (Opus 5.5).
+
+[2C[0m [38;2;153;153;153mEnter to set as default · s to use this session only · Esc to cancel[10A[68D[0m[?2004h[?1004h[?1003h
