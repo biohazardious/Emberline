@@ -23,19 +23,30 @@ const hydrogen = { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (High)' };
 const carbon = { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon (High)' };
 
 describe('notice copy', () => {
-  it('lists new models with the provider short label and a link to Settings', () => {
+  it("lists new models with the provider's name and a link to Settings", () => {
     notices.newModels('antigravity', [hydrogen, carbon]);
     const [n] = notices.list();
     expect(n).toMatchObject({
       kind: 'new_models',
-      title: 'AGY has 2 new models',
+      title: 'Antigravity has 2 new models',
       text: 'Gemini 4 Hydrogen (High), Gemini 4 Carbon (High)',
       link: '/settings?tab=providers',
       dismissedAt: null,
       key: 'new_models:antigravity:gemini-4-carbon,gemini-4-hydrogen',
     });
     notices.newModels('claude', [{ id: 'x', label: 'X' }]);
-    expect(notices.list()[0]!.title).toBe('Claude has 1 new model');
+    expect(notices.list()[0]!.title).toBe('Claude Code has 1 new model');
+  });
+
+  it('names at most ten models, then says how many more', () => {
+    const many = Array.from({ length: 14 }, (_, i) => ({
+      id: `m-${String(i).padStart(2, '0')}`,
+      label: `M${i}`,
+    }));
+    notices.newModels('copilot', many);
+    const [n] = notices.list();
+    expect(n!.title).toBe('GitHub Copilot CLI has 14 new models');
+    expect(n!.text).toBe('M0, M1, M2, M3, M4, M5, M6, M7, M8, M9 and 4 more');
   });
 
   it('does nothing for an empty list', () => {
@@ -46,7 +57,7 @@ describe('notice copy', () => {
   it('words the failure with the CLI version, or "unknown version"', () => {
     notices.readFailed('claude', '2.1.322', 'the picker did not open');
     expect(notices.list()[0]!.text).toBe(
-      "Couldn't read Claude's model list (2.1.322): the picker did not open. The last list read stays; you can add a model by hand.",
+      "Couldn't read Claude Code's model list (2.1.322): the picker did not open. The last list read stays; you can add a model by hand.",
     );
     notices.readFailed('antigravity', null, 'timed out');
     expect(notices.list()[0]!.text).toContain('(unknown version): timed out.');

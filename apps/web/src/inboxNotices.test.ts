@@ -15,7 +15,7 @@ vi.mock('./api', async (importOriginal) => ({
 const notice = (over: Partial<Notice> = {}): Notice => ({
   id: 'n1',
   kind: 'new_models',
-  title: 'AGY has 2 new models',
+  title: 'Antigravity has 2 new models',
   text: 'Gemini 4 Hydrogen (High), Gemini 4 Carbon (High)',
   link: '/settings?tab=providers',
   createdAt: new Date().toISOString(),
@@ -56,13 +56,13 @@ const page = () =>
 describe('Inbox notices', () => {
   it('lists a notice with its link above the runs, and Dismiss calls the route', async () => {
     const { container } = await renderDom(page());
-    await waitFor(() => expect(container.textContent).toContain('AGY has 2 new models'));
+    await waitFor(() => expect(container.textContent).toContain('Antigravity has 2 new models'));
     expect(container.textContent).toContain('Gemini 4 Hydrogen (High), Gemini 4 Carbon (High)');
     const link = container.querySelector('a[href="/settings?tab=providers"]');
     expect(link).not.toBeNull();
 
     await click(getButton('Dismiss', container.querySelector('[data-kind="new_models"]')!));
-    await waitFor(() => expect(container.textContent).not.toContain('AGY has 2 new models'));
+    await waitFor(() => expect(container.textContent).not.toContain('Antigravity has 2 new models'));
     expect(dismissed).toEqual(['n1']);
   });
 

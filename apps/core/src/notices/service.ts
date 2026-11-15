@@ -10,6 +10,19 @@ const KEPT_DISMISSED = 200;
 
 /** Where the notices point: both the provider models and the persona routes live on this tab. */
 const SETTINGS_LINK = '/settings?tab=providers';
+/** A new-models notice names this many models, then says how many more there are. */
+const NAMED_MODELS = 10;
+
+/** The provider's name as the notices say it: its label without the note in brackets ("Antigravity"). */
+export function providerName(agent: AgentId): string {
+  return PROVIDER_REGISTRY[agent].label.replace(/\s*\([^)]*\)\s*$/, '');
+}
+
+/** `A, B, C`, or with more than `max`: `A, B and 3 more`. */
+function namedList(names: string[], max: number): string {
+  if (names.length <= max) return names.join(', ');
+  return `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
+}
 
 /** What is stored: a notice closed because the list read again keeps no memory of its failure. */
 interface StoredNotice extends Notice {
@@ -38,15 +51,18 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     this.add({
       kind: 'new_models',
       key: `new_models:${agent}:${ids.join(',')}`,
-      title: `${PROVIDER_REGISTRY[agent].shortLabel} has ${n} new ${n === 1 ? 'model' : 'models'}`,
-      text: models.map((m) => m.label).join(', '),
+      title: `${providerName(agent)} has ${n} new ${n === 1 ? 'model' : 'models'}`,
+      text: namedList(
+        models.map((m) => m.label),
+        NAMED_MODELS,
+      ),
       link: SETTINGS_LINK,
     });
   }
 
   /** One notice per provider until a read succeeds again. */
   readFailed(agent: AgentId, cliVersion: string | null, reason: string): void {
-    const provider = PROVIDER_REGISTRY[agent].shortLabel;
+    const provider = providerName(agent);
     this.add({
       kind: 'models_unread',
       key: `models_unread:${agent}`,

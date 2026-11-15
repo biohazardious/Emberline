@@ -232,7 +232,7 @@ describe('refresh', () => {
     const unread = notices.list().filter((n) => n.kind === 'models_unread');
     expect(unread).toHaveLength(1);
     expect(unread[0]!.text).toBe(
-      "Couldn't read AGY's model list (1.2.3): `agy` exited with 1: not signed in. The last list read stays; you can add a model by hand.",
+      "Couldn't read Antigravity's model list (1.2.3): `agy` exited with 1: not signed in. The last list read stays; you can add a model by hand.",
     );
   });
 
@@ -495,7 +495,7 @@ describe('jobs in a runner', () => {
     );
     const ids = readCatalog(opened.db).antigravity.models.map((m) => m.id);
     expect(ids).toContain('gemini-4-hydrogen-xhigh');
-    expect(notices.list().find((n) => n.kind === 'new_models')?.title).toBe('AGY has 7 new models');
+    expect(notices.list().find((n) => n.kind === 'new_models')?.title).toBe('Antigravity has 7 new models');
   });
 
   /** A `codex` that logs how it was called and prints the captured catalog on one line. */
