@@ -1,6 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   coerceModelForProvider,
@@ -637,5 +639,60 @@ describe('a route model the agent lacks, over HTTP', () => {
     const accepted = await patch('gemini-4-carbon-high');
     expect(accepted.statusCode).toBe(200);
     expect(accepted.json().personaRoutes.coder[0].model).toBe('gemini-4-carbon-high');
+  });
+});
+
+describe('Antigravity sign-in detection', () => {
+  const wrapper = fileURLToPath(new URL('../../../packages/hook/wrappers/agy', import.meta.url));
+  const OAUTH = '.gemini/antigravity-cli/antigravity-oauth-token';
+  const PLUGIN = '.config/antigravity/plugin-secrets.json';
+  const JETSKI = '.gemini/antigravity-cli/jetski_state.pbtxt';
+
+  /** Core's card and the agy wrapper on the same runner home: signed in, and whether agy ran. */
+  const both = (files: Record<string, string>) => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ember-home-'));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
+      writeFileSync(path.join(home, rel), body);
+    }
+    const tools = path.join(home, 'tools');
+    mkdirSync(path.join(tools, 'bin'), { recursive: true });
+    writeFileSync(path.join(tools, 'bin', 'agy'), '#!/bin/sh\nexit 0\n');
+    chmodSync(path.join(tools, 'bin', 'agy'), 0o755);
+    const saved = process.env.EMBERLINE_RUNNER_HOME;
+    process.env.EMBERLINE_RUNNER_HOME = home;
+    try {
+      const card = getFactorySettings(t.db).providerAuth!.antigravity.authenticated;
+      const run = spawnSync('bash', [wrapper, '--model', 'gemini-pro'], {
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: home,
+          EMBERLINE_TOOLS_DIR: tools,
+          EMBERLINE_RUNNER_HOME: home,
+        },
+        encoding: 'utf8',
+      });
+      return { card, ran: run.status === 0, notSignedIn: run.status === 41 };
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_RUNNER_HOME;
+      else process.env.EMBERLINE_RUNNER_HOME = saved;
+      rmTemp(home);
+    }
+  };
+
+  it.each<{ name: string; files: Record<string, string>; signedIn: boolean }>([
+    { name: 'the oauth token', files: { [OAUTH]: 'ya29.token' }, signedIn: true },
+    { name: 'plugin-secrets.json', files: { [PLUGIN]: '{"token":"x"}' }, signedIn: true },
+    { name: 'a short token', files: { [OAUTH]: 'x' }, signedIn: true },
+    { name: 'an empty oauth token file', files: { [OAUTH]: '' }, signedIn: false },
+    { name: 'an empty plugin-secrets.json', files: { [PLUGIN]: '' }, signedIn: false },
+    {
+      name: 'jetski_state.pbtxt alone',
+      files: { [JETSKI]: 'oauth_token: "x"\nrefresh_token: "y"' },
+      signedIn: false,
+    },
+    { name: 'no file', files: {}, signedIn: false },
+  ])('with $name, the card and the wrapper agree (signed in: $signedIn)', ({ files, signedIn }) => {
+    expect(both(files)).toEqual({ card: signedIn, ran: signedIn, notSignedIn: !signedIn });
   });
 });

@@ -60,7 +60,11 @@ if [ "${EMBERLINE_AUTO_APPROVE:-0}" = "1" ]; then
   SKIP_APPROVALS=("--dangerously-skip-permissions")
 fi
 
-if [ -s "/home/node/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "/home/node/.config/antigravity/plugin-secrets.json" ]; then
+# agy's sign-in: either file, non-empty. Core's Settings card reads the same two files the same way
+# (factory/settings.ts), so it never says signed in while runs exit 41. The home is the runner's;
+# tests point it elsewhere with the variable core reads it from.
+RUNNER_HOME="${EMBERLINE_RUNNER_HOME:-/home/node}"
+if [ -s "${RUNNER_HOME}/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -s "${RUNNER_HOME}/.config/antigravity/plugin-secrets.json" ]; then
   if [ -n "$PROMPT" ]; then
     "$AGY_BIN" "${SKIP_APPROVALS[@]}" --output-format stream-json ${CONTINUE_FLAG} "${ARGS[@]}" -p "$PROMPT" 2>&1 | node "$STREAM_PARSER"
     exit $?

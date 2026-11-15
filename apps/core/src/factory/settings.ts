@@ -1,5 +1,5 @@
 /** Factory settings, provider keys and auth detection, persona to agent/model/MCP routing. */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   AgentId,
@@ -147,36 +147,23 @@ function legacyChain(
   return chain;
 }
 
+/**
+ * Antigravity is signed in when either of agy's sign-in files is there and not empty: exactly what
+ * the agy wrapper (packages/hook/wrappers/agy, `[ -s … ]`) checks before it runs agy. Anything
+ * more lenient would show a signed-in card for runs that exit 41 "not signed in".
+ */
 function hasNonEmptyAntigravitySecrets(home: string): boolean {
-  try {
-    const oauthTokenPath = path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
-    if (existsSync(oauthTokenPath)) {
-      const tokenRaw = readFileSync(oauthTokenPath, 'utf8').trim();
-      if (tokenRaw.length > 10) {
-        return true;
-      }
+  const nonEmpty = (file: string) => {
+    try {
+      return statSync(file).size > 0;
+    } catch {
+      return false;
     }
-    const secretsPath = path.join(home, '.config', 'antigravity', 'plugin-secrets.json');
-    if (existsSync(secretsPath)) {
-      const raw = readFileSync(secretsPath, 'utf8').trim();
-      if (raw.length > 4) {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-          return true;
-        }
-      }
-    }
-    const jetskiPath = path.join(home, '.gemini', 'antigravity-cli', 'jetski_state.pbtxt');
-    if (existsSync(jetskiPath)) {
-      const pbtxt = readFileSync(jetskiPath, 'utf8');
-      if (/oauth_token|refresh_token|access_token/i.test(pbtxt)) {
-        return true;
-      }
-    }
-  } catch {
-    // ignore read errors
-  }
-  return false;
+  };
+  return (
+    nonEmpty(path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')) ||
+    nonEmpty(path.join(home, '.config', 'antigravity', 'plugin-secrets.json'))
+  );
 }
 
 /**
