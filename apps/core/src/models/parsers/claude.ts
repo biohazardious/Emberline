@@ -10,6 +10,7 @@
  * which `--model` takes by full name (`Fable 5.1` → `claude-fable-5-1`). Versions are read from the
  * screen, never assumed: the alias rows move to new versions over time.
  */
+import { CLAUDE_DIALOG_ENV } from '@emberline/adapter-claude';
 import { MODEL_ID_RE } from '@emberline/protocol';
 import type { PickerScript } from '../picker.js';
 import { PickerParseError } from './errors.js';
@@ -19,14 +20,25 @@ export type PickerModel = { id: string; label: string; description: string; grou
 /** The families Claude Code accepts as a bare alias for `--model`. */
 const ALIASES = new Set(['opus', 'fable', 'sonnet', 'haiku']);
 
+/**
+ * The env Claude Code runs with for the probe, as runs set it: no folder-trust question, no surveys
+ * or cost prompts, and no auto-update. The updater would write the shared tools volume under live
+ * runs, and the probe is ended seconds after it starts, which could cut an update off halfway.
+ */
+export const CLAUDE_PROBE_ENV: Record<string, string> = {
+  // Skips the folder-trust question in any folder, so the probe's folder name does not matter.
+  CLAUDE_CODE_SANDBOXED: '1',
+  DISABLE_AUTOUPDATER: '1',
+  ...CLAUDE_DIALOG_ENV,
+};
+
 export const CLAUDE_PICKER: PickerScript = {
   // Read when the job starts, so the override is honoured like a run's Claude command is.
   get command() {
     return {
       file: process.env.EMBERLINE_CLAUDE_COMMAND?.trim() || 'claude',
       args: [],
-      // Skips the folder-trust question in any folder, so the probe's folder name does not matter.
-      env: { CLAUDE_CODE_SANDBOXED: '1' },
+      env: CLAUDE_PROBE_ENV,
     };
   },
   // The prompt line, empty or showing Claude's dim placeholder (`Try "…"`). The cell after ❯ is a

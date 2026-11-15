@@ -648,7 +648,7 @@ describe('jobs in a runner', () => {
     expect(spawn.mock.calls[0]![0]).toMatchObject({
       file: 'bash',
       cwd: home,
-      env: { CLAUDE_CODE_SANDBOXED: '1' },
+      env: { CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1' },
       meta: { kind: MODEL_PROBE_KIND, noLog: '1' },
     });
     expect(existsSync(path.join(home, PROBE_DIR_NAME))).toBe(true);

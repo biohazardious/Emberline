@@ -32,7 +32,7 @@ import {
   parseCodexModels,
   parseCopilotModels,
 } from './list-command.js';
-import { CLAUDE_PICKER, parseClaudePicker, type PickerModel } from './parsers/claude.js';
+import { CLAUDE_PICKER, CLAUDE_PROBE_ENV, parseClaudePicker, type PickerModel } from './parsers/claude.js';
 import { PickerError, type PickerScript, readPicker } from './picker.js';
 
 /**
@@ -66,9 +66,13 @@ export function commandOverridden(agent: AgentId): boolean {
   return !!name && !!process.env[name]?.trim();
 }
 
-/** First-run questions each CLI asks, answered for the probe the way runs answer them. */
-const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
-  claude: { CLAUDE_CODE_SANDBOXED: '1' },
+/**
+ * First-run questions each CLI asks, and its self-update, turned off for the probe the way runs turn
+ * them off. Codex's update check is off on its command line (list-command.ts); agy and Gemini CLI
+ * have theirs off in the config `emberline-cli-seed` writes, which the probe runs first.
+ */
+export const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
+  claude: CLAUDE_PROBE_ENV,
   gemini: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
   copilot: { COPILOT_AUTO_UPDATE: 'false' },
 };

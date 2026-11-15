@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { buildLaunchSpec, CLAUDE_DIALOG_ENV } from '@emberline/adapter-claude';
 import { MODEL_ID_RE } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
 import { screenTextOf } from '../screen-text.js';
@@ -88,8 +89,30 @@ describe('CLAUDE_PICKER', () => {
   });
 
   it('starts Claude Code in sandbox mode, with nothing that depends on the folder, and quits with /exit', () => {
-    expect(CLAUDE_PICKER.command).toEqual({ file: 'claude', args: [], env: { CLAUDE_CODE_SANDBOXED: '1' } });
+    expect(CLAUDE_PICKER.command).toMatchObject({
+      file: 'claude',
+      args: [],
+      env: { CLAUDE_CODE_SANDBOXED: '1' },
+    });
     expect(CLAUDE_PICKER.exit).toBe('/exit');
+  });
+
+  it('turns off the auto-updater and the dialogs exactly as runs do', () => {
+    expect(CLAUDE_PICKER.command.env).toEqual({
+      CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_AUTOUPDATER: '1',
+      ...CLAUDE_DIALOG_ENV,
+    });
+    // Every one of these is in a run's env with the same value.
+    const run = buildLaunchSpec({
+      runId: 'r',
+      hookToken: 't',
+      coreUrl: 'http://core',
+      hookCommand: 'emberline-hook',
+      persona: 'coder',
+      prompt: 'x',
+    } as never).env;
+    for (const [key, value] of Object.entries(CLAUDE_PICKER.command.env)) expect(run[key], key).toBe(value);
   });
 
   it('honours the Claude command override', () => {
