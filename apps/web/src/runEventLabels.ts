@@ -10,6 +10,7 @@ export const EVENT_LABEL: Record<string, string> = {
   rate_limit_failed: 'limit reached',
   retry_scheduled: 'retry scheduled',
   retry_gave_up: 'retry gave up',
+  model_unresolved: 'model not offered',
   dependencies_applied: 'planned order',
   dependency_dropped: 'dependency dropped',
   tickets_file_rejected: 'tickets file rejected',

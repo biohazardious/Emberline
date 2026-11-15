@@ -36,7 +36,7 @@ export interface ClaudeLaunchOptions {
   claudeCommand?: string;
   hookCommand?: string;
   permissionMode?: ClaudePermissionMode;
-  /** Optional model tier (fable, opus, sonnet, haiku, etc.). */
+  /** Claude Code's own model id (`fable`, `opus`, `claude-opus-4-8`, ...); none or `auto` keeps its default. */
   model?: string;
   /** Initial prompt; empty starts an idle interactive session. */
   prompt?: string;
@@ -52,12 +52,21 @@ export interface ClaudeLaunchOptions {
   extraSystemPrompt?: string;
 }
 
-/** Claude Code's `--model` for an Emberline model id (another provider's id maps to its Claude tier). */
+/** Claude's model families, as Claude Code's aliases name them. */
+const CLAUDE_FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+
+const namesFamily = (model: string, family: string) => new RegExp(`(^|-)${family}(-|$)`).test(model);
+
+/**
+ * The Claude tier for a route's model, for the Claude fallback of a secondary CLI that is missing
+ * (Claude's own launches pass Claude Code's id as it is). Claude's aliases stay what they are,
+ * another provider's id maps to the Claude tier of its rank, and a discovered id that names a
+ * Claude family (`claude-opus-5-5-high` on Antigravity) maps to that family.
+ */
 export function resolveClaudeCliModelFlag(model?: string): string | undefined {
   if (!model || model === 'auto') return undefined;
-  if (model === 'fable' || model === 'opus' || model === 'o3') return 'opus';
+  if (model === 'o3') return 'opus';
   if (
-    model === 'sonnet' ||
     model === 'argon' ||
     model === 'gemini-pro' ||
     model === 'gemini-flash' ||
@@ -66,8 +75,8 @@ export function resolveClaudeCliModelFlag(model?: string): string | undefined {
   ) {
     return 'sonnet';
   }
-  if (model === 'haiku' || model === 'gemini-flash-lite' || model === 'gpt-4o-mini') return 'haiku';
-  return undefined;
+  if (model === 'gemini-flash-lite' || model === 'gpt-4o-mini') return 'haiku';
+  return CLAUDE_FAMILIES.find((family) => namesFamily(model, family));
 }
 
 /**
@@ -100,15 +109,15 @@ export function buildLaunchSpec(options: ClaudeLaunchOptions): LaunchSpec {
     ...buildEmberlineMcpConfig().mcpServers,
   };
   args.push('--mcp-config', JSON.stringify({ mcpServers: mergedServers }));
-  const cliModel = resolveClaudeCliModelFlag(options.model);
-  if (cliModel) {
-    args.push('--model', cliModel);
+  // Core hands over Claude Code's own id (an alias or a discovered id); Fable runs as Fable.
+  if (options.model && options.model !== 'auto') {
+    args.push('--model', options.model);
   }
   if (isAutonomous) {
     const cliMode = options.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto';
     args.push('--permission-mode', cliMode);
     let extraPolicy =
-      options.model === 'fable'
+      options.model && namesFamily(options.model, 'fable')
         ? `${AUTONOMOUS_EXECUTION_POLICY}\n[FABLE DEEP-ANALYSIS MODE: Perform deep architectural synthesis, edge-case analysis, and root-cause verification before writing code.]`
         : AUTONOMOUS_EXECUTION_POLICY;
     extraPolicy = `${extraPolicy}\n\n${RUNNER_ENVIRONMENT}`;

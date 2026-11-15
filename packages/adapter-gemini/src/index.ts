@@ -30,7 +30,7 @@ export interface GeminiLaunchOptions {
   coreUrl: string;
   hookCommand?: string;
   permissionMode?: AgentPermissionMode;
-  /** Emberline model id (`gemini-pro`, `gemini-flash`, `gemini-flash-lite`); others keep the CLI's default. */
+  /** Gemini CLI's own model id (core resolved it through the catalog); none keeps the CLI's default. */
   model?: string;
   prompt?: string;
   extraEnv?: Record<string, string>;
@@ -38,17 +38,10 @@ export interface GeminiLaunchOptions {
   command?: string;
 }
 
-/** Emberline model ids -> Gemini CLI's `--model`. */
-const GEMINI_MODELS: ReadonlyMap<string, string> = new Map([
-  ['gemini-pro', 'gemini-2.5-pro'],
-  ['gemini-flash', 'gemini-2.5-flash'],
-  ['gemini-flash-lite', 'gemini-2.5-flash-lite'],
-]);
-
 export function buildGeminiLaunchSpec(options: GeminiLaunchOptions): LaunchSpec {
   const bin = options.command ?? (process.env.EMBERLINE_GEMINI_COMMAND?.trim() || 'gemini');
   const autoApprove = isAutonomousPermissionMode(options.permissionMode);
-  const cliModel = options.model ? GEMINI_MODELS.get(options.model) : undefined;
+  const cliModel = options.model && options.model !== 'auto' ? options.model : undefined;
   // In -p mode, tools that need approval are denied rather than asked.
   const approval = autoApprove
     ? '--yolo '

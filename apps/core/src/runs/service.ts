@@ -230,7 +230,15 @@ import {
 } from '../worktree-config/lifecycle.js';
 import { ensureSetupPackageManager, type ProvisionOutcome } from '../toolchain/package-manager.js';
 import { approvedPreviewService, loadApprovedWorktreeConfig } from '../worktree-config/load.js';
-import { currentRoute as routeOfRow, parseRouteTag, ROUTE_TAG, runModel, runRoutes } from './route.js';
+import {
+  cliModelOf,
+  currentRoute as routeOfRow,
+  launchModel,
+  parseRouteTag,
+  ROUTE_TAG,
+  runModel,
+  runRoutes,
+} from './route.js';
 import {
   isAcceptableTranscriptPath,
   readLastAssistantText,
@@ -1880,13 +1888,25 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // The run's own worktree, never main: a QA run checks its own work. hookUrl is how the runner
     // reaches core (`http://core:7420` in compose); localhost is the runner itself.
     const demoUrl = agentDemoUrl(this.config, this.demoTokens, row.projectId, row.id);
+    // The CLI gets its own id for the route's model, from the catalog. A model it no longer offers
+    // runs on the CLI's default rather than failing, and the run says so. A stand-in for Claude
+    // takes no model at all.
+    const { cliModel, unresolved } =
+      provider.hooks === 'native' && !isRealClaude ? {} : launchModel(row.agent as AgentId, resolvedModel);
+    if (unresolved) {
+      this.note(row.id, 'model_unresolved', {
+        model: unresolved,
+        message: `${provider.displayName} does not list the model ${unresolved}; the run uses ${provider.displayName}'s default model.`,
+      });
+    }
     const spec = provider.launch({
       runId: row.id,
       hookToken,
       coreUrl: this.config.hookUrl,
       hookCommand: this.config.hookCommand,
       permissionMode: row.permissionMode as Run['permissionMode'],
-      model: provider.hooks === 'native' && !isRealClaude ? 'auto' : resolvedModel,
+      model: cliModel,
+      routeModel: resolvedModel,
       prompt: effectivePrompt,
       resumeSessionId: options.resumeSessionId,
       extraEnv,
@@ -2071,7 +2091,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     if (live) this.stallWatch.delete(row.id);
     // The run's agent and model decide how its limit messages read and which quota pool they hit.
     const provider = providerAdapter(row.agent);
-    const limits = { model: runModel(row), timeZone: this.config.timeZone };
+    const limits = {
+      model: runModel(row),
+      cliModel: cliModelOf(row.agent, runModel(row)),
+      timeZone: this.config.timeZone,
+    };
     const step = hookTransition(row, envelope, provider, limits, live);
     Object.assign(patch, step.patch);
     const summary = summarizePayload(payload);

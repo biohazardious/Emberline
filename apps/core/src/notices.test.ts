@@ -1,4 +1,9 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runs } from './db/schema.js';
+import { noticeFableRoutes } from './factory/fable-routes.js';
+import { updateFactorySettings } from './factory/settings.js';
 import { NoticeService } from './notices/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
 
@@ -115,5 +120,105 @@ describe('routes', () => {
       headers: authHeaders(cookie),
     });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('the routes that now really run Fable', () => {
+  const createProject = async (name: string) =>
+    (
+      await t.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name, initGit: false },
+        headers: authHeaders(cookie),
+      })
+    ).json<{ project: { id: string; name: string; path: string } }>().project;
+
+  const ranBefore = (projectId: string, path: string) =>
+    t.db
+      .insert(runs)
+      .values({
+        id: 'old-run',
+        projectId,
+        agent: 'claude',
+        model: 'fable',
+        permissionMode: 'auto',
+        state: 'done',
+        prompt: 'x',
+        worktreePath: path,
+        hookTokenHash: 'h',
+        stateChangedAt: new Date(),
+        createdAt: new Date(),
+        endedAt: new Date(),
+      })
+      .run();
+
+  const item = (title: string, preferredModel: string, status = 'planned') => ({
+    id: `item-${title}`,
+    milestoneId: 'ms-1',
+    title,
+    description: '',
+    persona: 'architect',
+    preferredAgent: 'claude',
+    preferredModel,
+    status,
+    createdAt: new Date().toISOString(),
+  });
+
+  it('lists the persona routes and open roadmap items on Fable, once', async () => {
+    const project = await createProject('Match-3');
+    ranBefore(project.id, project.path);
+    mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(project.path, '.emberline', 'roadmap.json'),
+      JSON.stringify({
+        milestones: [
+          {
+            id: 'ms-1',
+            code: 'M1',
+            title: 'One',
+            status: 'planned',
+            items: [item('Combo scoring', 'fable'), item('Shipped', 'fable', 'done'), item('Menus', 'opus')],
+          },
+        ],
+        suggestions: [],
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    await noticeFableRoutes(t.db, notices);
+    expect(notices.list()).toHaveLength(1);
+    expect(notices.list()[0]!.text).toBe(
+      'Routes on Fable ran on Opus until now; they run on Fable from now on: Product Owner → Claude Fable, System Architect → Claude Fable, Roadmap: Combo scoring (Match-3).',
+    );
+    await noticeFableRoutes(t.db, new NoticeService(t.db));
+    expect(new NoticeService(t.db).list()).toHaveLength(1);
+  });
+
+  it('a fresh install has run nothing on Opus: no notice, and none later', async () => {
+    await noticeFableRoutes(t.db, notices);
+    expect(notices.list()).toEqual([]);
+    const project = await createProject('Later');
+    ranBefore(project.id, project.path);
+    await noticeFableRoutes(t.db, notices);
+    expect(notices.list()).toEqual([]);
+  });
+
+  it('a fallback step on Fable is named as one; an unreadable roadmap is skipped', async () => {
+    const project = await createProject('Broken roadmap');
+    ranBefore(project.id, project.path);
+    mkdirSync(path.join(project.path, '.emberline'), { recursive: true });
+    writeFileSync(path.join(project.path, '.emberline', 'roadmap.json'), '{not json');
+    updateFactorySettings(t.db, {
+      personaRoutes: {
+        product_owner: [{ agent: 'claude', model: 'opus', credential: 'login' }],
+        architect: [{ agent: 'claude', model: 'opus', credential: 'login' }],
+        qa: [
+          { agent: 'claude', model: 'sonnet', credential: 'login' },
+          { agent: 'claude', model: 'fable', credential: 'login' },
+        ],
+      },
+    });
+    await noticeFableRoutes(t.db, notices);
+    expect(notices.list()[0]!.text).toContain('from now on: QA & Test Engineer (fallback 1) → Claude Fable.');
   });
 });

@@ -1,4 +1,4 @@
-import type { Route } from '@emberline/protocol';
+import { type AgentId, MODEL_ID_RE, resolveCliModel, type Route } from '@emberline/protocol';
 import type { runs } from '../db/schema.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -36,4 +36,30 @@ export function currentRoute(
   row: Pick<RunRow, 'routes' | 'routeIndex' | 'agent' | 'model' | 'prompt' | 'credential'>,
 ): Route {
   return { agent: row.agent, model: runModel(row) ?? 'auto', credential: row.credential } as Route;
+}
+
+/** What a route on `auto` has always launched with where that is not the CLI's own default. */
+const AUTO_MODEL: Partial<Record<AgentId, string>> = { antigravity: 'argon' };
+
+/**
+ * The id `agent`'s CLI is launched with for a stored model id, from the catalog. `cliModel`
+ * undefined leaves the CLI on its own default; `unresolved` names a stored id the CLI no longer
+ * offers (or never did), which the run notes. A CLI is only ever handed one safe word.
+ */
+export function launchModel(
+  agent: AgentId,
+  model: string | null | undefined,
+): { cliModel?: string; unresolved?: string } {
+  const named = model && model !== 'auto' ? model : undefined;
+  const wanted = named ?? AUTO_MODEL[agent];
+  if (!wanted) return {};
+  const cliModel = resolveCliModel(agent, wanted);
+  if (cliModel && MODEL_ID_RE.test(cliModel)) return { cliModel };
+  // An `auto` default the catalog lacks is the CLI's own default; nobody named a model.
+  return named ? { unresolved: named } : {};
+}
+
+/** The id the CLI runs `model` as, for reading its limit messages (no default, no note). */
+export function cliModelOf(agent: string, model: string | null | undefined): string | undefined {
+  return model && model !== 'auto' ? launchModel(agent as AgentId, model).cliModel : undefined;
 }

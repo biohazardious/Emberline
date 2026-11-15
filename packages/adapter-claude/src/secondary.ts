@@ -40,7 +40,10 @@ export type SecondaryAgent = 'antigravity' | 'copilot' | 'aider';
 
 export interface SecondaryCliLaunchOptions {
   agent: SecondaryAgent;
+  /** The CLI's own model id, passed to its `--model`; none leaves the CLI on its default. */
   model?: string;
+  /** The route's Emberline model id: the Claude fallback maps it to a Claude tier. */
+  routeModel?: string;
   runId: string;
   hookToken: string;
   coreUrl: string;
@@ -69,7 +72,9 @@ function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, '
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
   const autoApprove = isAutonomousPermissionMode(options.permissionMode);
-  const fallbackModel = resolveClaudeCliModelFlag(options.model) ?? 'sonnet';
+  // The other CLI's id (`gemini-4-argon-high`) means nothing to Claude; the route's id has a tier.
+  const fallbackModel = resolveClaudeCliModelFlag(options.routeModel ?? options.model) ?? 'sonnet';
+  const modelFlag = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
   // The Claude fallback gets the same pre-answered dialogs as a Claude run (its state comes from this
   // script's hooks, so not Claude's own).
   const claudeFallback = `claude --settings "$EMBERLINE_CLAUDE_SETTINGS" --no-chrome --permission-mode ${autoApprove ? 'auto' : 'default'} --model ${fallbackModel} -- "$EMBERLINE_PROMPT"`;
@@ -81,8 +86,6 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   let cliCmd: string;
   if (options.agent === 'antigravity') {
     const bin = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
-    const modelFlag =
-      options.model && options.model !== 'auto' ? `--model ${options.model} ` : '--model argon ';
     const continueFlag = options.resumeSessionId ? '-c ' : '';
     // The agy wrapper may fall back to Gemini CLI, which refuses untrusted folders.
     extraEnv.GEMINI_CLI_TRUST_WORKSPACE = 'true';
@@ -92,14 +95,13 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
   } else if (options.agent === 'copilot') {
     const bin = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
     // Unattended runs may use every tool and never ask; otherwise -p denies what needs approval.
-    const flags = autoApprove ? '--allow-all --no-ask-user ' : '';
+    const flags = `${autoApprove ? '--allow-all --no-ask-user ' : ''}${modelFlag}`;
     extraEnv.COPILOT_AUTO_UPDATE = 'false';
     cliCmd = options.prompt
       ? `if command -v ${bin} >/dev/null 2>&1; then ${bin} ${flags}-p "$EMBERLINE_PROMPT"; elif command -v gh >/dev/null 2>&1 && gh copilot --version >/dev/null 2>&1; then gh copilot suggest -t shell "$EMBERLINE_PROMPT"; else ${claudeFallback}; fi`
       : `if command -v ${bin} >/dev/null 2>&1; then ${`${bin} ${flags}`.trim()}; else claude --model sonnet; fi`;
   } else {
     const bin = process.env.EMBERLINE_AIDER_COMMAND?.trim() || 'aider';
-    const aiderModel = options.model && options.model !== 'auto' ? `--model ${options.model} ` : '';
     // First-run questions (gitignore, release notes, analytics, model warnings, URLs, updates) would
     // wait on the PTY; --no-gitignore also keeps aider from editing the project's .gitignore.
     const quiet =
@@ -109,7 +111,7 @@ export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions):
     const noAttribution =
       '--no-attribute-author --no-attribute-committer --no-attribute-commit-message-author ' +
       '--no-attribute-commit-message-committer --no-attribute-co-authored-by ';
-    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${noAttribution}${aiderModel}`;
+    const flags = `${autoApprove ? '--yes-always ' : ''}${quiet}${noAttribution}${modelFlag}`;
     cliCmd = options.prompt ? `${bin} ${flags}--message "$EMBERLINE_PROMPT"` : `${bin} ${flags}`.trim();
   }
 

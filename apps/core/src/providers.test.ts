@@ -52,8 +52,9 @@ describe('provider adapters', () => {
     expect(
       providerAdapter('codex').launch(ctx({ permissionMode: 'acceptEdits' })).env.EMBERLINE_AUTO_APPROVE,
     ).toBe('0');
-    expect(providerAdapter('gemini').launch(ctx({ model: 'gemini-pro' })).args[1]).toContain(
-      '--yolo --model gemini-2.5-pro -p',
+    // Core hands each adapter the CLI's own id; the adapter passes it as it is.
+    expect(providerAdapter('gemini').launch(ctx({ model: 'gemini-3.8-pro-high' })).args[1]).toContain(
+      '--yolo --model gemini-3.8-pro-high -p',
     );
   });
 

@@ -25,8 +25,13 @@ export interface ProviderLaunchContext {
   coreUrl: string;
   hookCommand?: string;
   permissionMode: AgentPermissionMode;
-  /** Emberline model id (`auto`, `opus`, `gemini-pro`, `o3`, ...); each adapter maps it to its CLI's flag. */
-  model: string;
+  /**
+   * The CLI's own model id (core resolved the route's model through the catalog), passed to the
+   * CLI's `--model` as it is; undefined leaves the CLI on its own default.
+   */
+  model?: string;
+  /** The route's Emberline model id (`auto`, `argon`, ...): what a fallback to another CLI maps from. */
+  routeModel?: string;
   prompt?: string;
   resumeSessionId?: string;
   /** Provider credentials and settings for this run (API keys scoped to this agent). */

@@ -30,6 +30,8 @@ export interface LimitOptions {
   timeZone?: string;
   /** The run's model, when the adapter splits quota pools by model. */
   model?: string | null;
+  /** The id the CLI was launched with for `model`, which is the name its limit messages use. */
+  cliModel?: string | null;
 }
 
 /**

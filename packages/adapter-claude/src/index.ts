@@ -118,6 +118,7 @@ export function secondaryCliAdapter(agent: SecondaryAgent, displayName: string):
       buildSecondaryCliLaunchSpec({
         agent,
         model: launch.model,
+        routeModel: launch.routeModel,
         runId: launch.runId,
         hookToken: launch.hookToken,
         coreUrl: launch.coreUrl,

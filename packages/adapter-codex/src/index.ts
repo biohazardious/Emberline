@@ -28,7 +28,7 @@ export interface CodexLaunchOptions {
   coreUrl: string;
   hookCommand?: string;
   permissionMode?: AgentPermissionMode;
-  /** Emberline model id; anything but `auto` is passed to `--model` as is. */
+  /** Codex CLI's own model id (core resolved it through the catalog); none or `auto` keeps its default. */
   model?: string;
   prompt?: string;
   extraEnv?: Record<string, string>;

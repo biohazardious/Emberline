@@ -168,9 +168,15 @@ export function rateLimitFromCodexTranscript(
   };
 }
 
+/**
+ * The run's own pool when the limit names its model, by the route's id or by the id the CLI was
+ * launched with (a built-in `o3` launched as the catalog's `o3-pro`); `*` otherwise.
+ */
 function poolFor(text: string, options: LimitOptions): string {
-  const model = MODEL_LIMIT.exec(text)?.[1];
-  return model && model === options.model ? model : '*';
+  // A model at the end of a sentence carries its full stop.
+  const named = MODEL_LIMIT.exec(text)?.[1]?.replace(/\.+$/, '');
+  if (!named || !options.model) return '*';
+  return named === options.model || named === options.cliModel ? options.model : '*';
 }
 
 /**

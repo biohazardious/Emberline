@@ -41,6 +41,25 @@ describe('Gemini limits from the failure hook', () => {
     expect(transientErrorFromGeminiHook('StopFailure', payload, UTC)).toBeUndefined();
   });
 
+  it('"this model" on a discovered model is its family\'s pool, the one its route waits in', () => {
+    const payload = hookFixture('hook-code-assist-capacity.json');
+    expect(
+      rateLimitFromGeminiHook('StopFailure', payload, { ...UTC, model: 'gemini-3.8-flash-high' })?.pool,
+    ).toBe('gemini-flash');
+    // A built-in id launched as a discovered one.
+    expect(
+      rateLimitFromGeminiHook('StopFailure', payload, {
+        ...UTC,
+        model: 'gemini-pro',
+        cliModel: 'gemini-3.8-pro-high',
+      })?.pool,
+    ).toBe('gemini-pro');
+    // An id with no family has no pool to name.
+    expect(rateLimitFromGeminiHook('StopFailure', payload, { ...UTC, model: 'gemini-exp-1206' })?.pool).toBe(
+      '*',
+    );
+  });
+
   it('reads the Gemini API key quota from the raw error body, with the model pool and retry delay', () => {
     expect(rateLimitFromGeminiHook('StopFailure', hookFixture('hook-api-key-quota.json'), UTC)).toEqual({
       message:

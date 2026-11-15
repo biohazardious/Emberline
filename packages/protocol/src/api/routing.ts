@@ -1,5 +1,6 @@
 /** API contracts: quota-aware routing (fallback chains, lanes, policy). */
 import { z } from 'zod';
+import { BUILTIN_MODELS } from './model-catalog.js';
 import { AgentId, AgentModelId } from './runs.js';
 
 export const MAX_ROUTES = 4;
@@ -62,11 +63,34 @@ export interface Lane {
   pool: string;
 }
 
-/** The quota pool a model draws from; `*` when the model is unknown or `auto`. */
+/**
+ * Claude's and Gemini's quotas are per model family, and their limit messages name the family
+ * (Claude's "Opus weekly limit", Gemini's "gemini-3.8-pro"): a discovered id joins its family's pool.
+ */
+const FAMILY_POOLS: Partial<Record<string, readonly [RegExp, string][]>> = {
+  claude: [
+    [/(^|-)fable(-|$)/, 'fable'],
+    [/(^|-)opus(-|$)/, 'opus'],
+    [/(^|-)sonnet(-|$)/, 'sonnet'],
+    [/(^|-)haiku(-|$)/, 'haiku'],
+  ],
+  gemini: [
+    [/gemini-[\d.]+-flash-lite\b/, 'gemini-flash-lite'],
+    [/gemini-[\d.]+-flash\b/, 'gemini-flash'],
+    [/gemini-[\d.]+-pro\b/, 'gemini-pro'],
+  ],
+};
+
+/**
+ * The quota pool a model draws from; `*` (the provider's) when the model is `auto` or has no pool
+ * of its own. Built-in ids are their own pools; a discovered id joins its family's, and Codex,
+ * whose limits name the exact model, keeps one pool per id.
+ */
 export function quotaPoolFor(agent: string, model: string | null | undefined): string {
   if (!model || model === 'auto') return '*';
   if (agent === 'antigravity') return model.startsWith('gemini') ? 'gemini' : model;
-  return model;
+  if (agent === 'codex' || (BUILTIN_MODELS[agent as AgentId] ?? []).some((m) => m.id === model)) return model;
+  return FAMILY_POOLS[agent]?.find(([pattern]) => pattern.test(model))?.[1] ?? '*';
 }
 
 export function laneOf(route: { agent: string; model: string | null | undefined; credential: string }): Lane {

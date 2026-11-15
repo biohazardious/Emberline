@@ -299,6 +299,9 @@ export class ModelDiscovery {
   /** Once when the runner first connects (now, if it already is), then every interval. */
   start(): void {
     if (this.stopped || this.timer) return;
+    // The last list read counts from the start: a run launched before the first read resolves
+    // its model against it rather than against the built-ins alone.
+    publishCatalog(this.deps.db);
     this.timer = setInterval(() => this.refreshInBackground(), this.intervalMs);
     this.timer.unref?.();
     this.deps.ptyd.on('status', this.onStatus);

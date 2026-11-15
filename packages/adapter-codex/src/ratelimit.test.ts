@@ -65,6 +65,27 @@ describe('Codex limits from the failure hook (first signal)', () => {
     expect(transientErrorFromCodexHook('StopFailure', payload, UTC)).toBeUndefined();
   });
 
+  it("a limit naming the run's model is that model's pool, also when the CLI was given another id", () => {
+    const limited = (model: string) => ({
+      error: 'cli_exit',
+      reason: `ERROR: You've hit your usage limit for ${model}. Try again at 3:42 PM.`,
+    });
+    // A discovered model: its id is what the CLI prints and what the route stores.
+    expect(
+      rateLimitFromCodexHook('StopFailure', limited('gpt-5.4-codex'), { ...UTC, model: 'gpt-5.4-codex' })
+        ?.pool,
+    ).toBe('gpt-5.4-codex');
+    // A built-in id launched as the catalog's id: the pool is the route's, which is what waits.
+    expect(
+      rateLimitFromCodexHook('StopFailure', limited('o3-pro'), { ...UTC, model: 'o3', cliModel: 'o3-pro' })
+        ?.pool,
+    ).toBe('o3');
+    // Another model's limit says nothing about which of the run's pools is out.
+    expect(rateLimitFromCodexHook('StopFailure', limited('gpt-5.5'), { ...UTC, model: 'o3' })?.pool).toBe(
+      '*',
+    );
+  });
+
   it('ignores a clean exit', () => {
     expect(rateLimitFromCodexHook('Stop', {}, UTC)).toBeUndefined();
     expect(codexAdapter.nextState('working', 'Stop', {}, UTC)).toBe('done');

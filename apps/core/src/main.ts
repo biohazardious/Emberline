@@ -18,6 +18,7 @@ import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { startupWarnings } from './startup-warnings.js';
 import { ModelDiscovery } from './models/discovery.js';
+import { noticeFableRoutes } from './factory/fable-routes.js';
 import { NoticeService } from './notices/service.js';
 import { TicketService } from './tickets/service.js';
 import { ToolchainService } from './toolchain/service.js';
@@ -163,6 +164,10 @@ commands.on('status', (status) => {
   }
 });
 discovery.start();
+// After the catalog is published: the routes that ran on Opus while they named Fable, once.
+void noticeFableRoutes(db, notices).catch((err: unknown) =>
+  app.log.warn({ err }, 'could not list the routes that now run Fable'),
+);
 ops?.start();
 ptyd.start();
 runs.startReconciler();

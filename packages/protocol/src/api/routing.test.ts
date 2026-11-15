@@ -12,6 +12,23 @@ describe('routing helpers', () => {
     expect(quotaPoolFor('claude', 'auto')).toBe('*');
   });
 
+  it("a discovered model joins its family's pool, else the provider's", () => {
+    expect(quotaPoolFor('antigravity', 'gemini-4-hydrogen-xhigh')).toBe(
+      quotaPoolFor('antigravity', 'gemini-pro'),
+    );
+    expect(quotaPoolFor('claude', 'claude-opus-4-8')).toBe('opus');
+    expect(quotaPoolFor('claude', 'claude-fable-5')).toBe('fable');
+    expect(quotaPoolFor('claude', 'claude-mythos-5')).toBe('*');
+    expect(quotaPoolFor('gemini', 'gemini-3.8-flash-high')).toBe('gemini-flash');
+    expect(quotaPoolFor('gemini', 'gemini-3.8-flash-lite')).toBe('gemini-flash-lite');
+    expect(quotaPoolFor('gemini', 'gemini-3.8-pro-high')).toBe('gemini-pro');
+    expect(quotaPoolFor('gemini', 'gemini-pro')).toBe('gemini-pro');
+    expect(quotaPoolFor('copilot', 'gpt-5.4')).toBe('*');
+    expect(quotaPoolFor('copilot', 'gpt-4o')).toBe('gpt-4o');
+    // Codex names the exact model a limit is for, so each model is its own pool.
+    expect(quotaPoolFor('codex', 'gpt-5.4-codex')).toBe('gpt-5.4-codex');
+  });
+
   it('a provider-wide window covers every pool of the same agent and credential only', () => {
     const wide = { agent: 'antigravity', credential: 'login', pool: '*' };
     expect(laneCovers(wide, laneOf({ agent: 'antigravity', model: 'argon', credential: 'login' }))).toBe(

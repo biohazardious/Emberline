@@ -51,11 +51,23 @@ export function isGeminiLimitText(text: string): boolean {
   return LIMIT_PATTERN.test(text);
 }
 
-/** The pool a limit names, or the run's own model for "on this model"; `*` when neither is known. */
+/** The pool of an Emberline id (`gemini-pro`) or a Gemini CLI id (`gemini-3.8-pro-high`), if it has one. */
+function poolOf(model: string | null | undefined): string | undefined {
+  if (!model) return undefined;
+  return (
+    MODEL_POOLS.find(([, pool]) => pool === model)?.[1] ??
+    MODEL_POOLS.find(([pattern]) => pattern.test(model))?.[1]
+  );
+}
+
+/**
+ * The pool a limit names, or the run's own model's for "on this model"; `*` when neither is known.
+ * The run's own pool is the one protocol's `quotaPoolFor` gives its route.
+ */
 function poolFor(text: string, options: LimitOptions): string {
   for (const [pattern, pool] of MODEL_POOLS) if (pattern.test(text)) return pool;
-  const own = MODEL_POOLS.find(([, pool]) => pool === options.model);
-  return own && /\bthis model\b/i.test(text) ? own[1] : '*';
+  const own = poolOf(options.model) ?? poolOf(options.cliModel);
+  return own && /\bthis model\b/i.test(text) ? own : '*';
 }
 
 /**

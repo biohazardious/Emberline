@@ -15,15 +15,17 @@ describe('buildGeminiLaunchSpec', () => {
     expect(unattended.env.EMBERLINE_AUTO_APPROVE).toBe('1');
   });
 
-  it('trusts the fresh worktree and maps Emberline model ids', () => {
+  it("trusts the fresh worktree and passes Gemini CLI's own model id as it is", () => {
     const spec = buildGeminiLaunchSpec({
       ...base,
-      model: 'gemini-flash-lite',
+      model: 'gemini-3.8-flash-high',
       extraEnv: { GEMINI_API_KEY: 'k' },
     });
     expect(spec.env).toMatchObject({ GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_API_KEY: 'k' });
-    expect(script(spec)).toContain('--model gemini-2.5-flash-lite -p');
-    expect(script(buildGeminiLaunchSpec({ ...base, model: 'opus' }))).not.toContain('--model');
+    expect(script(spec)).toContain('--model gemini-3.8-flash-high -p');
+    expect(script(spec)).not.toContain('gemini-2.5');
+    expect(script(buildGeminiLaunchSpec({ ...base }))).not.toContain('--model');
+    expect(script(buildGeminiLaunchSpec({ ...base, model: 'auto' }))).not.toContain('--model');
   });
 
   it('starts interactively without a prompt and carries no Emberline MCP tooling', () => {

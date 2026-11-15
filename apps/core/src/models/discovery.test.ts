@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type AgentId, type CliToolStatus, setModelCatalog } from '@emberline/protocol';
+import { type AgentId, type CliToolStatus, resolveCliModel, setModelCatalog } from '@emberline/protocol';
 import { PtydClient } from '@emberline/ptyd/client';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -288,6 +288,37 @@ describe('triggers', () => {
     ptyd.available = true;
     ops.emit('status', 'connected');
     await vi.waitFor(() => expect(job).toHaveBeenCalledTimes(1));
+    await d.stop();
+  });
+
+  it('publishes the stored list on start, before any read: runs launched meanwhile resolve against it', async () => {
+    setSetting(opened.db, 'models.catalog', {
+      antigravity: {
+        models: [
+          {
+            id: 'gemini-4-argon-high',
+            label: 'Argon (High)',
+            shortLabel: 'gemini-4-argon-high',
+            rank: 4,
+            tier: 'high',
+            badge: 'discovered',
+            capabilities: [],
+            description: '',
+            source: 'cli',
+            missingSince: null,
+            firstSeen: '2026-11-14T10:00:00.000Z',
+            lastSeen: '2026-11-14T10:00:00.000Z',
+          },
+        ],
+        read: null,
+      },
+    });
+    const ptyd = new FakePtyd();
+    ptyd.status = 'connecting';
+    const d = discovery({ ptyd, jobs: {} });
+    expect(resolveCliModel('antigravity', 'argon')).toBeNull();
+    d.start();
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-high');
     await d.stop();
   });
 

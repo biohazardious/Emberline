@@ -26,7 +26,7 @@ import { HttpError } from '../errors.js';
 import { getQuotaPolicy, routeUsable } from '../factory/settings.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { providerAdapter } from '../runs/providers.js';
-import { currentRoute, runRoutes } from '../runs/route.js';
+import { cliModelOf, currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import { MAX_TIMER_MS, nextWakeAt } from './next-wake.js';
 
@@ -544,6 +544,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       ? providerAdapter(run.agent).rateLimitFromScreen(screen, {
           timeZone: this.config.timeZone,
           model: run.model,
+          cliModel: cliModelOf(run.agent, run.model),
         })
       : undefined;
     if (onScreen?.resetsAt) {
