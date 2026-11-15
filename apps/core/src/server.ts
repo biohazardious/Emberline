@@ -37,6 +37,7 @@ import { registerForgeAccountRoutes } from './routes/forge-accounts.js';
 import { registerSshKeyRoutes } from './routes/ssh-keys.js';
 import { sshKeyMissingProjects } from './ssh-keys/remote.js';
 import { registerIssueRoutes } from './routes/issues.js';
+import { registerModelRoutes } from './routes/models.js';
 import { registerNoticeRoutes } from './routes/notices.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerProjectImportRoutes } from './routes/project-import.js';
@@ -363,6 +364,7 @@ export async function buildServer(
   registerCronRoutes(app, cron);
   registerUpdateRoutes(app, updates);
   registerNoticeRoutes(app, notices);
+  registerModelRoutes(app, deps.db, discovery);
   registerEventRoutes(app, deps.runs, deps.tickets, deps.scheduler, presence, notices);
 
   const { webDir } = deps.config;

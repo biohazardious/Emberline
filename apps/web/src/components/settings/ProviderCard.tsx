@@ -16,6 +16,7 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { ProviderMark } from '../ProviderMark';
+import { ProviderModels } from './ProviderModels';
 import { ico } from '../SectionState';
 import {
   OAUTH_LOGIN_PROVIDERS,
@@ -249,6 +250,8 @@ export function ProviderCard({
             );
           })}
         </div>
+
+        <ProviderModels providerId={providerId} />
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>

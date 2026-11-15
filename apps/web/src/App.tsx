@@ -32,6 +32,7 @@ import { ProjectWizard } from './components/wizard/WizardShell';
 import { keptWorktreesSummary } from './gcSummary';
 import { setPresenceRun } from './hooks/eventHub';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
+import { useModelCatalog } from './modelCatalog';
 import { useTrackPageViews } from './hooks/navigation';
 import { useApi } from './hooks/useApi';
 import { useAttention } from './hooks/useAttention';
@@ -90,6 +91,7 @@ function Shell() {
   const claudeUsage = useApi<ClaudeUsageTelemetry>('/api/factory/claude-usage', 30_000);
   const factorySettings = useApi<FactorySettings>('/api/factory/settings', 15_000);
   const { runs, loading: runsLoading, error: runsError, refresh: refreshRuns } = useRuns();
+  useModelCatalog();
   const { scheduler } = useScheduler();
 
   const queryClient = useQueryClient();

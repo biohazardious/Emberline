@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '../api';
 import { ticketEventRecomputesAttention } from '../attention';
+import { invalidateModelCatalog } from '../modelCatalog';
 import { toastError } from '../toast';
 import { upsert, useEvents } from './useEvents';
 
@@ -63,6 +64,7 @@ export function LiveEvents(): null {
       void client.invalidateQueries({ queryKey: ['run-recovery'] });
       void client.invalidateQueries({ queryKey: liveKeys.scheduler });
       void client.invalidateQueries({ queryKey: ['api', '/api/notices'] });
+      void invalidateModelCatalog(client);
     },
   );
   return null;
