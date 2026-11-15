@@ -131,6 +131,23 @@ describe('refresh', () => {
     expect(reads.claude).toMatchObject({ ok: true, cliVersion: '1.2.3' });
   });
 
+  it("never reads aider: its listing is not the account's, so its models are added by hand", async () => {
+    enable(['aider']);
+    updateFactorySettings(opened.db, { anthropicApiKey: 'sk-ant-test', openaiApiKey: 'sk-test' });
+    const ptyd = new FakePtyd();
+    const exec = vi.fn();
+    const spawn = vi.fn();
+    ptyd.client = { exec, spawn } as never;
+    expect(DISCOVERY_JOBS.aider).toBeUndefined();
+    const d = discovery({ ptyd, toolchain: fakeToolchain(['aider']) });
+    expect(await d.refresh()).toEqual({});
+    expect(await d.refresh('aider')).toEqual({});
+    expect(exec).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(readCatalog(opened.db).aider).toEqual({ models: [], read: null });
+    expect(notices.list()).toEqual([]);
+  });
+
   it('reads a provider whose command is overridden even when the toolchain does not know it', async () => {
     const d = discovery({
       toolchain: fakeToolchain([]),

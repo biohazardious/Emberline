@@ -36,17 +36,6 @@ export function parseAgyModels(text: string): Listed[] {
   return collect(entries);
 }
 
-/** `aider --list-models <prefix>` prints a header, then `- <id>` lines; anything else is noise. */
-export function parseAiderModels(text: string, prefixes: string[]): Listed[] {
-  const entries: Listed[] = [];
-  for (const line of lines(text)) {
-    if (!line.startsWith('- ')) continue;
-    const id = line.slice(2).trim();
-    if (prefixes.some((p) => id.startsWith(p))) entries.push({ id, label: id });
-  }
-  return collect(entries);
-}
-
 /**
  * `codex debug models` prints the signed-in account's model catalog as one JSON object,
  * `{"models":[…]}` (written against codex-cli 0.169.0). Only `visibility: "list"` entries are shown in
@@ -118,10 +107,7 @@ export function parseCopilotModels(text: string): Listed[] | null {
 /** The script (shipped in the runner's wrappers) that lists Copilot's models; see that file. */
 export const COPILOT_MODELS_SCRIPT = 'emberline-copilot-models.mjs';
 
-export function listCommandsFor(
-  agent: AgentId,
-  opts: { aiderPrefixes: string[] },
-): { file: string; args: string[] }[] {
+export function listCommandsFor(agent: AgentId): { file: string; args: string[] }[] {
   if (agent === 'antigravity') {
     const file = process.env.EMBERLINE_ANTIGRAVITY_COMMAND?.trim() || 'agy';
     return [{ file, args: ['--log-file', '/dev/null', 'models'] }];
@@ -135,9 +121,6 @@ export function listCommandsFor(
   if (agent === 'copilot') {
     const copilot = process.env.EMBERLINE_COPILOT_COMMAND?.trim() || 'copilot';
     return [{ file: COPILOT_MODELS_SCRIPT, args: [copilot] }];
-  }
-  if (agent === 'aider') {
-    return opts.aiderPrefixes.map((p) => ({ file: 'aider', args: ['--list-models', p] }));
   }
   return [];
 }

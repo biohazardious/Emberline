@@ -25,13 +25,7 @@ import {
   readCatalog,
   recordReadFailure,
 } from './catalog.js';
-import {
-  listCommandsFor,
-  parseAgyModels,
-  parseAiderModels,
-  parseCodexModels,
-  parseCopilotModels,
-} from './list-command.js';
+import { listCommandsFor, parseAgyModels, parseCodexModels, parseCopilotModels } from './list-command.js';
 import { CLAUDE_PICKER, CLAUDE_PROBE_ENV, parseClaudePicker, type PickerModel } from './parsers/claude.js';
 import { PickerError, type PickerScript, readPicker } from './picker.js';
 
@@ -79,13 +73,6 @@ export const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
 /** CLIs whose first-run questions `emberline-cli-seed` pre-answers in their config files. */
 const SEEDED = new Set<AgentId>(['antigravity', 'copilot', 'gemini']);
 
-/** Key env var → the litellm prefix aider lists that vendor's models under. */
-const AIDER_PREFIXES: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'anthropic/',
-  OPENAI_API_KEY: 'openai/',
-  GEMINI_API_KEY: 'gemini/',
-};
-
 /**
  * Runs the CLI from the scratch folder (created if missing), after the seed for CLIs that have one,
  * with the runner-tools volume on PATH. Every value is a positional argument, never shell text.
@@ -113,7 +100,6 @@ export interface JobContext {
   cwd: string;
   /** The credential env and the first-run answers for this CLI. */
   env: Record<string, string>;
-  aiderPrefixes: string[];
   /** Time the job may use; the hard timeout comes a little after it. */
   deadlineMs: number;
   /** Registers how to stop the job when its hard timeout fires (kill its terminal, cancel its command). */
@@ -122,7 +108,7 @@ export interface JobContext {
   onSession(id: string): void;
 }
 
-/** A provider's read: the models found, or null when there is nothing to read (aider without a key). */
+/** A provider's read: the models found, or null when there is nothing to read (Codex without a login). */
 export type DiscoveryJob = (
   ctx: JobContext,
 ) => Promise<{ models: DiscoveryResult['models']; source: DiscoveryResult['source'] } | null>;
@@ -136,7 +122,7 @@ export function listingJob(
   parse: (stdout: string, ctx: JobContext) => DiscoveryResult['models'] | null,
 ): DiscoveryJob {
   return async (ctx) => {
-    const commands = listCommandsFor(ctx.agent, { aiderPrefixes: ctx.aiderPrefixes });
+    const commands = listCommandsFor(ctx.agent);
     if (commands.length === 0) return null;
     let running: string | undefined;
     let stopped = false;
@@ -228,13 +214,16 @@ const readCodexListing = listingJob((stdout) => parseCodexModels(stdout));
 const codexJob: DiscoveryJob = (ctx) =>
   hasCodexLogin(ctx.cwd) ? readCodexListing(ctx) : Promise.resolve(null);
 
-/** The providers discovery can read. Gemini CLI has none: its models are added by hand. */
+/**
+ * The providers discovery can read. Gemini CLI has no list to read, and aider's listing is litellm's
+ * offline table of every model it knows (retired ones too), not what the account offers: both get
+ * their models by hand, and aider's own aliases (`sonnet`, `opus`, …) launch as they are.
+ */
 export const DISCOVERY_JOBS: Partial<Record<AgentId, DiscoveryJob>> = {
   claude: pickerJob(CLAUDE_PICKER, parseClaudePicker),
   antigravity: listingJob((stdout) => parseAgyModels(stdout)),
   codex: codexJob,
   copilot: listingJob((stdout) => parseCopilotModels(stdout)),
-  aider: listingJob((stdout, ctx) => parseAiderModels(stdout, ctx.aiderPrefixes)),
 };
 
 interface StatusEvents {
@@ -484,7 +473,6 @@ export class ModelDiscovery {
             probeCommand: (file, args) => this.probeCommand(agent, file, args),
             cwd: this.runnerHome,
             env: this.envFor(agent),
-            aiderPrefixes: this.aiderPrefixes(),
             deadlineMs: Math.max(1_000, this.timeoutMs - READER_MARGIN_MS),
             onStop: (stop) => {
               stopJob = stop;
@@ -548,13 +536,5 @@ export class ModelDiscovery {
       credential.CODEX_API_KEY = credential.OPENAI_API_KEY;
     }
     return { ...credential, ...PROBE_ENV[agent] };
-  }
-
-  /** The vendors aider has a stored key for. */
-  private aiderPrefixes(): string[] {
-    const env = getProviderEnvFromSettings(this.deps.db, 'aider');
-    return Object.keys(AIDER_PREFIXES)
-      .filter((key) => env[key])
-      .map((key) => AIDER_PREFIXES[key]!);
   }
 }

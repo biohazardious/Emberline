@@ -4,7 +4,6 @@ import {
   COPILOT_MODELS_SCRIPT,
   listCommandsFor,
   parseAgyModels,
-  parseAiderModels,
   parseCodexModels,
   parseCopilotModels,
 } from './list-command.js';
@@ -23,14 +22,6 @@ describe('parseAgyModels', () => {
   it('drops invalid ids, blanks and duplicates, and tolerates CRLF', () => {
     const text = 'Fetching available models...\r\nbad id\tX\r\n$(rm)\tX\r\n\r\na-1\tOne\r\na-1\tAgain\r\n';
     expect(parseAgyModels(text)).toEqual([{ id: 'a-1', label: 'One' }]);
-  });
-});
-
-describe('parseAiderModels', () => {
-  const sample =
-    'Models which match "openai/":\n- openai/gpt-4o\n- openai/gpt-4o\n- azure/gpt-4o\n- openai/bad id\n\nnoise\n';
-  it('keeps only ids under the given prefixes', () => {
-    expect(parseAiderModels(sample, ['openai/'])).toEqual([{ id: 'openai/gpt-4o', label: 'openai/gpt-4o' }]);
   });
 });
 
@@ -105,31 +96,27 @@ describe('listCommandsFor', () => {
     delete process.env.EMBERLINE_COPILOT_COMMAND;
   });
   it("reads the account's Codex catalog, honouring the command override", () => {
-    expect(listCommandsFor('codex', { aiderPrefixes: [] })).toEqual([
+    expect(listCommandsFor('codex')).toEqual([
       { file: 'codex', args: ['-c', 'check_for_update_on_startup=false', 'debug', 'models'] },
     ]);
     process.env.EMBERLINE_CODEX_COMMAND = '/x/codex';
-    expect(listCommandsFor('codex', { aiderPrefixes: [] })[0]?.file).toBe('/x/codex');
+    expect(listCommandsFor('codex')[0]?.file).toBe('/x/codex');
   });
   it("runs the Copilot listing script against Copilot's command", () => {
-    expect(listCommandsFor('copilot', { aiderPrefixes: [] })).toEqual([
-      { file: COPILOT_MODELS_SCRIPT, args: ['copilot'] },
-    ]);
+    expect(listCommandsFor('copilot')).toEqual([{ file: COPILOT_MODELS_SCRIPT, args: ['copilot'] }]);
     process.env.EMBERLINE_COPILOT_COMMAND = ' /x/copilot ';
-    expect(listCommandsFor('copilot', { aiderPrefixes: [] })[0]?.args).toEqual(['/x/copilot']);
+    expect(listCommandsFor('copilot')[0]?.args).toEqual(['/x/copilot']);
   });
   it('lists agy models, honouring the command override', () => {
-    expect(listCommandsFor('antigravity', { aiderPrefixes: [] })).toEqual([
+    expect(listCommandsFor('antigravity')).toEqual([
       { file: 'agy', args: ['--log-file', '/dev/null', 'models'] },
     ]);
     process.env.EMBERLINE_ANTIGRAVITY_COMMAND = ' /x/agy ';
-    expect(listCommandsFor('antigravity', { aiderPrefixes: [] })[0]?.file).toBe('/x/agy');
+    expect(listCommandsFor('antigravity')[0]?.file).toBe('/x/agy');
   });
-  it('gives aider one command per prefix and other agents none', () => {
-    expect(listCommandsFor('aider', { aiderPrefixes: ['openai/', 'gemini/'] })).toEqual([
-      { file: 'aider', args: ['--list-models', 'openai/'] },
-      { file: 'aider', args: ['--list-models', 'gemini/'] },
-    ]);
-    expect(listCommandsFor('claude', { aiderPrefixes: [] })).toEqual([]);
+  it('has no listing for aider, Gemini CLI or the picker-read Claude', () => {
+    expect(listCommandsFor('aider')).toEqual([]);
+    expect(listCommandsFor('gemini')).toEqual([]);
+    expect(listCommandsFor('claude')).toEqual([]);
   });
 });

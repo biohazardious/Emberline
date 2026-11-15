@@ -6,11 +6,11 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ### Added
 
-- **Model discovery.** Emberline reads each CLI's own model list, so a new model shows in the pickers without an Emberline release. Claude Code is read from its `/model` picker, Antigravity and aider from their own listings, Codex from `codex debug models` (only with a Codex login: signed out, the CLI lists a catalog that is not yours) and Copilot from its own session. It reads when a runner first connects, once a day, after a CLI is installed or updated, and on **Refresh models**. Reading a picker opens it in a background terminal and changes none of the CLI's settings.
+- **Model discovery.** Emberline reads each CLI's own model list, so a new model shows in the pickers without an Emberline release. Claude Code is read from its `/model` picker, Antigravity from its own listing, Codex from `codex debug models` (only with a Codex login: signed out, the CLI lists a catalog that is not yours) and Copilot from its own session. It reads when a runner first connects, once a day, after a CLI is installed or updated, and on **Refresh models**. Reading a picker opens it in a background terminal and changes none of the CLI's settings.
 - New models appear in the pickers but are never picked for you: a route or an agent keeps the model it had.
 - **Inbox** notices: one when new models were found (naming them), one when a provider's list could not be read, and a one-time notice that routes set to Fable now run Fable.
 - **Settings → Providers** shows each provider's model list with **Refresh models**, and lets you add a model by hand or remove one.
-- Known limits: a free Copilot account lists no model beyond Auto, and Gemini CLI has no list to read, so add its models by hand.
+- Known limits: a free Copilot account lists no model beyond Auto. Gemini CLI has no list to read, and aider's list is every model it knows of rather than the ones your keys reach, so neither is read: add their models by hand. Aider's own names (`sonnet`, `opus`, …) work as before.
 
 ### Fixed
 
