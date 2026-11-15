@@ -535,6 +535,16 @@ export class ToolchainService {
   }
 
   /**
+   * A production start's tool work: the retired tools go first, then missing CLIs are installed.
+   * npm does not lock a global prefix, so an uninstall and an install on it at once could fail or
+   * leave it half written. Never throws (both only log).
+   */
+  async startupTools(): Promise<void> {
+    await this.removeRetiredTools();
+    this.ensureEnabledProvidersInstalled();
+  }
+
+  /**
    * Tools Emberline no longer offers are taken off the tools volume, once. Today that is the Gemini
    * CLI; the flag is set after the check whether or not anything was there, so a later manual
    * install is never undone. Waits for the runner; if it never connects the flag stays unset and

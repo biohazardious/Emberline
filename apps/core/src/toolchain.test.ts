@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PtydServer } from '@emberline/ptyd/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSetting } from './db/index.js';
 import { createTestApp, type TestApp } from './test-utils.js';
 import {
@@ -99,6 +99,21 @@ describe('ToolchainService', () => {
       await toolchain.removeRetiredTools();
       expect(calls()).toHaveLength(1);
     });
+  });
+
+  it('at a start, installs missing CLIs only once the retired ones are gone (one npm at a time)', async () => {
+    const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+    let removed!: () => void;
+    vi.spyOn(toolchain, 'removeRetiredTools').mockReturnValue(new Promise<void>((r) => (removed = r)));
+    const install = vi
+      .spyOn(toolchain, 'ensureEnabledProvidersInstalled')
+      .mockImplementation(() => undefined);
+    const started = toolchain.startupTools();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(install).not.toHaveBeenCalled();
+    removed();
+    await started;
+    expect(install).toHaveBeenCalledOnce();
   });
 
   it('runs CLI installs as runner sessions and reports their output', async () => {

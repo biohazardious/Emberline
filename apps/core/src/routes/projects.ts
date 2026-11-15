@@ -1161,8 +1161,7 @@ export function registerProjectRoutes(
   );
 
   if (process.env.NODE_ENV === 'production') {
-    void toolchain.removeRetiredTools();
-    toolchain.ensureEnabledProvidersInstalled();
+    void toolchain.startupTools();
   }
 
   app.get('/api/toolchain/status', async (): Promise<ToolchainStatusResponse> => toolchain.getStatus());
