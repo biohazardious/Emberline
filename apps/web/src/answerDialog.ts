@@ -129,6 +129,7 @@ const RECOVERY_CODES: ReadonlySet<string> = new Set([
   'worktree_missing',
   'run_stopped_by_you',
   'not_held',
+  'agent_removed',
 ]);
 
 /** Core's own messages are plain sentences; the states the dialog explains itself and recovery's refusals are mapped. */

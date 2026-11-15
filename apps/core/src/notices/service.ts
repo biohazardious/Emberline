@@ -122,7 +122,7 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
         kind: 'gemini_removed',
         key: 'gemini_removed',
         title: 'Gemini CLI was removed',
-        text: `Emberline no longer runs Gemini CLI; Antigravity stays.${moved} Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.`,
+        text: `Emberline no longer runs Gemini CLI; Antigravity stays.${moved} Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.`,
         link: SETTINGS_LINK,
       },
       now,

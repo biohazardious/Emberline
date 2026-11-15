@@ -19,6 +19,8 @@ export const deliveryNote = (delivery: 'session' | 'successor'): string =>
 
 const NO_PROMPT = "This run can't take a prompt any more. Start a new run or discard the ticket.";
 const STOPPED = "This run was stopped, so it can't take a prompt. Start a new run or discard the ticket.";
+/** Core's `agent_removed` refusal: an old run on Gemini CLI, which Emberline no longer runs. */
+export const AGENT_REMOVED_TEXT = 'Gemini CLI is no longer supported. Hand this run off to another agent.';
 
 /** Plain text for a `/recover` refusal; other codes (route checks) keep the server's message. */
 export function recoverErrorText(code: string, message: string): string {
@@ -33,6 +35,8 @@ export function recoverErrorText(code: string, message: string): string {
       return STOPPED;
     case 'no_session':
       return NO_PROMPT;
+    case 'agent_removed':
+      return AGENT_REMOVED_TEXT;
     default:
       // Route checks (the successor's lane is out of quota, its agent needs Autonomous mode), a prompt
       // too long to go with a successor's handoff context and a one-shot agent still closing its

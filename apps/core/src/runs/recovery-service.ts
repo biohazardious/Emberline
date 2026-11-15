@@ -10,7 +10,7 @@ import { KeyedMutex } from '../keyed-mutex.js';
 import type { Scheduler } from '../scheduler/service.js';
 import { currentHold, handoffChain } from './hold-outcome.js';
 import { buildRecovery, type ConflictInFlight, type RecoveryInput } from './recovery.js';
-import { isHeldRun, type RunService } from './service.js';
+import { isHeldRun, refuseRemovedAgent, type RunService } from './service.js';
 
 /** The handoff reason of a held run that continues in a successor. */
 export const CONTINUED_AFTER_HOLD = 'continued after a hold';
@@ -120,6 +120,8 @@ export class RecoveryService {
    * refuse before doing anything else (the Answer dialog writes attachments first).
    */
   assertDeliverable(run: Run): void {
+    // Neither its own session nor a successor on its route can run Gemini CLI any more.
+    refuseRemovedAgent(run);
     if (BUSY_STATES.has(run.state)) throw busy(run);
     if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
     const delivery = this.deliveryFor(run);
@@ -134,6 +136,7 @@ export class RecoveryService {
   async recover(runId: string, text: string): Promise<RecoverResponse> {
     return this.delivering.run(runId, async () => {
       const run = this.runs.getRun(runId);
+      refuseRemovedAgent(run);
       if (BUSY_STATES.has(run.state)) throw busy(run);
       if (!isHeldRun(run)) throw new HttpError(409, 'not_held', 'nothing holds this run any more');
       const delivery = this.deliveryFor(run);

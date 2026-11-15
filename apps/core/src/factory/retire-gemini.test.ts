@@ -80,6 +80,7 @@ describe('retiring Gemini CLI on upgrade', () => {
     });
     expect(notice!.text).toContain('QA & Test Engineer → Antigravity gemini-flash');
     expect(notice!.text).toContain('The Gemini API key stays for Aider.');
+    expect(notice!.text).toContain('Antigravity now needs its own Google sign-in');
   });
 
   it("drops the step when Antigravity is not enabled, and the chain's next step takes over", () => {

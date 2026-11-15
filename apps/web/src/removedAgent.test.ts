@@ -1,8 +1,10 @@
 import type { FactorySettings, PersonaRouteMap, Route, Run } from '@emberline/protocol';
 import { describe, expect, it } from 'vitest';
+import { answerErrorText } from './answerDialog';
 import { formatAgentDisplayName, formatAgentResumePlaceholder } from './components/RunInspector';
 import { buildPresetRoutes } from './components/settings/settingsMeta';
 import { handoffCandidates } from './handoffCandidates';
+import { recoverErrorText } from './holdRecovery';
 
 // Gemini CLI is no longer a provider; old runs keep `agent: 'gemini'` as a plain string.
 const geminiRun = {
@@ -23,6 +25,13 @@ describe('an old Gemini CLI run', () => {
     expect(formatAgentResumePlaceholder('gemini')).toBe(
       'Gemini CLI is no longer supported. Hand this run off to another agent.',
     );
+  });
+
+  it("words core's agent_removed refusal of a recover or an answer exactly", () => {
+    const copy = 'Gemini CLI is no longer supported. Hand this run off to another agent.';
+    expect(recoverErrorText('agent_removed', '')).toBe(copy);
+    expect(recoverErrorText('agent_removed', copy)).toBe(copy);
+    expect(answerErrorText('agent_removed', copy)).toBe(copy);
   });
 
   it('offers handoffs to the routes that still exist, never back to Gemini', () => {

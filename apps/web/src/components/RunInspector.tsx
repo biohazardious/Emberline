@@ -4,6 +4,7 @@ import { Globe, KeyRound, Maximize2, TriangleAlert, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { AGENT_REMOVED_TEXT } from '../holdRecovery';
 import { timeAgo } from '../time';
 import { EVENT_LABEL } from '../runEventLabels';
 import { HoldRecovery, useHoldAnswer } from './HoldRecovery';
@@ -81,7 +82,7 @@ export function formatAgentResumePlaceholder(agent?: string | null): string {
     case 'antigravity':
       return 'Continue the ended session (agy --continue)…';
     case 'gemini':
-      return 'Gemini CLI is no longer supported. Hand this run off to another agent.';
+      return AGENT_REMOVED_TEXT;
     case 'codex':
       return 'Continue the ended session (codex)…';
     case 'copilot':

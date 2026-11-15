@@ -369,6 +369,41 @@ describe('M5 layer 3: escalation to an agent (AC-5.3, AC-5.4)', () => {
     expect(await eventTypes(runB)).not.toContain('conflict_resolution_requested');
   });
 
+  it('an old Gemini CLI run gets no resolver on its own route: the conflict goes to a person as usual', async () => {
+    const { b, runB } = await conflictingPair(EDIT_EDIT);
+    await endWithoutResume(runB);
+    t.db
+      .update(runs)
+      .set({
+        agent: 'gemini',
+        model: 'gemini-pro',
+        credential: 'api_key',
+        routes: [{ agent: 'gemini', model: 'gemini-pro', credential: 'api_key' }] as never,
+      })
+      .where(eq(runs.id, runB.id))
+      .run();
+    await pipeline().handleRunCompleted(t.runs.getRun(runB.id));
+
+    expect(await noteOf(runB, 'conflict_resolver_failed')).toEqual([
+      {
+        conflicts: ['app.js'],
+        message: 'Gemini CLI is no longer supported. Hand this run off to another agent.',
+      },
+    ]);
+    expect(await noteOf(runB, 'conflict_resolver_started')).toEqual([]);
+    // The ladder's manual rung: the merge's own message, held for a person (autoFix false).
+    expect((await noteOf(runB, 'merge_failed')).at(-1)).toEqual({
+      summary: expect.stringMatching(
+        /^Could not merge .* \(conflicts in app\.js\); it was left unchanged\.$/,
+      ),
+      conflicts: ['app.js'],
+      autoFix: false,
+    });
+    expect(t.runs.getRun(runB.id).handedOffTo).toBeNull();
+    expect(runsFor(b.id).map((r) => r.id)).toEqual([runB.id]);
+    expect(await statusOf(b.id)).not.toBe('done');
+  });
+
   it('a live session whose attempts are spent while main keeps moving gets a resolver run', async () => {
     const { project, runB } = await conflictingPair(EDIT_EDIT);
     for (const n of [1, 2, 3])

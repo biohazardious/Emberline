@@ -524,7 +524,7 @@ export const toRun = (row: RunRow): Run => ({
  * answered: the adapter lookup would otherwise run it as Claude without a word. A handoff still
  * moves its work to another route.
  */
-function refuseRemovedAgent(row: Pick<RunRow, 'agent'>): void {
+export function refuseRemovedAgent(row: Pick<RunRow, 'agent'>): void {
   if (!isKnownAgent(row.agent)) throw conflict(AGENT_REMOVED, 'agent_removed');
 }
 
@@ -1448,7 +1448,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const row = this.row(id);
     const blocked = handoffBlocker(row, continuesHeld());
     if (blocked) throw conflict(blocked);
-    // A step on an agent that is gone (Gemini CLI, the predecessor's own) is not carried over.
+    // Gemini CLI is gone: a successor cannot run there (it would wait in the queue for ever), and a
+    // step on it in the predecessor's chain is not carried over.
+    refuseRemovedAgent(route);
     const routes = runRoutes(row).filter((r) => isKnownAgent(r.agent));
     let routeIndex = routes.findIndex((r) => sameRoute(r, route));
     if (routeIndex < 0) {

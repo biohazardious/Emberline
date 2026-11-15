@@ -422,7 +422,7 @@ describe('POST /api/runs/:id/answer', () => {
     expect(prompt).toContain(`- ${body.attachments[0]} (text/plain, 5 bytes)`);
   });
 
-  it('an old Gemini CLI run is not answered: Gemini CLI is gone, and its files are not left behind', async () => {
+  it('an old Gemini CLI run is not answered: Gemini CLI is gone, and no file is written', async () => {
     const wt = worktree('gm1', { 'app.js': 'x\n' });
     seedRun({ id: 'gm1', agent: 'gemini', permissionMode: 'auto', ...wt, hold: blocked });
     const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
@@ -436,7 +436,8 @@ describe('POST /api/runs/:id/answer', () => {
       message: 'Gemini CLI is no longer supported. Hand this run off to another agent.',
     });
     expect(spawn).not.toHaveBeenCalled();
-    expect(readdirSync(path.join(wt.worktreePath, '.emberline', 'attachments', 'answers'))).toEqual([]);
+    // Refused before any file is written.
+    expect(existsSync(path.join(wt.worktreePath, '.emberline', 'attachments'))).toBe(false);
   });
 
   it('files only: the answer section holds just the attachments block', async () => {

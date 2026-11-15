@@ -806,6 +806,34 @@ describe('delivering a recovery prompt', () => {
       expect(t.runs.getRun('g5').handedOffTo).toBeNull();
     });
 
+    it('a held Gemini CLI run that would continue in a successor is refused with agent_removed, not a route error', async () => {
+      seedRun({
+        id: 'gm5',
+        agent: 'gemini',
+        permissionMode: 'auto',
+        ...worktree('gm5', { 'n.js': 'x\n' }),
+        stops: [legacyStop, exitNoted],
+      });
+      t.db
+        .update(runs)
+        .set({ routes: [{ agent: 'gemini', model: 'gemini-pro', credential: 'api_key' }] as never })
+        .where(eq(runs.id, 'gm5'))
+        .run();
+      const refusal = {
+        error: 'agent_removed',
+        message: 'Gemini CLI is no longer supported. Hand this run off to another agent.',
+      };
+      const recover = await post('/api/runs/gm5/recover', { text: 'go on' });
+      expect(recover.statusCode).toBe(409);
+      expect(recover.json()).toMatchObject(refusal);
+      // The Answer dialog asks recovery first, before it writes any file.
+      const answer = await post('/api/runs/gm5/answer', { text: 'go on' });
+      expect(answer.statusCode).toBe(409);
+      expect(answer.json()).toMatchObject(refusal);
+      expect(successorsOf('gm5')).toHaveLength(0);
+      expect(t.runs.getRun('gm5').handedOffTo).toBeNull();
+    });
+
     it("a person's handoff of a run in Accept edits to a headless lane is refused before anything is handed off", async () => {
       seedRun({ id: 'c6', permissionMode: 'acceptEdits', ...worktree('c6', { 'n.js': 'x\n' }), hold: null });
       t.db.update(runs).set({ state: 'failed' }).where(eq(runs.id, 'c6')).run();

@@ -88,7 +88,7 @@ describe('the Gemini CLI notice', () => {
       kind: 'gemini_removed',
       key: 'gemini_removed',
       title: 'Gemini CLI was removed',
-      text: 'Emberline no longer runs Gemini CLI; Antigravity stays. What changed: QA & Test Engineer → Antigravity gemini-flash; Software Engineer → next in its chain. Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.',
+      text: 'Emberline no longer runs Gemini CLI; Antigravity stays. What changed: QA & Test Engineer → Antigravity gemini-flash; Software Engineer → next in its chain. Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.',
       link: '/settings?tab=providers',
       createdAt: at.toISOString(),
     });
@@ -103,7 +103,7 @@ describe('the Gemini CLI notice', () => {
   it('without routes it still says the key stays', () => {
     notices.geminiRemoved([]);
     expect(notices.list()[0]!.text).toBe(
-      'Emberline no longer runs Gemini CLI; Antigravity stays. Old Gemini runs stay in the list; hand them off to another agent to carry on. The Gemini API key stays for Aider.',
+      'Emberline no longer runs Gemini CLI; Antigravity stays. Old Gemini runs stay in the list; hand them off to another agent to carry on. Antigravity now needs its own Google sign-in; a Gemini API key no longer runs it. The Gemini API key stays for Aider.',
     );
   });
 });
