@@ -4,6 +4,10 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- A pull that stopped keeps the ticket **Resolve with a ticket** made for it when origin moves on in the meantime: asking again answers with the same ticket instead of a second one, and **Match origin…** closes it instead of sending it back to Backlog.
+
 ## [0.9.2] - 2026-11-15
 
 ### Fixed

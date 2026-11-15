@@ -371,6 +371,26 @@ describe('pull from origin', () => {
     expect(second).not.toBe(first);
   });
 
+  it("origin moving on keeps the stop's ticket: asking again answers with it, and Match origin closes it", async () => {
+    const elsewhere = cloneOf(bare);
+    commit(elsewhere, 'a.txt', 'theirs\n', 'feat: theirs');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    commit(projectPath, 'a.txt', 'mine\n', 'feat: mine');
+    await pullNow();
+    expect((await settled()).state).toBe('conflict');
+    const first = (await send('POST', gitUrl('/pull/ticket'))).json().ticketId as string;
+    // origin moves on (TrueNAS: from 0.9.1 to 0.9.2) while the stop waits: still the same work.
+    commit(elsewhere, 'later.txt', 'later\n', 'feat: later on origin');
+    git(elsewhere, 'push', '-q', 'origin', 'main');
+    await pullNow();
+    expect((await settled()).state).toBe('conflict');
+    expect(readRepositorySettings(t.db, projectId).syncStop?.ticketId).toBe(first);
+    expect((await send('POST', gitUrl('/pull/ticket'))).json().ticketId).toBe(first);
+    const matched = await send('POST', gitUrl('/match-origin'), { branch: 'main' });
+    expect(matched.statusCode).toBe(200);
+    expect(t.tickets.get(first).status).toBe('done');
+  });
+
   it('heals a purely additive conflict like the merge ladder does', async () => {
     const { elsewhere, mine } = additiveConflict();
     // A heal worktree a crash left behind goes before the next heal.

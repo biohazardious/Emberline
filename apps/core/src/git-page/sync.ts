@@ -187,13 +187,19 @@ function record(
       old.working === extra.tips.working &&
       old.main === extra.tips.main &&
       old.source === outcome.source;
+    // A stop merging origin's branch is the same work after origin moved on (its ticket says "merge
+    // origin/<branch>", whatever origin holds now): the ticket stays, so it is not made twice and
+    // Match origin closes it. One merging main into the working branch keeps it only as the same stop.
+    const sameWork =
+      same ||
+      (old !== null && old.source === outcome.source && outcome.source?.startsWith('origin/') === true);
     const syncStop =
       outcome.source !== undefined && extra.tips
         ? {
             ...extra.tips,
             source: outcome.source,
             sourceTip: outcome.sourceTip ?? null,
-            ...(same && old.ticketId ? { ticketId: old.ticketId } : {}),
+            ...(sameWork && old?.ticketId ? { ticketId: old.ticketId } : {}),
           }
         : outcome.state === 'pulled' || outcome.state === 'up_to_date'
           ? null
