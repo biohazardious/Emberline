@@ -41,6 +41,15 @@ process.stdin.on('data', (d) => {
         { modelId: 'bad id', name: 'Spaced' },
         { modelId: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       ];
+      if (mode === 'split') {
+        // The answer in two writes, cut inside the 3-byte UTF-8 of "✦": the wrapper must decode
+        // the stream, not each chunk.
+        const bytes = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 's-1', models: { availableModels: [{ modelId: 'claude-fable-5', name: 'Fable ✦ Größte' }] } } }) + '\\n');
+        const cut = bytes.indexOf(Buffer.from('✦')) + 1;
+        process.stdout.write(bytes.subarray(0, cut));
+        setTimeout(() => process.stdout.write(bytes.subarray(cut)), 100);
+        continue;
+      }
       send({ id: msg.id, result: { sessionId: 's-1', models: { availableModels, currentModelId: 'auto' } } });
     } else if (msg.method === 'session/close') {
       if (mode !== 'no-close') send({ id: msg.id, result: {} });
@@ -90,6 +99,12 @@ describe('emberline-copilot-models', () => {
       'eof',
     ]);
     expect(received).not.toContain('session/prompt');
+  });
+
+  it('keeps a name whose multibyte character arrives split across two chunks', () => {
+    const { status, stdout } = run('split');
+    expect(status).toBe(0);
+    expect(stdout).toBe('claude-fable-5\tFable ✦ Größte\n');
   });
 
   it('still prints the models when the close is not confirmed, and says so', () => {

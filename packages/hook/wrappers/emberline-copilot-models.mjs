@@ -61,6 +61,9 @@ const timeout = setTimeout(
   TIMEOUT_MS,
 );
 
+// Decoded as a stream: a character whose bytes arrive in two chunks stays whole.
+child.stdout.setEncoding('utf8');
+child.stderr.setEncoding('utf8');
 child.on('error', (err) => void fail(`could not start ${command}: ${err.message}`));
 child.stdin.on('error', () => undefined);
 child.stderr.on('data', (chunk) => {
