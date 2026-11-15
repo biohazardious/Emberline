@@ -135,6 +135,8 @@ export interface ProviderSectionForm {
   setQuotaPolicy: (next: QuotaPolicy) => void;
   apiKeys: ApiKeyDraft;
   patchApiKeys: (patch: Partial<ApiKeyDraft>) => void;
+  dirty: boolean;
+  onDiscard: () => void;
   saving: boolean;
   onSave: (e: FormEvent) => void;
   setNotice: (next: string | null) => void;

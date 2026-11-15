@@ -5,6 +5,7 @@ import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { queryClient } from './queryClient';
 import './index.css';
+import './ui.css';
 import './error-filter.css';
 import './responsive.css';
 import './board-bulk.css';

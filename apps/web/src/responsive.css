@@ -243,6 +243,10 @@
     scrollbar-width: none;
   }
 
+  .settings-tab {
+    flex: none;
+  }
+
   .settings-tabs::-webkit-scrollbar {
     display: none;
   }
