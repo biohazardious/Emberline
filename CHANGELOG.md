@@ -4,8 +4,23 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Model discovery.** Emberline reads each CLI's own model list, so a new model shows in the pickers without an Emberline release. Claude Code is read from its `/model` picker, Antigravity and aider from their own listings, Codex from `codex debug models` (only with a Codex login: signed out, the CLI lists a catalog that is not yours) and Copilot from its own session. It reads when a runner first connects, once a day, after a CLI is installed or updated, and on **Refresh models**. Reading a picker opens it in a background terminal and changes none of the CLI's settings.
+- New models appear in the pickers but are never picked for you: a route or an agent keeps the model it had.
+- **Inbox** notices: one when new models were found (naming them), one when a provider's list could not be read, and a one-time notice that routes set to Fable now run Fable.
+- **Settings → Providers** shows each provider's model list with **Refresh models**, and lets you add a model by hand or remove one.
+- Known limits: a free Copilot account lists no model beyond Auto, and Gemini CLI has no list to read, so add its models by hand.
+
 ### Fixed
 
+- Each CLI is launched with its own model id, not Emberline's name for it, and a model from the list is accepted wherever a model is chosen.
+- Routes set to Fable run Fable; before, they ran Opus.
+- Copilot runs get `--model`; before, they ran with Copilot's default whatever the route said.
+- A route whose model matches nothing the provider lists runs with the CLI's default model, and the run says so.
+- Switching the agent on the run form keeps the model if the new agent has it, and otherwise picks that agent's default.
+- Codex and Copilot sign in with a device code (`make codex-login` and `make copilot-login` too): the browser's redirect went to localhost on the runner, never reached it, and the login never finished.
+- A Claude whose credentials were emptied (after a logout or a failed refresh) and a fresh `~/.copilot` folder no longer show as signed in, so routing no longer picks them and runs no longer sit at a sign-in screen. Claude needs a token in its credentials file; Copilot needs a user in its config or a `gh` token.
 - A pull that stopped keeps the ticket **Resolve with a ticket** made for it when origin moves on in the meantime: asking again answers with the same ticket instead of a second one, and **Match origin…** closes it instead of sending it back to Backlog.
 
 ## [0.9.2] - 2026-11-15
