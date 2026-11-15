@@ -254,6 +254,11 @@ function hasGhToken(home: string): boolean {
   }
 }
 
+/** Codex keeps its login, ChatGPT or API key, in `~/.codex/auth.json`. */
+export function hasCodexLogin(home: string): boolean {
+  return existsSync(path.join(home, '.codex', 'auth.json'));
+}
+
 function detectRunnerProviderAuth(params: {
   anthropicKeyConfigured: boolean;
   openaiKeyConfigured: boolean;
@@ -264,7 +269,7 @@ function detectRunnerProviderAuth(params: {
   const claudeOAuth = hasClaudeTokens(home);
   const geminiOAuth = hasValidGeminiOAuth(home);
   const antigravityOAuth = hasNonEmptyAntigravitySecrets(home);
-  const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));
+  const codexOAuth = hasCodexLogin(home);
   const copilotOAuth = hasCopilotLogin(home);
 
   return {

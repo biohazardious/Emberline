@@ -14,7 +14,7 @@ import type { AgentId } from '@emberline/protocol';
 import type { PtydClient } from '@emberline/ptyd/client';
 import type { Db } from '../db/index.js';
 import { getFactorySettings } from '../factory/service.js';
-import { getProviderEnvFromSettings } from '../factory/settings.js';
+import { getProviderEnvFromSettings, hasCodexLogin } from '../factory/settings.js';
 import type { NoticeService } from '../notices/service.js';
 import type { ToolchainService } from '../toolchain/service.js';
 import {
@@ -215,11 +215,20 @@ export function pickerJob(script: PickerScript, parse: (screens: string[]) => Pi
   };
 }
 
+/**
+ * Signed out, or with a key it cannot use, `codex debug models` still exits 0 and prints the catalog
+ * bundled with the binary, which looks just like an account's. So Codex is read only with a login,
+ * and without one there is nothing to read (no read is recorded, nothing is marked missing).
+ */
+const readCodexListing = listingJob((stdout) => parseCodexModels(stdout));
+const codexJob: DiscoveryJob = (ctx) =>
+  hasCodexLogin(ctx.cwd) ? readCodexListing(ctx) : Promise.resolve(null);
+
 /** The providers discovery can read. Gemini CLI has none: its models are added by hand. */
 export const DISCOVERY_JOBS: Partial<Record<AgentId, DiscoveryJob>> = {
   claude: pickerJob(CLAUDE_PICKER, parseClaudePicker),
   antigravity: listingJob((stdout) => parseAgyModels(stdout)),
-  codex: listingJob((stdout) => parseCodexModels(stdout)),
+  codex: codexJob,
   copilot: listingJob((stdout) => parseCopilotModels(stdout)),
   aider: listingJob((stdout, ctx) => parseAiderModels(stdout, ctx.aiderPrefixes)),
 };

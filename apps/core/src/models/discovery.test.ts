@@ -480,9 +480,8 @@ describe('jobs in a runner', () => {
     expect(notices.list().find((n) => n.kind === 'new_models')?.title).toBe('AGY has 7 new models');
   });
 
-  it("reads Codex's catalog with the stored key as Codex reads it, and knows the models it shipped with", async () => {
-    enable(['codex']);
-    updateFactorySettings(opened.db, { openaiApiKey: 'sk-test' });
+  /** A `codex` that logs how it was called and prints the captured catalog on one line. */
+  function fakeCodex(): string {
     const log = path.join(dir, 'codex.log');
     const codex = path.join(dir, 'fake-codex');
     writeFileSync(
@@ -491,6 +490,29 @@ describe('jobs in a runner', () => {
     );
     chmodSync(codex, 0o755);
     process.env.EMBERLINE_CODEX_COMMAND = codex;
+    return log;
+  }
+
+  it("does not run Codex without a Codex login: signed out it prints its bundled catalog as if it were the account's", async () => {
+    enable(['codex']);
+    updateFactorySettings(opened.db, { openaiApiKey: 'sk-test' });
+    const log = fakeCodex();
+    const reads = await inRunner(
+      { codex: DISCOVERY_JOBS.codex },
+      { toolchain: fakeToolchain(['codex']) },
+    ).refresh();
+    expect(reads.codex).toBeUndefined();
+    expect(existsSync(log)).toBe(false);
+    expect(readCatalog(opened.db).codex).toEqual({ models: [], read: null });
+    expect(notices.list()).toEqual([]);
+  });
+
+  it("reads Codex's catalog with the stored key as Codex reads it, and knows the models it shipped with", async () => {
+    enable(['codex']);
+    updateFactorySettings(opened.db, { openaiApiKey: 'sk-test' });
+    mkdirSync(path.join(home, '.codex'));
+    writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+    const log = fakeCodex();
 
     const reads = await inRunner(
       { codex: DISCOVERY_JOBS.codex },
@@ -538,6 +560,44 @@ describe('jobs in a runner', () => {
       { id: 'gpt-5.6-luna', missingSince: '2026-11-15T10:00:00.000Z' },
     ]);
     expect(notices.list().filter((n) => n.kind !== 'new_models')).toEqual([]);
+  });
+
+  it('ends the Copilot CLI with the listing script when the hard timeout cancels the script', async () => {
+    // A stand-in `copilot --acp` that never answers and outlives the end of its input: only a kill of
+    // the whole process group stops it.
+    const pidFile = path.join(dir, 'copilot.pid');
+    const copilot = path.join(dir, 'fake-copilot');
+    writeFileSync(
+      copilot,
+      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+        `process.stdin.resume();\nprocess.stdin.on('end', () => undefined);\nsetInterval(() => undefined, 1000);\n`,
+    );
+    chmodSync(copilot, 0o755);
+    const script = fileURLToPath(
+      new URL('../../../../packages/hook/wrappers/emberline-copilot-models.mjs', import.meta.url),
+    );
+    const execId = 'copilot-listing';
+    const running = client.exec({
+      file: process.execPath,
+      args: [script, copilot],
+      cwd: dir,
+      execId,
+      timeoutMs: 30_000,
+    });
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await vi.waitFor(() => expect(existsSync(pidFile)).toBe(true), { timeout: 5_000 });
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    expect(alive(pid)).toBe(true);
+    await client.execCancel(execId);
+    expect(await running).toMatchObject({ cancelled: true });
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
   });
 
   it('counts a cut-off listing as a failure', async () => {
