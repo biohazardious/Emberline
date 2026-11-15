@@ -5,12 +5,16 @@
  * `SAVED <id>` when Enter is pressed on a model row (Claude Code saves that model as the default for
  * new sessions) and `PROMPT <text>` when anything but a known command is submitted at the prompt.
  *
- * `FAKE_PICKER_MODE`: `update` shows an update screen instead of the prompt; `stuck` ignores Down in
- * the picker; `skip` moves the cursor round the model rows only, never onto the group row.
+ * `FAKE_PICKER_MODE`, comma-separated: `update` shows an update screen instead of the prompt; `stuck`
+ * ignores Down in the picker; `skip` moves the cursor round the model rows only, never onto the group
+ * row; `gaps` lays the picker out with cursor moves instead of spaces (as many TUIs do); `noisy`
+ * redraws a status line at once on every key and applies the key itself only after a delay longer
+ * than the reader's settle time.
  */
 import { appendFileSync } from 'node:fs';
 
-const mode = process.env.FAKE_PICKER_MODE ?? '';
+const modes = new Set((process.env.FAKE_PICKER_MODE ?? '').split(','));
+const KEY_DELAY_MS = 400;
 const logFile = process.env.FAKE_PICKER_LOG;
 
 const log = (line) => {
@@ -28,7 +32,8 @@ const MORE = [
   { id: 'claude-opus-4-1', label: 'Opus 4.1', note: 'Opus 4.1 · Legacy' },
 ];
 
-let screen = mode === 'update' ? 'update' : 'prompt';
+let screen = modes.has('update') ? 'update' : 'prompt';
+let tick = 0;
 let input = '';
 let expanded = false;
 let cursor = MODELS.findIndex((m) => m.current);
@@ -46,13 +51,15 @@ function pickerLines() {
   let n = 0;
   rows().forEach((row, i) => {
     const mark = i === cursor ? '❯' : ' ';
+    // `gaps`: skip blank cells with a cursor move (CSI n C), so the cells stay unwritten.
+    const gap = (n) => (modes.has('gaps') ? `\x1b[${n}C` : ' '.repeat(n));
     if (row.kind === 'group') {
-      lines.push(` ${mark} ${expanded ? '▴' : '▾'} More models`);
+      lines.push(`${gap(1)}${mark}${gap(1)}${expanded ? '▴' : '▾'} More models`);
       return;
     }
     n += 1;
     const label = `${n}. ${row.label}${row.current ? ' ✔' : ''}`;
-    lines.push(` ${mark} ${label.padEnd(28)}${row.note}`);
+    lines.push(`${gap(1)}${mark}${gap(1)}${label}${gap(28 - label.length)}${row.note}`);
   });
   lines.push('', ' Enter to confirm · Esc to exit');
   return lines;
@@ -67,6 +74,7 @@ function render() {
   } else {
     lines = [' Fake Picker CLI 1.0.0', '', `> ${input}`];
   }
+  if (modes.has('noisy')) lines.push('', ` status: ${tick}`);
   process.stdout.write(`\x1b[H\x1b[2J${lines.join('\r\n')}`);
 }
 
@@ -83,9 +91,9 @@ function submit() {
 }
 
 function down() {
-  if (mode === 'stuck') return;
+  if (modes.has('stuck')) return;
   const count = rows().length;
-  if (mode === 'skip') {
+  if (modes.has('skip')) {
     cursor = (cursor + 1) % MODELS.length;
     return;
   }
@@ -94,6 +102,14 @@ function down() {
 
 function key(name, char) {
   if (name === 'ctrl-c') process.exit(130);
+  if (!modes.has('noisy')) return apply(name, char);
+  // Something unrelated changes on screen right away; the key's own effect shows up later.
+  tick += 1;
+  render();
+  setTimeout(() => apply(name, char), KEY_DELAY_MS);
+}
+
+function apply(name, char) {
   if (screen === 'update') return;
   if (screen === 'prompt') {
     if (name === 'enter') submit();

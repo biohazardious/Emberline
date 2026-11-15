@@ -99,6 +99,30 @@ describe('readPicker', () => {
     expect(await sessions()).toEqual([]);
   });
 
+  it('keeps the columns of a picker laid out with cursor moves', async () => {
+    const { screens } = await readPicker(client, script({ FAKE_PICKER_MODE: 'gaps' }), {
+      cwd: dir,
+      deadlineMs: 30_000,
+    });
+    expect(screens[0]).toContain(` ❯ ${'2. Opus ✔'.padEnd(28)}Opus 5.5 · Most capable for complex work`);
+    expect(screens[1]).toContain(`   ${'5. Fable 5.1'.padEnd(28)}Fable 5.1 · Long-form writing`);
+    expect(fakeLog()).toBe('');
+  });
+
+  it('waits for each key to take effect, not for any redraw, and still changes nothing', async () => {
+    const { screens } = await readPicker(client, script({ FAKE_PICKER_MODE: 'noisy' }), {
+      cwd: dir,
+      deadlineMs: 30_000,
+    });
+    expect(screens).toHaveLength(2);
+    expect(screens[0]).not.toContain('Fable 5.1');
+    expect(screens[1]).toMatch(/❯ ▴ More models/);
+    expect(screens[1]).toContain('5. Fable 5.1');
+    expect(writes).toEqual(['/model', '\r', DOWN, DOWN, DOWN, '\r', ESC, '/exit', '\r']);
+    expect(fakeLog()).toBe('');
+    expect(await sessions()).toEqual([]);
+  });
+
   it('fails at the ready step on a screen that is not the prompt, typing nothing', async () => {
     const error = await pickerError(
       readPicker(client, script({ FAKE_PICKER_MODE: 'update' }, 800), { cwd: dir, deadlineMs: 30_000 }),

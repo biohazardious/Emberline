@@ -6,12 +6,12 @@
  * Safe by construction: in Claude Code, Enter on a model row saves that model as the default for new
  * sessions, so the only keys this ever types are `/model` and Enter at the CLI's prompt, Down, Enter
  * on a collapsed group row, Esc, and the exit command at the prompt. Enter in the picker is pressed
- * only when a fresh, settled snapshot shows the cursor on a group row, and every key waits for the
- * screen to show its effect before the next one is sent, so no snapshot can lag behind a key still
- * in flight.
+ * only when a fresh, settled snapshot shows the cursor on a group row, and every key waits for its
+ * own effect (not just any change: a status line or a notice can redraw at any time) before the next
+ * one is sent, so no key is still in flight when Enter goes.
  */
-import { stripVTControlCharacters } from 'node:util';
 import type { PtydClient } from '@emberline/ptyd/client';
+import { screenTextOf } from './screen-text.js';
 
 export interface PickerScript {
   command: { file: string; args: string[]; env: Record<string, string> };
@@ -113,12 +113,7 @@ export async function readPicker(
   /** The visible screen as plain text (no scrollback, so an earlier screen cannot match). */
   const screenText = async (): Promise<string> => {
     const snap = await client.snapshot(id, 0);
-    const lines = stripVTControlCharacters(snap.data ?? '')
-      .replace(/\r\n/g, '\n')
-      .split('\n')
-      .map((l) => l.trimEnd());
-    while (lines.length > 0 && !lines[lines.length - 1]) lines.pop();
-    return lines.join('\n');
+    return screenTextOf(snap.data ?? '', snap.cols);
   };
 
   /**
@@ -144,13 +139,22 @@ export async function readPicker(
 
   const atPrompt = (screen: string) => matches(script.ready, screen) && !matches(script.picker, screen);
 
-  /** Exactly one cursor row, inside the open picker, and it is the group named `key`. */
-  const cursorOnGroup = (screen: string, key: string): boolean => {
-    if (!matches(script.picker, screen)) return false;
-    const cursorLines = screen.split('\n').filter((l) => matches(script.cursorRow, l));
-    if (cursorLines.length !== 1) return false;
-    return groupKey(script.groupRow, cursorLines[0]!) === key;
+  /** The line the picker's cursor is on; none unless the picker shows and exactly one line matches. */
+  const cursorAt = (screen: string): number | undefined => {
+    if (!matches(script.picker, screen)) return undefined;
+    const at = screen.split('\n').flatMap((l, i) => (matches(script.cursorRow, l) ? [i] : []));
+    return at.length === 1 ? at[0] : undefined;
   };
+
+  /** The cursor is on the group row named `key`. */
+  const cursorOnGroup = (screen: string, key: string): boolean => {
+    const at = cursorAt(screen);
+    return at !== undefined && groupKey(script.groupRow, screen.split('\n')[at]!) === key;
+  };
+
+  /** Typed text has shown up: it occurs more often than on the screen it was typed on. */
+  const echoed = (before: string, text: string) => (s: string) =>
+    s.split(text).length > before.split(text).length;
 
   /** The first group row on the screen not opened yet. */
   const nextGroup = (screen: string, opened: Set<string>): string | undefined => {
@@ -166,7 +170,7 @@ export async function readPicker(
     let screen = await waitFor('ready', atPrompt);
 
     await client.write(id, '/model');
-    screen = await waitFor('type', (s) => s !== screen && s.includes('/model'));
+    screen = await waitFor('type', echoed(screen, '/model'));
     await client.write(id, ENTER);
     screen = await waitFor('picker', (s) => matches(script.picker, s));
     screens.push(screen);
@@ -175,28 +179,37 @@ export async function readPicker(
     for (let key = nextGroup(screen, opened); key !== undefined; key = nextGroup(screen, opened)) {
       if (opened.size >= MAX_GROUPS) break;
       for (let presses = 0; !cursorOnGroup(screen, key); presses++) {
-        if (presses >= MAX_DOWN_PRESSES) throw new PickerError('group', tail(screen));
-        const before = screen;
+        const from = cursorAt(screen);
+        // Without exactly one cursor row a Down's effect cannot be told apart from any other redraw.
+        if (presses >= MAX_DOWN_PRESSES || from === undefined) throw new PickerError('group', tail(screen));
         await client.write(id, DOWN);
-        // A Down that does not move the cursor (end of the list) ends the step here.
-        screen = await waitFor('group', (s) => s !== before);
+        // Only the cursor moving acknowledges the Down; one that does not move it ends the step here.
+        screen = await waitFor('group', (s) => {
+          const at = cursorAt(s);
+          return at !== undefined && at !== from;
+        });
       }
       // The last word before Enter goes to a snapshot taken right now, not the one that decided.
+      const at = cursorAt(screen);
       const fresh = await screenText();
-      if (fresh !== screen || !cursorOnGroup(fresh, key)) throw new PickerError('group', tail(fresh));
+      if (cursorAt(fresh) !== at || !cursorOnGroup(fresh, key)) throw new PickerError('group', tail(fresh));
       opened.add(key);
       await client.write(id, ENTER);
-      screen = await waitFor('expand', (s) => s !== fresh);
+      // The group opened: the picker closed, its cursor or the group row changed, or rows were added.
+      const lines = fresh.split('\n');
+      screen = await waitFor('expand', (s) => {
+        const now = s.split('\n');
+        return cursorAt(s) !== at || now[at!] !== lines[at!] || now.length > lines.length;
+      });
       screens.push(screen);
     }
 
     // Esc again only while the picker still shows: at the prompt a second Esc can open other menus.
     for (let presses = 0; !atPrompt(screen); presses++) {
       if (presses >= MAX_ESC_PRESSES) throw new PickerError('close', tail(screen));
-      const before = screen;
       await client.write(id, ESC);
       try {
-        screen = await waitFor('close', (s) => s !== before || atPrompt(s));
+        screen = await waitFor('close', atPrompt);
       } catch (error) {
         if (!(error instanceof PickerError) || Date.now() >= deadline) throw error;
         screen = await screenText();
@@ -204,11 +217,8 @@ export async function readPicker(
     }
 
     // Enter only once the exit command shows at the prompt, so nothing else can be submitted.
-    const prompt = screen;
     await client.write(id, script.exit);
-    const typed = await waitFor('close', (s) => s !== prompt && s.includes(script.exit)).catch(
-      () => undefined,
-    );
+    const typed = await waitFor('close', echoed(screen, script.exit)).catch(() => undefined);
     if (typed !== undefined) await client.write(id, ENTER);
     return { screens };
   } finally {
