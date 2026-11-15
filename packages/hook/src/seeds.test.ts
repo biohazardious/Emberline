@@ -80,6 +80,13 @@ describe('emberline-cli-seed', () => {
     expect(existsSync(path.join(home, '.gemini'))).toBe(false);
   });
 
+  it("antigravity: no longer writes Gemini CLI's settings, even with a Gemini key", () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
+    run('emberline-cli-seed.mjs', home, { GEMINI_API_KEY: 'k', GOOGLE_API_KEY: 'k' }, ['antigravity']);
+    expect(existsSync(path.join(home, '.gemini', 'settings.json'))).toBe(false);
+    expect(existsSync(path.join(home, '.gemini', 'antigravity-cli', 'settings.json'))).toBe(true);
+  });
+
   it('copilot: trusts /workspaces and keeps the leading comments of its config file', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'seed-'));
     mkdirSync(path.join(home, '.copilot'));

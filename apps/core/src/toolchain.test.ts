@@ -90,6 +90,30 @@ describe('ToolchainService', () => {
       expect(flag()).toBe(true);
     });
 
+    it('finds a Gemini CLI that left only its bin link', async () => {
+      const calls = fakeNpm(0);
+      const npmBin = path.join(t.dir, 'ai-tools', 'npm', 'bin');
+      mkdirSync(npmBin, { recursive: true });
+      writeFileSync(path.join(npmBin, 'gemini'), '');
+      await new ToolchainService(t.db, t.ptyd, t.config.workspacesDir).removeRetiredTools();
+      expect(calls()).toEqual(['uninstall -g @google/gemini-cli']);
+      expect(flag()).toBe(true);
+    });
+
+    it('tries again at the next start when the runner never connected', async () => {
+      const calls = fakeNpm(0);
+      mkdirSync(geminiDir(), { recursive: true });
+      const wait = vi.spyOn(t.ptyd, 'waitUntilConnected').mockRejectedValueOnce(new Error('timed out'));
+      const toolchain = new ToolchainService(t.db, t.ptyd, t.config.workspacesDir);
+      await expect(toolchain.removeRetiredTools()).resolves.toBeUndefined();
+      expect(calls()).toEqual([]);
+      expect(flag()).toBeUndefined();
+      wait.mockRestore();
+      await toolchain.removeRetiredTools();
+      expect(calls()).toEqual(['uninstall -g @google/gemini-cli']);
+      expect(flag()).toBe(true);
+    });
+
     it('a failing uninstall does not throw and is not retried', async () => {
       const calls = fakeNpm(1);
       mkdirSync(geminiDir(), { recursive: true });
