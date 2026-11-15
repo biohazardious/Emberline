@@ -113,11 +113,79 @@ describe('resolveCliModel', () => {
     } as never);
     expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-high');
   });
-  it('prefers the bare family id on equal rank, then the shorter tail', () => {
+  it('on equal rank and version, prefers the id with the shorter tail after the family', () => {
     setModelCatalog({
-      antigravity: [entry('gemini-4-argon-high', 4), entry('gemini-pro-orchestrator-argon', 4)],
+      antigravity: [entry('gemini-4-argon-high', 4), entry('gemini-4-pro-argon', 4)],
     } as never);
-    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-pro-orchestrator-argon');
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-pro-argon');
+    setModelCatalog({
+      antigravity: [entry('gemini-pro-orchestrator', 3), entry('gemini-pro-orchestrator-argon', 3)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-pro')).toBe('gemini-pro-orchestrator');
+  });
+  it('on equal rank, picks the newest version, comparing version numbers as numbers', () => {
+    setModelCatalog({
+      antigravity: [
+        entry('gemini-3.8-flash-high', 4),
+        entry('gemini-4-flash-high', 4),
+        entry('gemini-3.10-flash-high', 4),
+      ],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-flash')).toBe('gemini-4-flash-high');
+    setModelCatalog({
+      antigravity: [entry('gemini-3.8-flash-high', 4), entry('gemini-3.10-flash-high', 4)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-flash')).toBe('gemini-3.10-flash-high');
+    // Copilot lists Claude versions with dots: Opus 4.5 is newer than Opus 4.
+    setModelCatalog({
+      copilot: [entry('claude-opus-4', 3), entry('claude-opus-4.5', 3), entry('claude-sonnet-4.5', 3)],
+    } as never);
+    expect(resolveCliModel('copilot', 'opus')).toBe('claude-opus-4.5');
+    // An id with a version is newer than one without.
+    setModelCatalog({
+      antigravity: [entry('gemini-pro-orchestrator-argon', 4), entry('gemini-4-argon-high', 4)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-high');
+  });
+  it('rank still comes before version', () => {
+    setModelCatalog({
+      antigravity: [entry('gemini-3.8-flash-high', 4), entry('gemini-4-flash-low', 2)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-flash')).toBe('gemini-3.8-flash-high');
+  });
+  it('never lets a hand-added entry take over a built-in family', () => {
+    const manual = (id: string, rank: ProviderModelInfo['rank']) => ({
+      ...entry(id, rank),
+      source: 'manual' as const,
+    });
+    // Gemini CLI is read by hand only: typing in a Gemini 3 id must not move gemini-pro routes.
+    setModelCatalog({ gemini: [manual('gemini-3-pro-preview', 5), manual('gemini-3-flash', 5)] } as never);
+    expect(resolveCliModel('gemini', 'gemini-pro')).toBeNull();
+    expect(resolveCliModel('gemini', 'gemini-flash')).toBeNull();
+    // The typed-in id itself still launches as typed.
+    expect(resolveCliModel('gemini', 'gemini-3-pro-preview')).toBe('gemini-3-pro-preview');
+    // Next to a discovered family member, the discovered one wins even at a lower rank.
+    setModelCatalog({
+      antigravity: [entry('gemini-4-argon-medium', 3), manual('gemini-5-argon-xhigh', 5)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-medium');
+  });
+  it('uses an entry the CLI stopped listing only when no listed entry matches', () => {
+    const gone = (id: string, rank: ProviderModelInfo['rank']) => ({
+      ...entry(id, rank),
+      missingSince: '2026-11-15T10:00:00.000Z',
+    });
+    setModelCatalog({
+      antigravity: [gone('gemini-4-argon-high', 4), entry('gemini-4-argon-medium', 3)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-medium');
+    setModelCatalog({ antigravity: [gone('gemini-4-argon-high', 4)] } as never);
+    expect(resolveCliModel('antigravity', 'argon')).toBe('gemini-4-argon-high');
+  });
+  it("passes aider's own aliases through as they are", () => {
+    setModelCatalog({ aider: [entry('anthropic/claude-3-sonnet-20240229', 3)] } as never);
+    expect(resolveCliModel('aider', 'sonnet')).toBe('sonnet');
+    expect(resolveCliModel('aider', 'o3')).toBe('o3');
   });
   it('matches a family by ordered tokens with gaps', () => {
     setModelCatalog({

@@ -1713,22 +1713,27 @@ describe('runs', () => {
       }
     }
 
-    it('Codex and Aider on a built-in id keep their --model until their list is read, then note a missing one', async () => {
+    it('Codex on a built-in id keeps its --model until its list is read, then notes a missing one', async () => {
       const codexBefore = await launch('cdx-1', 'codex', 'o3');
       expect(codexBefore.script).toContain('--model o3 ');
       expect(codexBefore.notes).toEqual([]);
+
+      listed('codex', ['gpt-5.4-codex']);
+      const codexAfter = await launch('cdx-2', 'codex', 'o3');
+      expect(codexAfter.script).not.toContain('--model');
+      expect(codexAfter.notes.map((n) => n.payload)).toEqual([expect.objectContaining({ model: 'o3' })]);
+    });
+
+    it('Aider always gets its own alias for a built-in id, whatever its catalog holds', async () => {
       const aiderBefore = await launch('aid-1', 'aider', 'opus');
       expect(aiderBefore.script).toContain('--model opus ');
       expect(aiderBefore.notes).toEqual([]);
 
-      listed('codex', ['gpt-5.4-codex']);
-      listed('aider', ['openai/gpt-5.4']);
-      const codexAfter = await launch('cdx-2', 'codex', 'o3');
-      expect(codexAfter.script).not.toContain('--model');
-      expect(codexAfter.notes.map((n) => n.payload)).toEqual([expect.objectContaining({ model: 'o3' })]);
+      // Aider's list is never read; even entries left in its catalog do not take over its aliases.
+      listed('aider', ['anthropic/claude-3-opus-20240229']);
       const aiderAfter = await launch('aid-2', 'aider', 'opus');
-      expect(aiderAfter.script).not.toContain('--model');
-      expect(aiderAfter.notes.map((n) => n.payload)).toEqual([expect.objectContaining({ model: 'opus' })]);
+      expect(aiderAfter.script).toContain('--model opus ');
+      expect(aiderAfter.notes).toEqual([]);
     });
 
     it('Gemini on a built-in id before its list is read gets the Gemini CLI id it always got', async () => {

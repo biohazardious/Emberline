@@ -129,10 +129,31 @@ function tokenSubsequenceEnd(hay: string[], needle: string[]): number {
   return last;
 }
 
+/** The numbers of an id's version tokens in order (`gemini-3.8-flash` → [3, 8]; `claude-opus-4-5` → [4, 5]). */
+function versionOf(tokens: string[]): number[] {
+  return tokens.filter((t) => /^\d+(?:\.\d+)*$/.test(t)).flatMap((t) => t.split('.').map(Number));
+}
+
+/** Newer version first; an id without one counts as older than any id with one. */
+function compareVersionsNewestFirst(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    if (a[i] === undefined) return 1;
+    if (b[i] === undefined) return -1;
+    return b[i]! - a[i]!;
+  }
+  return 0;
+}
+
 /**
  * The id to hand the CLI for a stored model id. An entry's own cliId wins. A built-in id that
- * is a family name (`argon`) maps to the highest-ranked catalog entry of that family. Claude's
- * built-in aliases are accepted by Claude Code as they are. Null means the CLI no longer offers it.
+ * is a family name (`argon`) maps to the highest-ranked catalog entry the CLI listed of that family,
+ * the newest version first on equal rank. Claude's and aider's built-in aliases are accepted by
+ * their CLIs as they are. Null means the CLI no longer offers it.
+ *
+ * Only discovered entries take part in the family match: a model a person typed in is chosen by
+ * naming it, and adding one must not move routes that name a built-in. An entry the CLI stopped
+ * listing is used only when no listed one matches.
  */
 export function resolveCliModel(agent: AgentId, id: string): string | null {
   const direct = getModelsForProvider(agent).find((m) => m.id === id);
@@ -140,20 +161,35 @@ export function resolveCliModel(agent: AgentId, id: string): string | null {
   if (direct && (direct.cliId || fromCatalog)) return direct.cliId ?? direct.id;
   const builtin = (BUILTIN_MODELS[agent] ?? []).some((m) => m.id === id);
   if (!builtin) return direct ? direct.id : null;
-  if (agent === 'claude') return id;
+  if (agent === 'claude' || agent === 'aider') return id;
   const family = id.split('-');
+  type Match = { m: ProviderModelInfo; tail: number; extra: number; version: number[] };
   const matches = (catalog[agent] ?? [])
-    .map((m) => {
+    .filter((m) => m.source !== 'manual')
+    .map((m): Match | null => {
       const tokens = m.id.split('-');
       const end = tokenSubsequenceEnd(tokens, family);
-      return end < 0 ? null : { m, tail: tokens.length - 1 - end, extra: tokens.length - family.length };
+      if (end < 0) return null;
+      return {
+        m,
+        tail: tokens.length - 1 - end,
+        extra: tokens.length - family.length,
+        version: versionOf(tokens),
+      };
     })
-    .filter((x): x is { m: ProviderModelInfo; tail: number; extra: number } => x !== null);
-  if (matches.length === 0) return null;
-  matches.sort(
-    (a, b) => b.m.rank - a.m.rank || a.tail - b.tail || a.extra - b.extra || (a.m.id < b.m.id ? -1 : 1),
+    .filter((x): x is Match => x !== null);
+  const listed = matches.filter((x) => !x.m.missingSince);
+  const pool = listed.length > 0 ? listed : matches;
+  if (pool.length === 0) return null;
+  pool.sort(
+    (a, b) =>
+      b.m.rank - a.m.rank ||
+      compareVersionsNewestFirst(a.version, b.version) ||
+      a.tail - b.tail ||
+      a.extra - b.extra ||
+      (a.m.id < b.m.id ? -1 : 1),
   );
-  const best = matches[0]!.m;
+  const best = pool[0]!.m;
   return best.cliId ?? best.id;
 }
 
