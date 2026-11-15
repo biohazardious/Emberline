@@ -1300,15 +1300,16 @@ export function registerProjectRoutes(
         instructions:
           'Sign in with a Gemini Code Assist Standard/Enterprise account, or save a Gemini API key in Settings. Consumer Google logins stopped working on 2026-06-18.',
       },
+      // Device code flows: the browser flows wait for a redirect to localhost, which is the runner
+      // container, not the machine the browser runs on.
       codex: {
-        cmd: 'codex login',
+        cmd: 'codex login --device-auth',
         instructions:
-          'Follow the OpenAI OAuth URL in the terminal to sign in with your ChatGPT Plus/Pro/Team account.',
+          'Open the URL in your browser and enter the code shown in the terminal. If OpenAI refuses the code, turn on device code sign-in for Codex in your ChatGPT security settings first.',
       },
       copilot: {
-        cmd: 'copilot login',
-        instructions:
-          'Follow the GitHub device/OAuth prompt in the terminal to authenticate GitHub Copilot CLI.',
+        cmd: 'copilot login --device-code',
+        instructions: 'Open the URL in your browser and enter the code shown in the terminal.',
       },
       aider: {
         cmd: 'aider --version',

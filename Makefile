@@ -114,11 +114,11 @@ gemini-login: ## Google login (Code Assist Standard/Enterprise only) via `gemini
 agy-login: ## Interactive Antigravity / Google OAuth login (`agy login`) inside the runner
 	$(PROD) exec -u node runner agy login
 
-codex-login: ## Interactive OpenAI ChatGPT/Codex OAuth login (`codex login`) inside the runner
-	$(PROD) exec -u node runner codex login
+codex-login: ## OpenAI ChatGPT/Codex login with a device code (`codex login --device-auth`) inside the runner
+	$(PROD) exec -u node runner codex login --device-auth
 
-copilot-login: ## Interactive GitHub Copilot CLI login (`copilot login`) inside the runner
-	$(PROD) exec -u node runner copilot login
+copilot-login: ## GitHub Copilot CLI login with a device code (`copilot login --device-code`) inside the runner
+	$(PROD) exec -u node runner copilot login --device-code
 
 clean: ## Remove dev containers and volumes (node_modules, pnpm store)
 	$(DEV) down -v --remove-orphans

@@ -408,6 +408,97 @@ describe('Gemini auth reality', () => {
   });
 });
 
+describe('Claude and Copilot sign-in detection', () => {
+  const withHome = (files: Record<string, string>, fn: () => void) => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ember-home-'));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
+      writeFileSync(path.join(home, rel), body);
+    }
+    const saved = process.env.EMBERLINE_RUNNER_HOME;
+    process.env.EMBERLINE_RUNNER_HOME = home;
+    try {
+      fn();
+    } finally {
+      if (saved === undefined) delete process.env.EMBERLINE_RUNNER_HOME;
+      else process.env.EMBERLINE_RUNNER_HOME = saved;
+      rmTemp(home);
+    }
+  };
+  const auth = () => getFactorySettings(t.db).providerAuth!;
+  const loggedOutClaude = JSON.stringify({
+    claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: null, subscriptionType: 'max' },
+  });
+
+  it('a Claude credentials file with emptied tokens and a leftover account is not a login', () => {
+    withHome(
+      {
+        '.claude/.credentials.json': loggedOutClaude,
+        '.claude.json': JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.com' } }),
+      },
+      () => expect(auth().claude).toMatchObject({ authenticated: false, method: 'none' }),
+    );
+  });
+
+  it('a Claude credentials file with a token is a login', () => {
+    withHome(
+      {
+        '.claude/.credentials.json': JSON.stringify({
+          claudeAiOauth: { accessToken: 'tok', refreshToken: 'r' },
+        }),
+      },
+      () => expect(auth().claude).toMatchObject({ authenticated: true, method: 'oauth_cli' }),
+    );
+  });
+
+  it('the ~/.copilot folder Copilot creates on its first start is not a login', () => {
+    withHome(
+      {
+        '.copilot/config.json':
+          '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-11-15T08:47:14.760Z",\n  "trustedFolders": ["/workspaces"]\n}\n',
+      },
+      () => expect(auth().copilot.authenticated).toBe(false),
+    );
+  });
+
+  it("a user recorded in Copilot's config, or a gh CLI token, is a login", () => {
+    withHome(
+      {
+        '.copilot/config.json':
+          '// This file is managed automatically.\n{ "loggedInUsers": [{ "host": "https://github.com", "login": "someone" }], "lastLoggedInUser": { "host": "https://github.com", "login": "someone" } }\n',
+      },
+      () => expect(auth().copilot.authenticated).toBe(true),
+    );
+    withHome({ '.config/gh/hosts.yml': 'github.com:\n    oauth_token: gho_x\n    user: someone\n' }, () =>
+      expect(auth().copilot.authenticated).toBe(true),
+    );
+  });
+});
+
+describe('the provider Login commands', () => {
+  it('Codex and Copilot sign in with a device code, not a browser redirect to the runner', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const spawned: { args: string[] }[] = [];
+    vi.spyOn(t.ptyd, 'get').mockReturnValue({
+      spawn: async (params: { file: string; args: string[]; meta?: { title?: string } }) => {
+        spawned.push(params);
+        return { id: 's1', status: 'running', meta: params.meta ?? {} };
+      },
+    } as never);
+    for (const provider of ['codex', 'copilot'] as const) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/factory/provider-login',
+        payload: { provider },
+        headers: authHeaders(cookie),
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    expect(spawned[0]!.args[1]).toContain('; codex login --device-auth;');
+    expect(spawned[1]!.args[1]).toContain('; copilot login --device-code;');
+  });
+});
+
 describe('requireCompletionSignal over HTTP', () => {
   it('defaults to true and round-trips', async () => {
     const cookie = await setupAndLogin(t.app);

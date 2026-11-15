@@ -200,12 +200,55 @@ function hasValidGeminiOAuth(home: string): boolean {
   return false;
 }
 
-function hasClaudeAccount(home: string): boolean {
+/** A Claude login is an OAuth token in ~/.claude/.credentials.json. The file and ~/.claude.json's
+ * `oauthAccount` both stay behind after a logout or a failed refresh, with the tokens emptied. */
+function hasClaudeTokens(home: string): boolean {
   try {
-    const config = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8')) as {
-      oauthAccount?: unknown;
+    const parsed = JSON.parse(readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8')) as {
+      claudeAiOauth?: { accessToken?: unknown; refreshToken?: unknown } | null;
     };
-    return Boolean(config.oauthAccount);
+    const oauth = parsed?.claudeAiOauth;
+    const filled = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+    return Boolean(oauth && (filled(oauth.accessToken) || filled(oauth.refreshToken)));
+  } catch {
+    return false;
+  }
+}
+
+/** Copilot CLI creates ~/.copilot on its first start, signed in or not. A login is a user recorded in
+ * its config (the token itself sits in the credential store or that config), or a gh CLI token. */
+function hasCopilotLogin(home: string): boolean {
+  try {
+    const raw = readFileSync(path.join(home, '.copilot', 'config.json'), 'utf8');
+    // The file starts with `//` comment lines.
+    const json = raw
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n');
+    const config = JSON.parse(json) as Record<string, unknown>;
+    // Copilot CLI 1.0 writes `loggedInUsers`, `lastLoggedInUser` and (without a credential store)
+    // `authTokens`; older versions wrote the snake_case names.
+    const nonEmpty = (v: unknown) =>
+      Array.isArray(v) ? v.length > 0 : Boolean(v && typeof v === 'object' && Object.keys(v).length > 0);
+    return (
+      [
+        config.loggedInUsers,
+        config.lastLoggedInUser,
+        config.authTokens,
+        config.logged_in_users,
+        config.last_logged_in_user,
+        config.copilot_tokens,
+      ].some(nonEmpty) || hasGhToken(home)
+    );
+  } catch {
+    // no config, or not readable
+  }
+  return hasGhToken(home);
+}
+
+function hasGhToken(home: string): boolean {
+  try {
+    return /oauth_token:\s*\S+/.test(readFileSync(path.join(home, '.config', 'gh', 'hosts.yml'), 'utf8'));
   } catch {
     return false;
   }
@@ -218,16 +261,11 @@ function detectRunnerProviderAuth(params: {
 }) {
   // The runner's home, mounted read-only into core at the same path.
   const home = process.env.EMBERLINE_RUNNER_HOME ?? '/home/node';
-  // ~/.claude.json appears as soon as Claude Code starts once, signed in or not: only a credentials
-  // file or a recorded account means a login.
-  const claudeOAuth = existsSync(path.join(home, '.claude', '.credentials.json')) || hasClaudeAccount(home);
+  const claudeOAuth = hasClaudeTokens(home);
   const geminiOAuth = hasValidGeminiOAuth(home);
   const antigravityOAuth = hasNonEmptyAntigravitySecrets(home);
   const codexOAuth = existsSync(path.join(home, '.codex', 'auth.json'));
-  const copilotOAuth =
-    existsSync(path.join(home, '.copilot')) ||
-    existsSync(path.join(home, '.config', 'github-copilot')) ||
-    existsSync(path.join(home, '.config', 'gh', 'hosts.yml'));
+  const copilotOAuth = hasCopilotLogin(home);
 
   return {
     claude: claudeOAuth
@@ -309,7 +347,7 @@ function detectRunnerProviderAuth(params: {
           method: 'oauth_cli' as const,
           label: '✓ ChatGPT / Codex OAuth',
           cliInstalled: true,
-          loginCommandHint: 'codex login',
+          loginCommandHint: 'codex login --device-auth',
         }
       : params.openaiKeyConfigured
         ? {
@@ -317,14 +355,14 @@ function detectRunnerProviderAuth(params: {
             method: 'api_key' as const,
             label: '✓ OpenAI API Key',
             cliInstalled: true,
-            loginCommandHint: 'codex login',
+            loginCommandHint: 'codex login --device-auth',
           }
         : {
             authenticated: false,
             method: 'none' as const,
             label: 'ChatGPT OAuth or API Key',
             cliInstalled: true,
-            loginCommandHint: 'codex login',
+            loginCommandHint: 'codex login --device-auth',
           },
     copilot: copilotOAuth
       ? {
@@ -332,14 +370,14 @@ function detectRunnerProviderAuth(params: {
           method: 'oauth_cli' as const,
           label: '✓ GitHub OAuth Active',
           cliInstalled: true,
-          loginCommandHint: 'copilot login',
+          loginCommandHint: 'copilot login --device-code',
         }
       : {
           authenticated: false,
           method: 'none' as const,
           label: 'GitHub OAuth Login',
           cliInstalled: true,
-          loginCommandHint: 'copilot login',
+          loginCommandHint: 'copilot login --device-code',
         },
     aider:
       params.anthropicKeyConfigured || params.openaiKeyConfigured || params.geminiKeyConfigured
