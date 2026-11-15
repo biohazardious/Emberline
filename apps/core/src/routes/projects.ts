@@ -184,7 +184,7 @@ import type { KeepMainPushed } from '../repository/keep-pushed.js';
 import { agentDemoUrl as sharedAgentDemoUrl, demoWorkspacePath } from '../factory/demo-target.js';
 import { runCommit } from '../factory/commit-identity.js';
 import { resolveBrowserUrl } from '../runs/browser-url.js';
-import { ToolchainService } from '../toolchain/service.js';
+import type { ToolchainService } from '../toolchain/service.js';
 
 /** `sshKeyChoice: 'own'` with an http(s) address. */
 const OWN_KEY_SSH_ONLY =
@@ -250,7 +250,13 @@ export function registerProjectRoutes(
     postMerge,
     mainPush,
     gitPage,
-  }: CoreDeps & { postMerge: PostMergeJobs; mainPush: KeepMainPushed; gitPage?: GitPageService },
+    toolchain,
+  }: CoreDeps & {
+    postMerge: PostMergeJobs;
+    mainPush: KeepMainPushed;
+    gitPage?: GitPageService;
+    toolchain: ToolchainService;
+  },
 ): void {
   // The import clone holds a capability: it runs in the ops container, out of the agents' sight (the
   // runner in the dev stack, which has none).
@@ -1154,7 +1160,6 @@ export function registerProjectRoutes(
     serveDemo(request.params.token, request.params['*'] ?? '', reply),
   );
 
-  const toolchain = new ToolchainService(db, ptyd, config.workspacesDir);
   if (process.env.NODE_ENV === 'production') {
     toolchain.ensureEnabledProvidersInstalled();
   }

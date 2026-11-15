@@ -20,6 +20,7 @@ import { PostMergeJobs } from './factory/post-merge.js';
 import { IssueSyncService } from './forge/issue-sync.js';
 import { requestUrlForLog } from './git-gateway/gateway.js';
 import { ForgeService } from './forge/service.js';
+import { ModelDiscovery } from './models/discovery.js';
 import { NoticeService } from './notices/service.js';
 import { PresenceRegistry } from './notifications/presence.js';
 import { NotificationService } from './notifications/service.js';
@@ -61,6 +62,7 @@ import type { Scheduler } from './scheduler/service.js';
 import { DEFAULT_BODY_LIMIT, installSecurityHeaders } from './security-headers.js';
 import { IssueImportService } from './tickets/issue-import.js';
 import type { TicketService } from './tickets/service.js';
+import { ToolchainService } from './toolchain/service.js';
 import { UpdateService } from './updates/service.js';
 
 export const VERSION = '0.9.2';
@@ -82,6 +84,13 @@ export interface CoreDeps {
   presence?: PresenceRegistry;
   /** Inbox notices (new models, unread model lists); built from `db` when omitted. */
   notices?: NoticeService;
+  /** Installs and updates the CLIs in the runner; built when omitted. */
+  toolchain?: ToolchainService;
+  /**
+   * Reads each provider's models into the catalog. Built when omitted, but then not started (main
+   * starts its own): a test server reads no CLI unless asked.
+   */
+  discovery?: ModelDiscovery;
   /** The forge service; built from `db` and `runs` when omitted. */
   forge?: ForgeService;
   /** Issue label sync and write-back; built from the other services when omitted. */
@@ -146,6 +155,17 @@ export async function buildServer(
   const startedAt = Date.now();
   const presence = deps.presence ?? new PresenceRegistry();
   const notices = deps.notices ?? new NoticeService(deps.db);
+  const toolchain = deps.toolchain ?? new ToolchainService(deps.db, deps.ptyd, deps.config.workspacesDir);
+  const discovery =
+    deps.discovery ??
+    new ModelDiscovery({
+      db: deps.db,
+      ptyd: deps.ptyd,
+      ...(deps.opsPtyd ? { ops: deps.opsPtyd } : {}),
+      toolchain,
+      notices,
+      log: (message, err) => app.log.warn({ err }, message),
+    });
   deps.runs.setLogger(app.log);
   const notifications = new NotificationService(deps.db, deps.runs, deps.scheduler, {
     presence,
@@ -277,6 +297,7 @@ export async function buildServer(
     await issueSync.stop();
     await postMerge.stop();
     await mainPush.stop();
+    await discovery.stop();
   });
 
   installErrorHandler(app);
@@ -317,7 +338,7 @@ export async function buildServer(
     sshKeyMissing: sshKeyMissingProjects(deps.db),
     docker: deps.runs.docker.status,
   }));
-  registerProjectRoutes(app, { ...deps, postMerge, mainPush, gitPage });
+  registerProjectRoutes(app, { ...deps, postMerge, mainPush, gitPage, toolchain });
   registerProjectImportRoutes(app, deps);
   registerWorktreeConfigRoutes(app, deps);
   registerContainerPreviewRoutes(app, deps);

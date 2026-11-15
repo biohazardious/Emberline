@@ -1,8 +1,13 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { CliToolStatus } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { setSetting } from './db/index.js';
+import { MODEL_PROBE_KIND, ModelDiscovery, pickerJob } from './models/discovery.js';
+import { NoticeService } from './notices/service.js';
 import { slugify } from './routes/projects.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
 
@@ -117,6 +122,43 @@ describe('terminals', () => {
     expect(await statusOf({ origin: address })).toBe(401);
     expect(await statusOf({ cookie, origin: 'https://evil.example' })).toBe(403);
     expect(await statusOf({ cookie })).toBe(403);
+  });
+
+  it('leaves a running model-discovery probe out of the list', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'probe-home-'));
+    // A probe that never gets past its first step, so it is still running while the list is read.
+    const script = {
+      command: { file: '/bin/sh', args: ['-c', 'echo waiting; sleep 30'], env: {} },
+      ready: /^>\s*$/m,
+      picker: /Select model/,
+      groupRow: /More models/,
+      cursorRow: /^\s*❯/,
+      exit: '/exit',
+      stepTimeoutMs: 30_000,
+    };
+    setSetting(t.db, 'factory.settings', { enabledProviders: ['claude'] });
+    const discovery = new ModelDiscovery({
+      db: t.db,
+      ptyd: t.ptyd,
+      toolchain: {
+        getToolStatus: async () =>
+          ({ installed: true, installing: false, version: '1.0.0' }) as CliToolStatus,
+        onCliInstalled: () => () => undefined,
+      },
+      notices: new NoticeService(t.db),
+      log: () => undefined,
+      runnerHome: home,
+      jobs: { claude: pickerJob(script, () => []) },
+    });
+    const shell = (await api('POST', '/api/terminals', { kind: 'shell' })).json();
+    void discovery.refresh('claude');
+    await expect
+      .poll(async () => (await t.ptyd.get().list()).sessions.map((s) => s.meta.kind))
+      .toContain(MODEL_PROBE_KIND);
+    expect((await api('GET', '/api/terminals')).json().map((x: { id: string }) => x.id)).toEqual([shell.id]);
+    await discovery.stop();
+    expect((await t.ptyd.get().list()).sessions.map((s) => s.meta.kind)).not.toContain(MODEL_PROBE_KIND);
+    rmSync(home, { recursive: true, force: true });
   });
 
   it('returns 503 when the runner is unreachable', async () => {

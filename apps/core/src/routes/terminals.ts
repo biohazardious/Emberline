@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { projects } from '../db/schema.js';
 import { notFound } from '../errors.js';
+import { MODEL_PROBE_KIND } from '../models/discovery.js';
 import { opsBridgeOf, type PtydBridge } from '../ptyd-bridge.js';
 import type { CoreDeps } from '../server.js';
 import { PRE_READY_CAP, sendBounded, TERMINAL_SEND_CAP } from './ws-send.js';
@@ -55,7 +56,10 @@ export function registerTerminalRoutes(app: FastifyInstance, { db, config, ptyd,
   app.get('/api/terminals', async (): Promise<TerminalInfo[]> => {
     const { sessions } = await ptyd.get().list();
     const clones = ops === ptyd ? [] : await cloneSessions(ops);
-    return [...sessions, ...clones].map(toTerminal).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // A model-discovery probe is driven by core, not a person's terminal: typing into it would
+    // reach the CLI mid-read.
+    const shown = sessions.filter((s) => s.meta.kind !== MODEL_PROBE_KIND);
+    return [...shown, ...clones].map(toTerminal).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   });
 
   app.post('/api/terminals', async (request, reply): Promise<TerminalInfo> => {

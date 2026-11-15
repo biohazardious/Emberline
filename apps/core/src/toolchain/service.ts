@@ -141,6 +141,7 @@ export class ToolchainService {
   /** Runner terminal of each SDK's last action. */
   private readonly sdkTerminals = new Map<SdkId, string>();
   private readonly sdkCommand = process.env.EMBERLINE_SDK_COMMAND ?? 'emberline-sdk';
+  private readonly installedListeners = new Set<(provider: AgentId) => void>();
 
   constructor(
     private readonly db: Db,
@@ -157,6 +158,15 @@ export class ToolchainService {
         cachedVersion: null,
       });
     }
+  }
+
+  /**
+   * Called after a CLI install or update Emberline ran succeeds (model discovery reads its models
+   * again). One run in a terminal is not seen to end, so it calls nothing. Returns the unsubscribe.
+   */
+  onCliInstalled(listener: (provider: AgentId) => void): () => void {
+    this.installedListeners.add(listener);
+    return () => this.installedListeners.delete(listener);
   }
 
   /** Exports that point npm/pipx at the persistent runner-tools volume. */
@@ -467,6 +477,7 @@ export class ToolchainService {
       }
       rt.installing = false;
       rt.lastUpdatedAt = new Date().toISOString();
+      if (action !== 'uninstall') for (const listener of this.installedListeners) listener(provider);
       return {
         tool: await this.getToolStatus(provider),
         output: output.slice(-4000) || `${entry.shortLabel} CLI ${action} completed.`,

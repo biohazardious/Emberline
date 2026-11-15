@@ -17,8 +17,10 @@ import { exitOnSecretsKeyError, forgetLogLine, startSecrets } from './secrets/st
 import { Scheduler } from './scheduler/service.js';
 import { buildServer } from './server.js';
 import { startupWarnings } from './startup-warnings.js';
+import { ModelDiscovery } from './models/discovery.js';
 import { NoticeService } from './notices/service.js';
 import { TicketService } from './tickets/service.js';
+import { ToolchainService } from './toolchain/service.js';
 
 const config = loadConfig();
 const { db, close: closeDb } = openDb(path.join(config.dataDir, 'emberline.db'));
@@ -60,9 +62,31 @@ const runs = new RunService(db, config, ptyd, docker);
 const scheduler = new Scheduler(db, runs, ptyd, config);
 const tickets = new TicketService(db, runs, scheduler);
 const notices = new NoticeService(db);
+const toolchain = new ToolchainService(db, ptyd, config.workspacesDir);
+let logDiscovery: (message: string, err?: unknown) => void = () => undefined;
+// Reads each CLI's models once the runner first connects, then daily and after an install or update.
+const discovery = new ModelDiscovery({
+  db,
+  ptyd,
+  ...(ops ? { ops } : {}),
+  toolchain,
+  notices,
+  log: (message, err) => logDiscovery(message, err),
+});
 
 const app = await buildServer(
-  { config, db, ptyd, ...(ops ? { opsPtyd: ops } : {}), runs, tickets, scheduler, notices },
+  {
+    config,
+    db,
+    ptyd,
+    ...(ops ? { opsPtyd: ops } : {}),
+    runs,
+    tickets,
+    scheduler,
+    notices,
+    toolchain,
+    discovery,
+  },
   { logger: { level: config.logLevel } },
 );
 if (secrets.source === 'created') {
@@ -88,6 +112,7 @@ for (const warning of startupWarnings(process.env, config)) {
   if (warning.data) app.log.warn(warning.data, warning.message);
   else app.log.warn(warning.message);
 }
+logDiscovery = (message, err) => (err ? app.log.warn({ err }, message) : app.log.info(message));
 logDocker = (status) => {
   if (status.available)
     app.log.info({ host: config.dockerHost, version: status.version }, 'Docker engine available');
@@ -137,6 +162,7 @@ commands.on('status', (status) => {
     }
   }
 });
+discovery.start();
 ops?.start();
 ptyd.start();
 runs.startReconciler();
