@@ -57,6 +57,12 @@ describe('models routes', () => {
     expect((await call('POST', '/api/models/refresh', { agent: 'nope' })).statusCode).toBe(400);
   });
 
+  it('refuses to add an id that is already in the list with 409', async () => {
+    const res = await call('POST', '/api/models/claude/manual', { id: 'opus' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ message: string }>().message).toBe('opus is already in the list.');
+  });
+
   it('removes only models that were typed in', async () => {
     const res = await call('DELETE', '/api/models/claude/manual/claude-opus-5');
     expect(res.statusCode).toBe(409);

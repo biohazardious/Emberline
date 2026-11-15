@@ -3,7 +3,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
 import { badRequest, conflict } from '../errors.js';
-import { addManualModel, readCatalog, removeManualModel } from '../models/catalog.js';
+import {
+  addManualModel,
+  ModelAlreadyListedError,
+  readCatalog,
+  removeManualModel,
+} from '../models/catalog.js';
 import type { ModelDiscovery } from '../models/discovery.js';
 
 const RefreshRequest = z.object({ agent: AgentId.optional() }).default({});
@@ -36,7 +41,12 @@ export function registerModelRoutes(app: FastifyInstance, db: Db, discovery: Mod
         'A model id is letters, digits and . _ : / @ - only, and starts with a letter or digit.',
       );
     }
-    addManualModel(db, agent, parsed.data.id, parsed.data.label || undefined);
+    try {
+      addManualModel(db, agent, parsed.data.id, parsed.data.label || undefined);
+    } catch (err) {
+      if (err instanceof ModelAlreadyListedError) throw conflict(err.message);
+      throw err;
+    }
     return { catalog: readCatalog(db) };
   });
 

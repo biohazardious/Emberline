@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type OpenedDb, openDb } from '../db/index.js';
 import {
   addManualModel,
+  ModelAlreadyListedError,
   mergeDiscovery,
   publishCatalog,
   readCatalog,
@@ -70,11 +71,53 @@ describe('mergeDiscovery', () => {
     expect(stored('bad id')).toBeUndefined();
   });
 
-  it('keeps a manual entry manual when discovery returns it', () => {
-    addManualModel(opened.db, 'antigravity', 'mine-low', 'Mine');
+  it("follows the CLI's label and description of an id it lists again", () => {
+    mergeDiscovery(
+      opened.db,
+      'claude',
+      {
+        models: [{ id: 'opus', label: 'Opus 5.5', description: 'Best for everyday work' }],
+        source: 'picker',
+        cliVersion: '2.1.325',
+      },
+      t1,
+    );
+    mergeDiscovery(
+      opened.db,
+      'claude',
+      {
+        models: [{ id: 'opus', label: 'Opus 6', description: 'Most capable' }],
+        source: 'picker',
+        cliVersion: '2.2.0',
+      },
+      t2,
+    );
+    const opus = readCatalog(opened.db).claude.models.find((m) => m.id === 'opus');
+    expect(opus).toMatchObject({
+      label: 'Opus 6',
+      description: 'Most capable',
+      source: 'picker',
+      firstSeen: t1.toISOString(),
+    });
+    expect(getModelsForProvider('claude').find((m) => m.id === 'opus')?.label).toBe('Opus 6');
+  });
+
+  it("makes an id a person typed in the CLI's once the CLI lists it, without announcing it", () => {
+    addManualModel(opened.db, 'antigravity', 'mine-low', 'Mine', t1);
     const r = mergeDiscovery(opened.db, 'antigravity', found(['mine-low']), t2);
     expect(r.added).toEqual([]);
-    expect(stored('mine-low')).toMatchObject({ source: 'manual', label: 'Mine', lastSeen: t2.toISOString() });
+    expect(stored('mine-low')).toMatchObject({
+      source: 'cli',
+      label: 'mine-low',
+      badge: 'discovered',
+      firstSeen: t1.toISOString(),
+      lastSeen: t2.toISOString(),
+      missingSince: null,
+    });
+    // It is no longer the person's to remove, so the next read neither loses nor announces it.
+    removeManualModel(opened.db, 'antigravity', 'mine-low');
+    expect(mergeDiscovery(opened.db, 'antigravity', found(['mine-low']), t3).added).toEqual([]);
+    expect(stored('mine-low')).toMatchObject({ source: 'cli' });
   });
 });
 
@@ -103,6 +146,34 @@ describe('manual models', () => {
 
   it('rejects an unsafe id', () => {
     expect(() => addManualModel(opened.db, 'antigravity', 'bad id')).toThrow();
+  });
+
+  it('refuses an id the CLI lists or Emberline ships, leaving the entry as the CLI reported it', () => {
+    mergeDiscovery(opened.db, 'antigravity', found(['found-high']), t1);
+    mergeDiscovery(opened.db, 'antigravity', found(['other-high']), t2);
+    expect(stored('found-high')?.missingSince).toBe(t2.toISOString());
+    expect(() => addManualModel(opened.db, 'antigravity', 'found-high', 'Mine')).toThrow(
+      ModelAlreadyListedError,
+    );
+    expect(() => addManualModel(opened.db, 'antigravity', 'argon')).toThrow('argon is already in the list.');
+    expect(stored('found-high')).toMatchObject({
+      source: 'cli',
+      label: 'found-high',
+      missingSince: t2.toISOString(),
+    });
+    expect(stored('argon')).toBeUndefined();
+  });
+
+  it('stamps a typed-in id with the given time; typing it again only relabels it', () => {
+    addManualModel(opened.db, 'antigravity', 'typed-medium', undefined, t1);
+    addManualModel(opened.db, 'antigravity', 'typed-medium', 'Typed', t2);
+    expect(stored('typed-medium')).toMatchObject({
+      label: 'Typed',
+      source: 'manual',
+      firstSeen: t1.toISOString(),
+      lastSeen: t1.toISOString(),
+      missingSince: null,
+    });
   });
 });
 

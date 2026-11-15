@@ -97,6 +97,10 @@ function newEntry(
  * Folds one successful discovery into the stored catalog. Ids the CLI no longer lists stay, marked
  * missing, so a run that names one still resolves. `added` holds only ids that are new since this
  * release: not shipped, not listed at release time, not seen before.
+ *
+ * An id the CLI lists is the CLI's entry: its label and description follow the CLI's (Claude's
+ * alias rows move to new versions under the same id), and an id a person had typed in becomes
+ * the CLI's once the CLI lists it, so only ids no CLI lists are the person's to remove.
  */
 export function mergeDiscovery(
   db: Db,
@@ -121,8 +125,15 @@ export function mergeDiscovery(
     listed.add(found.id);
     const existing = byId.get(found.id);
     if (existing) {
-      // A manual entry stays manual: the person added it, discovery only confirms it exists.
-      byId.set(found.id, { ...existing, lastSeen: at, missingSince: null });
+      byId.set(found.id, {
+        ...existing,
+        label: found.label || found.id,
+        description: found.description ?? '',
+        source: result.source,
+        badge: 'discovered',
+        lastSeen: at,
+        missingSince: null,
+      });
       continue;
     }
     const created = newEntry(found.id, found.label || found.id, found.description ?? '', result.source, at);
@@ -154,21 +165,35 @@ export function recordReadFailure(
   return { firstFailure };
 }
 
-export function addManualModel(db: Db, agent: AgentId, id: string, label?: string): void {
+/** The id is already one of the provider's models: shipped with Emberline or listed by its CLI. */
+export class ModelAlreadyListedError extends Error {
+  constructor(readonly id: string) {
+    super(`${id} is already in the list.`);
+    this.name = 'ModelAlreadyListedError';
+  }
+}
+
+/**
+ * Adds an id the person typed in; typing it again changes its label. An id Emberline ships or the
+ * CLI lists is refused: it is in the list already, and it stays the CLI's.
+ */
+export function addManualModel(db: Db, agent: AgentId, id: string, label?: string, now = new Date()): void {
   if (!MODEL_ID_RE.test(id)) throw new Error(`Invalid model id: ${id}`);
   const catalog = readCatalog(db);
   const models = catalog[agent].models;
-  const at = new Date().toISOString();
   const i = models.findIndex((m) => m.id === id);
+  if (BUILTIN_MODELS[agent].some((m) => m.id === id) || (i >= 0 && models[i]!.source !== 'manual')) {
+    throw new ModelAlreadyListedError(id);
+  }
   if (i >= 0) {
-    // Typing in an id the CLI already reported makes it the person's own.
-    models[i] = { ...models[i]!, source: 'manual', ...(label ? { label } : {}) };
+    if (label) models[i] = { ...models[i]!, label };
   } else {
-    models.push(newEntry(id, label || id, '', 'manual', at));
+    models.push(newEntry(id, label || id, '', 'manual', now.toISOString()));
   }
   save(db, catalog);
 }
 
+/** Removes an id the person added; an id the CLI lists is not theirs to remove and stays. */
 export function removeManualModel(db: Db, agent: AgentId, id: string): void {
   const catalog = readCatalog(db);
   const models = catalog[agent].models;
