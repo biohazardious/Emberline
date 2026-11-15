@@ -41,6 +41,16 @@ function save(db: Db, catalog: StoredCatalog): void {
   publishCatalog(db);
 }
 
+/**
+ * Whether `agent`'s own list was ever read: a successful read, or the entries one left behind (a
+ * later read may have failed). Until then its runs launch as they did before discovery.
+ */
+export function providerListRead(db: Db, agent: AgentId): boolean {
+  const entry = readCatalog(db)[agent];
+  if (!entry) return false;
+  return entry.read?.ok === true || entry.models.some((m) => m.source !== 'manual');
+}
+
 /** Gives the protocol the stored entries; the built-ins are merged on its side. */
 export function publishCatalog(db: Db): void {
   const stored = readCatalog(db);

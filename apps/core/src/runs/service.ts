@@ -239,6 +239,7 @@ import {
   runModel,
   runRoutes,
 } from './route.js';
+import { providerListRead } from '../models/catalog.js';
 import {
   isAcceptableTranscriptPath,
   readLastAssistantText,
@@ -1892,7 +1893,9 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // runs on the CLI's default rather than failing, and the run says so. A stand-in for Claude
     // takes no model at all.
     const { cliModel, unresolved } =
-      provider.hooks === 'native' && !isRealClaude ? {} : launchModel(row.agent as AgentId, resolvedModel);
+      provider.hooks === 'native' && !isRealClaude
+        ? {}
+        : launchModel(row.agent as AgentId, resolvedModel, providerListRead(this.db, row.agent as AgentId));
     if (unresolved) {
       this.note(row.id, 'model_unresolved', {
         model: unresolved,
@@ -2093,7 +2096,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const provider = providerAdapter(row.agent);
     const limits = {
       model: runModel(row),
-      cliModel: cliModelOf(row.agent, runModel(row)),
+      cliModel: cliModelOf(row.agent, runModel(row), providerListRead(this.db, row.agent as AgentId)),
       timeZone: this.config.timeZone,
     };
     const step = hookTransition(row, envelope, provider, limits, live);

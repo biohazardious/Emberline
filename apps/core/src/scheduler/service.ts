@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import type { RateLimitInfo } from '@emberline/adapter-sdk';
 import {
+  type AgentId,
   type CreateRunBody,
   type Lane,
   laneCovers,
@@ -26,6 +27,7 @@ import { HttpError } from '../errors.js';
 import { getQuotaPolicy, routeUsable } from '../factory/settings.js';
 import type { PtydBridge } from '../ptyd-bridge.js';
 import { providerAdapter } from '../runs/providers.js';
+import { providerListRead } from '../models/catalog.js';
 import { cliModelOf, currentRoute, runRoutes } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import { MAX_TIMER_MS, nextWakeAt } from './next-wake.js';
@@ -544,7 +546,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       ? providerAdapter(run.agent).rateLimitFromScreen(screen, {
           timeZone: this.config.timeZone,
           model: run.model,
-          cliModel: cliModelOf(run.agent, run.model),
+          cliModel: cliModelOf(run.agent, run.model, providerListRead(this.db, run.agent as AgentId)),
         })
       : undefined;
     if (onScreen?.resetsAt) {

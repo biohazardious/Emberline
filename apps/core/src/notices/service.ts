@@ -71,9 +71,14 @@ export class NoticeService extends EventEmitter<NoticeServiceEvents> {
     if (changed) this.save(all);
   }
 
+  /** Whether the Fable notice had its one chance already (shown, or skipped on a fresh install). */
+  fableNoticeShown(): boolean {
+    return getSetting<boolean>(this.db, FABLE_SHOWN_KEY) === true;
+  }
+
   /** Once, after the upgrade: the routes that name Fable ran on Opus until now. */
   fableNowFable(routes: string[]): void {
-    if (getSetting<boolean>(this.db, FABLE_SHOWN_KEY)) return;
+    if (this.fableNoticeShown()) return;
     setSetting(this.db, FABLE_SHOWN_KEY, true);
     if (routes.length === 0) return;
     this.add({

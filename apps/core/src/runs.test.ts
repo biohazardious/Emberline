@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  type AgentId,
   getModelCatalog,
   type ModelCatalog,
   setModelCatalog,
@@ -27,6 +28,7 @@ import { eq } from 'drizzle-orm';
 import { projects, runEvents, runs } from './db/schema.js';
 import { type ExecRequest, localCommandExecutor, setCommandExecutor, RUNNER_BIN } from './command-exec.js';
 import { worktreeHeadSha } from './runs/git.js';
+import { mergeDiscovery, providerListRead, recordReadFailure } from './models/catalog.js';
 import { launchModel } from './runs/route.js';
 import { rmTemp } from './test-rm.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp, wsProtocols } from './test-utils.js';
@@ -1605,21 +1607,54 @@ describe('runs', () => {
           missingSince: null,
         })),
       } as ModelCatalog);
+    /** A successful read of `agent`'s list that offered `ids` (stored and published). */
+    const listed = (agent: AgentId, ids: string[]) =>
+      mergeDiscovery(
+        t.db,
+        agent,
+        { models: ids.map((id) => ({ id, label: id })), source: 'cli', cliVersion: '1.0.0' },
+        new Date(),
+      );
     afterEach(() => setModelCatalog(null));
 
     it("a built-in family id resolves to the catalog's id; auto on Antigravity is its Argon default", () => {
       catalogWith('antigravity', ['gemini-4-argon-low', 'gemini-4-argon-high', 'gemini-3.8-flash-high']);
-      expect(launchModel('antigravity', 'argon')).toEqual({ cliModel: 'gemini-4-argon-high' });
-      expect(launchModel('antigravity', 'auto')).toEqual({ cliModel: 'gemini-4-argon-high' });
-      expect(launchModel('claude', 'fable')).toEqual({ cliModel: 'fable' });
-      expect(launchModel('claude', 'auto')).toEqual({});
-      expect(launchModel('copilot', 'auto')).toEqual({});
+      expect(launchModel('antigravity', 'argon', true)).toEqual({ cliModel: 'gemini-4-argon-high' });
+      expect(launchModel('antigravity', 'auto', true)).toEqual({ cliModel: 'gemini-4-argon-high' });
+      expect(launchModel('claude', 'fable', true)).toEqual({ cliModel: 'fable' });
+      expect(launchModel('claude', 'fable', false)).toEqual({ cliModel: 'fable' });
+      expect(launchModel('claude', 'auto', true)).toEqual({});
+      expect(launchModel('copilot', 'auto', true)).toEqual({});
     });
 
-    it('a stored id with no catalog match launches without --model and says so; auto never does', () => {
-      expect(launchModel('copilot', 'gpt-4o')).toEqual({ unresolved: 'gpt-4o' });
+    it('once the list was read, a stored id it lacks launches without --model and says so; auto never does', () => {
+      expect(launchModel('copilot', 'gpt-4o', true)).toEqual({ unresolved: 'gpt-4o' });
+      expect(launchModel('codex', 'o3', true)).toEqual({ unresolved: 'o3' });
       // Antigravity's Argon default that the catalog lacks is simply agy's own default.
-      expect(launchModel('antigravity', 'auto')).toEqual({});
+      expect(launchModel('antigravity', 'auto', true)).toEqual({});
+    });
+
+    it('before the list was ever read, built-in ids launch exactly as before discovery, with no note', () => {
+      expect(launchModel('codex', 'o3', false)).toEqual({ cliModel: 'o3' });
+      expect(launchModel('aider', 'opus', false)).toEqual({ cliModel: 'opus' });
+      expect(launchModel('gemini', 'gemini-pro', false)).toEqual({ cliModel: 'gemini-2.5-pro' });
+      expect(launchModel('gemini', 'gemini-flash-lite', false)).toEqual({
+        cliModel: 'gemini-2.5-flash-lite',
+      });
+      expect(launchModel('antigravity', 'argon', false)).toEqual({ cliModel: 'argon' });
+      expect(launchModel('antigravity', 'auto', false)).toEqual({ cliModel: 'argon' });
+      expect(launchModel('copilot', 'gpt-4o', false)).toEqual({});
+      // An id that is no built-in of the agent was never a working route there.
+      expect(launchModel('copilot', 'o3', false)).toEqual({ unresolved: 'o3' });
+    });
+
+    it('a list counts as read after a successful read, also when a later one failed', () => {
+      expect(providerListRead(t.db, 'codex')).toBe(false);
+      recordReadFailure(t.db, 'codex', '1.0.0', 'timed out', new Date());
+      expect(providerListRead(t.db, 'codex')).toBe(false);
+      listed('codex', ['gpt-5.4-codex']);
+      recordReadFailure(t.db, 'codex', '1.0.0', 'timed out', new Date());
+      expect(providerListRead(t.db, 'codex')).toBe(true);
     });
 
     it('an id that is not one safe word never reaches a command line', async () => {
@@ -1631,64 +1666,90 @@ describe('runs', () => {
       catalogWith('copilot', ['gpt-4o-2026']);
       const entry = getModelCatalog().copilot[0]!;
       setModelCatalog({ ...getModelCatalog(), copilot: [{ ...entry, cliId: 'gpt-4o"; rm -rf ~' }] });
-      expect(launchModel('copilot', 'gpt-4o-2026')).toEqual({ unresolved: 'gpt-4o-2026' });
+      expect(launchModel('copilot', 'gpt-4o-2026', true)).toEqual({ unresolved: 'gpt-4o-2026' });
     });
 
-    const copilotRun = (id: string, project: { id: string; path: string }, model: string) =>
-      t.db
-        .insert(runs)
-        .values({
-          id,
-          projectId: project.id,
-          agent: 'copilot',
-          model,
-          permissionMode: 'auto',
-          state: 'done',
-          prompt: 'do it',
-          worktreePath: project.path,
-          hookTokenHash: 'h',
-          agentSessionId: `copilot-${id}`,
-          ptydSessionId: `pty-gone-${id}`,
-          stateChangedAt: new Date(),
-          createdAt: new Date(),
-          endedAt: null,
-        })
-        .run();
+    const COMMAND_ENV: Record<string, string> = {
+      copilot: 'EMBERLINE_COPILOT_COMMAND',
+      codex: 'EMBERLINE_CODEX_COMMAND',
+      aider: 'EMBERLINE_AIDER_COMMAND',
+      gemini: 'EMBERLINE_GEMINI_COMMAND',
+    };
 
-    it('Copilot on a route the catalog lacks runs on its default, with a model_unresolved note', async () => {
-      process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
+    /** Respawns a finished one-shot run of `agent` on `model`; resolves with the launch script and its notes. */
+    async function launch(id: string, agent: AgentId, model: string) {
+      const env = COMMAND_ENV[agent]!;
+      process.env[env] = t.config.claudeCommand;
       try {
-        const project = await createProject('Copilot unresolved', true);
-        copilotRun('cop-1', project, 'gpt-4o');
+        const project = await createProject(`Launch ${id}`, true);
+        t.db
+          .insert(runs)
+          .values({
+            id,
+            projectId: project.id,
+            agent,
+            model,
+            permissionMode: 'auto',
+            state: 'done',
+            prompt: 'do it',
+            worktreePath: project.path,
+            hookTokenHash: 'h',
+            agentSessionId: `${agent}-${id}`,
+            ptydSessionId: `pty-gone-${id}`,
+            stateChangedAt: new Date(),
+            createdAt: new Date(),
+            endedAt: null,
+          })
+          .run();
         const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
-        await t.runs.prompt('cop-1', 'fix', { automatic: true });
-        await tokenFor('cop-1');
-        const script = spawn.mock.calls.at(-1)![0].args?.join(' ');
-        expect(script).not.toMatch(/copilot[^;]*--model/);
-        const notes = t.runs.get('cop-1').events.filter((e) => e.type === 'model_unresolved');
-        expect(notes).toHaveLength(1);
-        expect(notes[0]!.payload).toMatchObject({ model: 'gpt-4o' });
+        await t.runs.prompt(id, 'fix', { automatic: true });
+        await tokenFor(id);
+        const script = spawn.mock.calls.at(-1)![0].args?.join(' ') ?? '';
+        spawn.mockRestore();
+        const notes = t.runs.get(id).events.filter((e) => e.type === 'model_unresolved');
+        return { script, notes };
       } finally {
-        delete process.env.EMBERLINE_COPILOT_COMMAND;
+        delete process.env[env];
       }
+    }
+
+    it('Codex and Aider on a built-in id keep their --model until their list is read, then note a missing one', async () => {
+      const codexBefore = await launch('cdx-1', 'codex', 'o3');
+      expect(codexBefore.script).toContain('--model o3 ');
+      expect(codexBefore.notes).toEqual([]);
+      const aiderBefore = await launch('aid-1', 'aider', 'opus');
+      expect(aiderBefore.script).toContain('--model opus ');
+      expect(aiderBefore.notes).toEqual([]);
+
+      listed('codex', ['gpt-5.4-codex']);
+      listed('aider', ['openai/gpt-5.4']);
+      const codexAfter = await launch('cdx-2', 'codex', 'o3');
+      expect(codexAfter.script).not.toContain('--model');
+      expect(codexAfter.notes.map((n) => n.payload)).toEqual([expect.objectContaining({ model: 'o3' })]);
+      const aiderAfter = await launch('aid-2', 'aider', 'opus');
+      expect(aiderAfter.script).not.toContain('--model');
+      expect(aiderAfter.notes.map((n) => n.payload)).toEqual([expect.objectContaining({ model: 'opus' })]);
     });
 
-    it("Copilot on a route the catalog has gets the catalog's id", async () => {
-      process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
-      try {
-        catalogWith('copilot', ['gpt-5.4']);
-        const project = await createProject('Copilot resolved', true);
-        copilotRun('cop-2', project, 'gpt-5.4');
-        const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
-        await t.runs.prompt('cop-2', 'fix', { automatic: true });
-        await tokenFor('cop-2');
-        expect(spawn.mock.calls.at(-1)![0].args?.join(' ')).toContain(
-          '--model gpt-5.4 -p "$EMBERLINE_PROMPT"',
-        );
-        expect(t.runs.get('cop-2').events.map((e) => e.type)).not.toContain('model_unresolved');
-      } finally {
-        delete process.env.EMBERLINE_COPILOT_COMMAND;
-      }
+    it('Gemini on a built-in id before its list is read gets the Gemini CLI id it always got', async () => {
+      const { script, notes } = await launch('gem-m1', 'gemini', 'gemini-pro');
+      expect(script).toContain('--model gemini-2.5-pro -p');
+      expect(notes).toEqual([]);
+    });
+
+    it('Copilot on a route its list lacks runs on its default, with one model_unresolved note', async () => {
+      listed('copilot', ['gpt-5.4']);
+      const { script, notes } = await launch('cop-1', 'copilot', 'gpt-4o');
+      expect(script).not.toMatch(/copilot[^;]*--model/);
+      expect(notes).toHaveLength(1);
+      expect(notes[0]!.payload).toMatchObject({ model: 'gpt-4o' });
+    });
+
+    it("Copilot on a route its list has gets the catalog's id", async () => {
+      listed('copilot', ['gpt-5.4']);
+      const { script, notes } = await launch('cop-2', 'copilot', 'gpt-5.4');
+      expect(script).toContain('--model gpt-5.4 -p "$EMBERLINE_PROMPT"');
+      expect(notes).toEqual([]);
     });
   });
 

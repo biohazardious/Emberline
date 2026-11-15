@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runs } from './db/schema.js';
 import { noticeFableRoutes } from './factory/fable-routes.js';
+import { storedRoadmapItems } from './factory/roadmap.js';
 import { updateFactorySettings } from './factory/settings.js';
 import { NoticeService } from './notices/service.js';
 import { authHeaders, createTestApp, setupAndLogin, type TestApp } from './test-utils.js';
@@ -185,12 +186,17 @@ describe('the routes that now really run Fable', () => {
         updatedAt: new Date().toISOString(),
       }),
     );
-    await noticeFableRoutes(t.db, notices);
+    const firstRead = vi.fn(storedRoadmapItems);
+    await noticeFableRoutes(t.db, notices, firstRead);
+    expect(firstRead).toHaveBeenCalledWith(project.path);
     expect(notices.list()).toHaveLength(1);
     expect(notices.list()[0]!.text).toBe(
       'Routes on Fable ran on Opus until now; they run on Fable from now on: Product Owner → Claude Fable, System Architect → Claude Fable, Roadmap: Combo scoring (Match-3).',
     );
-    await noticeFableRoutes(t.db, new NoticeService(t.db));
+    // The next start reads no roadmap at all.
+    const readItems = vi.fn(async () => []);
+    await noticeFableRoutes(t.db, new NoticeService(t.db), readItems);
+    expect(readItems).not.toHaveBeenCalled();
     expect(new NoticeService(t.db).list()).toHaveLength(1);
   });
 

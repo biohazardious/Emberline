@@ -1,4 +1,4 @@
-import { type AgentId, MODEL_ID_RE, resolveCliModel, type Route } from '@emberline/protocol';
+import { type AgentId, BUILTIN_MODELS, MODEL_ID_RE, resolveCliModel, type Route } from '@emberline/protocol';
 import type { runs } from '../db/schema.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -41,25 +41,52 @@ export function currentRoute(
 /** What a route on `auto` has always launched with where that is not the CLI's own default. */
 const AUTO_MODEL: Partial<Record<AgentId, string>> = { antigravity: 'argon' };
 
+/** Gemini CLI's ids for Emberline's Gemini built-ins before discovery. */
+const GEMINI_PRE_DISCOVERY: Readonly<Record<string, string>> = {
+  'gemini-pro': 'gemini-2.5-pro',
+  'gemini-flash': 'gemini-2.5-flash',
+  'gemini-flash-lite': 'gemini-2.5-flash-lite',
+};
+
+/**
+ * The pre-discovery behaviour: what each CLI got for a built-in id before Emberline read its model
+ * list. A provider whose list was never read keeps it, so a route that worked then still works.
+ * Copilot had no `--model`; Claude's aliases always resolve.
+ */
+function preDiscoveryCliModel(agent: AgentId, id: string): string | undefined {
+  if (agent === 'codex' || agent === 'aider' || agent === 'antigravity') return id;
+  if (agent === 'gemini') return GEMINI_PRE_DISCOVERY[id];
+  return undefined;
+}
+
 /**
  * The id `agent`'s CLI is launched with for a stored model id, from the catalog. `cliModel`
- * undefined leaves the CLI on its own default; `unresolved` names a stored id the CLI no longer
- * offers (or never did), which the run notes. A CLI is only ever handed one safe word.
+ * undefined leaves the CLI on its own default; `unresolved` names a stored id the CLI's list
+ * (once read, `listRead`) does not offer, which the run notes. A CLI is only ever handed one
+ * safe word.
  */
 export function launchModel(
   agent: AgentId,
   model: string | null | undefined,
+  listRead: boolean,
 ): { cliModel?: string; unresolved?: string } {
   const named = model && model !== 'auto' ? model : undefined;
   const wanted = named ?? AUTO_MODEL[agent];
   if (!wanted) return {};
-  const cliModel = resolveCliModel(agent, wanted);
+  const resolved = resolveCliModel(agent, wanted);
+  const builtin = (BUILTIN_MODELS[agent] ?? []).some((m) => m.id === wanted);
+  const cliModel = resolved ?? (builtin && !listRead ? preDiscoveryCliModel(agent, wanted) : undefined);
   if (cliModel && MODEL_ID_RE.test(cliModel)) return { cliModel };
-  // An `auto` default the catalog lacks is the CLI's own default; nobody named a model.
-  return named ? { unresolved: named } : {};
+  // Nothing to note before the list was read (the CLI's default is what ran then too), nor for an
+  // `auto` default the catalog lacks: nobody named a model.
+  return named && (listRead || !builtin) ? { unresolved: named } : {};
 }
 
 /** The id the CLI runs `model` as, for reading its limit messages (no default, no note). */
-export function cliModelOf(agent: string, model: string | null | undefined): string | undefined {
-  return model && model !== 'auto' ? launchModel(agent as AgentId, model).cliModel : undefined;
+export function cliModelOf(
+  agent: string,
+  model: string | null | undefined,
+  listRead: boolean,
+): string | undefined {
+  return model && model !== 'auto' ? launchModel(agent as AgentId, model, listRead).cliModel : undefined;
 }
