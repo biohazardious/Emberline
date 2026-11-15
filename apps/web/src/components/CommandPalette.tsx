@@ -119,7 +119,7 @@ export function CommandPalette({
         id: 'nav-settings',
         group: 'Navigation',
         label: 'Go to Factory Settings',
-        meta: 'Auto-pilot, AI providers (Claude/Gemini/Codex), theme & quota',
+        meta: 'Auto-pilot, AI providers (Claude/Antigravity/Codex), theme & quota',
         badge: 'G S',
         run: () => navigate('/settings'),
       },

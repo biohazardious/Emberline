@@ -100,7 +100,7 @@ function discovery(overrides: Partial<ModelDiscoveryDeps> = {}) {
 
 describe('refresh', () => {
   it('reads installed and enabled providers only, one at a time', async () => {
-    enable(['claude', 'antigravity', 'gemini']);
+    enable(['claude', 'antigravity', 'copilot']);
     let running = 0;
     let most = 0;
     const ran: AgentId[] = [];
@@ -115,13 +115,13 @@ describe('refresh', () => {
         return { models: [{ id: `${agent}-x`, label: 'X' }], source: 'cli' };
       };
     const d = discovery({
-      // aider is installed but not enabled; gemini is enabled but not installed.
+      // aider is installed but not enabled; copilot is enabled but not installed.
       toolchain: fakeToolchain(['claude', 'antigravity', 'aider']),
       jobs: {
         claude: job('claude'),
         antigravity: job('antigravity'),
         aider: job('aider'),
-        gemini: job('gemini'),
+        copilot: job('copilot'),
       },
     });
     const reads = await d.refresh();
@@ -191,9 +191,9 @@ describe('refresh', () => {
         aider: 'not_enabled',
       },
     });
-    expect(await discovery({ jobs: {} }).refreshDetailed('gemini')).toEqual({
+    expect(await discovery({ jobs: {} }).refreshDetailed('aider')).toEqual({
       reads: {},
-      skipped: { gemini: 'no_reader' },
+      skipped: { aider: 'no_reader' },
     });
     const away = new FakePtyd();
     away.status = 'disconnected';

@@ -50,7 +50,6 @@ export type ResumeMode = 'session' | 'continue_latest' | 'fresh';
 export const PROVIDER_RUNTIME: Record<AgentId, { credentials: Credential[]; resumeMode: ResumeMode }> = {
   claude: { credentials: ['login', 'api_key'], resumeMode: 'session' },
   antigravity: { credentials: ['login', 'credits'], resumeMode: 'continue_latest' },
-  gemini: { credentials: ['login', 'api_key'], resumeMode: 'fresh' },
   codex: { credentials: ['login', 'api_key'], resumeMode: 'fresh' },
   copilot: { credentials: ['login'], resumeMode: 'fresh' },
   aider: { credentials: ['api_key'], resumeMode: 'fresh' },
@@ -64,8 +63,8 @@ export interface Lane {
 }
 
 /**
- * Claude's and Gemini's quotas are per model family, and their limit messages name the family
- * (Claude's "Opus weekly limit", Gemini's "gemini-3.8-pro"): a discovered id joins its family's pool.
+ * Claude's quotas are per model family, and its limit messages name the family ("Opus weekly
+ * limit"): a discovered id joins its family's pool.
  */
 const FAMILY_POOLS: Partial<Record<string, readonly [RegExp, string][]>> = {
   claude: [
@@ -73,11 +72,6 @@ const FAMILY_POOLS: Partial<Record<string, readonly [RegExp, string][]>> = {
     [/(^|-)opus(-|$)/, 'opus'],
     [/(^|-)sonnet(-|$)/, 'sonnet'],
     [/(^|-)haiku(-|$)/, 'haiku'],
-  ],
-  gemini: [
-    [/gemini-[\d.]+-flash-lite\b/, 'gemini-flash-lite'],
-    [/gemini-[\d.]+-flash\b/, 'gemini-flash'],
-    [/gemini-[\d.]+-pro\b/, 'gemini-pro'],
   ],
 };
 

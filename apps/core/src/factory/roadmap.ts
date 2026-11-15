@@ -1159,7 +1159,8 @@ async function readOrInitRoadmapFile(
       // A tag naming a model the agent lacks is coerced, like every other agent-written route.
       preferredModel: coerceModelForProvider(
         taggedAgent ?? routing.preferredAgent,
-        routeTagMatch?.[2] ?? routing.preferredModel,
+        // A tag naming an agent that is gone (Gemini CLI) says nothing about the model either.
+        (taggedAgent && routeTagMatch?.[2]) || routing.preferredModel,
         t.persona,
       ),
       priority: t.priority,

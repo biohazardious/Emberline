@@ -93,7 +93,7 @@ describe('persona routes', () => {
       personaRoutes: {
         ui_ux: [
           { agent: 'antigravity', model: 'argon', credential: 'api_key' },
-          { agent: 'gemini', model: 'gemini-pro', credential: 'login' },
+          { agent: 'codex', model: 'o3', credential: 'login' },
           { agent: 'claude', model: 'opus', credential: 'login' },
           { agent: 'claude', model: 'opus', credential: 'login' },
         ],
@@ -367,7 +367,7 @@ describe('Antigravity terms acknowledgement', () => {
   });
 });
 
-describe('Gemini auth reality', () => {
+describe('the Gemini key after Gemini CLI', () => {
   const withHome = (files: Record<string, string>, fn: () => void) => {
     const home = mkdtempSync(path.join(tmpdir(), 'ember-home-'));
     for (const [rel, body] of Object.entries(files)) {
@@ -397,22 +397,39 @@ describe('Gemini auth reality', () => {
     }
   };
 
-  it('consumer OAuth files alone are signed in with a Code Assist warning, and never count for Antigravity', () => {
+  it('Gemini CLI login files sign in nothing and enable nothing', () => {
     withHome({ '.gemini/oauth_creds.json': '{}' }, () => {
-      const auth = getFactorySettings(t.db).providerAuth!;
-      expect(auth.gemini).toMatchObject({ authenticated: true, method: 'oauth_cli' });
-      expect(auth.gemini.warning).toMatch(/Code Assist/);
-      expect(auth.gemini.warning).toMatch(/2026-06-18/);
-      expect(auth.antigravity.authenticated).toBe(false);
+      const cfg = getFactorySettings(t.db);
+      expect(Object.keys(cfg.providerAuth!)).not.toContain('gemini');
+      expect(cfg.providerAuth!.antigravity.authenticated).toBe(false);
+      expect(cfg.enabledProviders).toEqual(['claude']);
     });
   });
 
-  it('a stored Gemini key wins over OAuth files and carries no warning', () => {
-    withHome({ '.gemini/oauth_creds.json': '{}' }, () => {
-      updateFactorySettings(t.db, { geminiApiKey: 'k' });
-      const auth = getFactorySettings(t.db).providerAuth!;
-      expect(auth.gemini.method).toBe('api_key');
-      expect(auth.gemini.warning).toBeUndefined();
+  it('a saved Gemini key enables no provider and does not sign in Antigravity; Aider uses it', () => {
+    withHome({}, () => {
+      const before = getFactorySettings(t.db).enabledProviders;
+      const cfg = updateFactorySettings(t.db, { geminiApiKey: 'k' });
+      expect(cfg.enabledProviders).toEqual(before);
+      expect(cfg.geminiKeyStored).toBe(true);
+      expect(cfg.providerAuth!.antigravity).toMatchObject({ authenticated: false, method: 'none' });
+      expect(cfg.providerAuth!.aider).toMatchObject({ authenticated: true, method: 'api_key' });
+    });
+  });
+
+  it('an Antigravity step on the API key runs on its login', () => {
+    withHome({}, () => {
+      storeRaw(
+        {
+          enabledProviders: ['claude', 'antigravity'],
+          antigravityTermsAcknowledged: true,
+          personaRoutes: { ui_ux: [{ agent: 'antigravity', model: 'argon', credential: 'api_key' }] },
+        },
+        { geminiApiKey: 'k' },
+      );
+      expect(getFactorySettings(t.db).personaRoutes.ui_ux).toEqual([
+        { agent: 'antigravity', model: 'argon', credential: 'login' },
+      ]);
     });
   });
 });

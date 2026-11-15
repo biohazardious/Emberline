@@ -17,7 +17,6 @@ export const AGENT_LABELS: Record<AgentId, string> = {
   claude: 'Claude Code',
   antigravity: 'Antigravity CLI',
   copilot: 'Copilot CLI',
-  gemini: 'Gemini CLI',
   codex: 'OpenAI Codex',
   aider: 'Aider CLI',
 };

@@ -62,16 +62,15 @@ export function commandOverridden(agent: AgentId): boolean {
 
 /**
  * First-run questions each CLI asks, and its self-update, turned off for the probe the way runs turn
- * them off. Codex's update check is off on its command line (list-command.ts); agy and Gemini CLI
+ * them off. Codex's update check is off on its command line (list-command.ts); agy and Copilot
  * have theirs off in the config `emberline-cli-seed` writes, which the probe runs first.
  */
 export const PROBE_ENV: Partial<Record<AgentId, Record<string, string>>> = {
   claude: CLAUDE_PROBE_ENV,
-  gemini: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
   copilot: { COPILOT_AUTO_UPDATE: 'false' },
 };
 /** CLIs whose first-run questions `emberline-cli-seed` pre-answers in their config files. */
-const SEEDED = new Set<AgentId>(['antigravity', 'copilot', 'gemini']);
+const SEEDED = new Set<AgentId>(['antigravity', 'copilot']);
 
 /**
  * Runs the CLI from the scratch folder (created if missing), after the seed for CLIs that have one,
@@ -219,9 +218,9 @@ const codexJob: DiscoveryJob = (ctx) =>
   hasCodexLogin(ctx.cwd) ? readCodexListing(ctx) : Promise.resolve(null);
 
 /**
- * The providers discovery can read. Gemini CLI has no list to read, and aider's listing is litellm's
- * offline table of every model it knows (retired ones too), not what the account offers: both get
- * their models by hand, and aider's own aliases (`sonnet`, `opus`, …) launch as they are.
+ * The providers discovery can read. Aider's listing is litellm's offline table of every model it
+ * knows (retired ones too), not what the account offers: it gets its models by hand, and its own
+ * aliases (`sonnet`, `opus`, …) launch as they are.
  */
 export const DISCOVERY_JOBS: Partial<Record<AgentId, DiscoveryJob>> = {
   claude: pickerJob(CLAUDE_PICKER, parseClaudePicker),

@@ -45,6 +45,7 @@ export function PersonaRoutingSection({
     settings,
     defaultAgent,
     enabledProviders,
+    antigravityAck,
     personaRoutes,
     setPersonaRoutes,
     quotaPolicy,
@@ -69,7 +70,13 @@ export function PersonaRoutingSection({
 
   const applyCapabilityPreset = (preset: CapabilityPreset) => {
     if (!personaRoutes) return;
-    const { routes, notice } = buildPresetRoutes(preset, personaRoutes, enabledProviders, defaultAgent);
+    const { routes, notice } = buildPresetRoutes(
+      preset,
+      personaRoutes,
+      enabledProviders,
+      defaultAgent,
+      antigravityAck,
+    );
     setPersonaRoutes(routes);
     setNotice(notice);
   };
@@ -265,7 +272,6 @@ export function PersonaRoutingSection({
                     keyConfigured={{
                       claude: Boolean(settings?.anthropicKeyStored),
                       codex: Boolean(settings?.openaiKeyStored),
-                      gemini: Boolean(settings?.geminiKeyStored),
                       aider: Boolean(
                         settings?.anthropicKeyStored ||
                         settings?.openaiKeyStored ||

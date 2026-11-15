@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { holdLabelOf, PROVIDER_REGISTRY, worktreeCheckOf } from './runs.js';
+import { holdLabelOf, isKnownAgent, PROVIDER_REGISTRY, worktreeCheckOf } from './runs.js';
 
 describe('PROVIDER_REGISTRY terms', () => {
   it('every provider carries a dated terms note with an https link and a risk level', () => {
@@ -12,6 +12,15 @@ describe('PROVIDER_REGISTRY terms', () => {
       expect(['low', 'medium', 'high'], entry.id).toContain(terms.risk);
       expect(terms.summary.length, entry.id).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('isKnownAgent', () => {
+  it('knows the providers Emberline runs and not one an older core stored (Gemini CLI)', () => {
+    expect(isKnownAgent('claude')).toBe(true);
+    expect(isKnownAgent('antigravity')).toBe(true);
+    expect(isKnownAgent('gemini')).toBe(false);
+    expect(Object.keys(PROVIDER_REGISTRY)).not.toContain('gemini');
   });
 });
 

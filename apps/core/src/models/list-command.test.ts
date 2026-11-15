@@ -114,9 +114,8 @@ describe('listCommandsFor', () => {
     process.env.EMBERLINE_ANTIGRAVITY_COMMAND = ' /x/agy ';
     expect(listCommandsFor('antigravity')[0]?.file).toBe('/x/agy');
   });
-  it('has no listing for aider, Gemini CLI or the picker-read Claude', () => {
+  it('has no listing for aider or the picker-read Claude', () => {
     expect(listCommandsFor('aider')).toEqual([]);
-    expect(listCommandsFor('gemini')).toEqual([]);
     expect(listCommandsFor('claude')).toEqual([]);
   });
 });

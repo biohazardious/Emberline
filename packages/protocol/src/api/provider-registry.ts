@@ -41,7 +41,7 @@ export interface ProviderRegistryEntry {
   shortLabel: string;
   badge: string;
   authKind: 'host_or_key' | 'api_key' | 'cli_auth';
-  keyConfigField?: 'anthropicKeyConfigured' | 'openaiKeyConfigured' | 'geminiKeyConfigured';
+  keyConfigField?: 'anthropicKeyConfigured' | 'openaiKeyConfigured';
   description: string;
   terms: ProviderTerms;
   models: ProviderModelInfo[];
@@ -162,55 +162,6 @@ const REGISTRY_DEFS: Record<AgentId, Omit<ProviderRegistryEntry, 'models'> & { m
         badge: '★1 · LOW · LIGHT',
         capabilities: ['fast'],
         description: 'Lightweight rapid tasks and quick syntax checks.',
-      },
-    ],
-  },
-  gemini: {
-    id: 'gemini',
-    label: 'Google Gemini CLI',
-    shortLabel: 'Gemini',
-    badge: 'Google Gemini API / CLI',
-    authKind: 'api_key',
-    keyConfigField: 'geminiKeyConfigured',
-    description:
-      'Google Gemini CLI with 1M+ token context window for massive repository analysis and coding.',
-    terms: {
-      url: 'https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals',
-      checked: '2026-10-16',
-      risk: 'medium',
-      summary:
-        'Consumer Google login ended on 2026-06-18; use an API key or Code Assist Standard/Enterprise.',
-    },
-    models: [
-      {
-        id: 'gemini-pro',
-        label: 'Gemini Pro',
-        shortLabel: 'gemini-pro',
-        rank: 5,
-        tier: 'high',
-        badge: '★5 · HIGH · FRONTIER',
-        capabilities: ['reasoning', 'code', 'ui_ux'],
-        description: 'Maximum reasoning depth and massive codebase context comprehension.',
-      },
-      {
-        id: 'gemini-flash',
-        label: 'Gemini Flash',
-        shortLabel: 'gemini-flash',
-        rank: 3,
-        tier: 'medium',
-        badge: '★3 · MEDIUM · BALANCED',
-        capabilities: ['code', 'fast', 'ui_ux'],
-        description: 'Fast agentic coding, tool execution & test verification.',
-      },
-      {
-        id: 'gemini-flash-lite',
-        label: 'Gemini Flash-Lite',
-        shortLabel: 'flash-lite',
-        rank: 1,
-        tier: 'low',
-        badge: '★1 · LOW · FAST',
-        capabilities: ['fast'],
-        description: 'Ultra-low latency and high-efficiency execution for simple tasks.',
       },
     ],
   },

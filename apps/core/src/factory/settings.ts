@@ -60,8 +60,8 @@ function readProviderKeys(db: Db): StoredProviderKeys {
 const PROVIDER_KEY_ACCESS: Record<AgentId, readonly ('anthropic' | 'openai' | 'gemini')[]> = {
   claude: ['anthropic'],
   codex: ['openai'],
-  gemini: ['gemini'],
-  antigravity: ['gemini'],
+  // agy has no API-key mode: the Gemini key is Aider's alone.
+  antigravity: [],
   aider: ['anthropic', 'openai', 'gemini'],
   copilot: [],
 };
@@ -115,7 +115,8 @@ function normalizeChain(
 
 /** Whether today's runs of `agent` get a stored key (then a migrated route keeps using it). */
 function keyStoredFor(agent: AgentId, keys: StoredProviderKeys): boolean {
-  const access = PROVIDER_KEY_ACCESS[agent];
+  // An old run's agent may be one this core no longer knows (Gemini CLI).
+  const access = PROVIDER_KEY_ACCESS[agent] ?? [];
   return (
     (access.includes('anthropic') && Boolean(keys.anthropicApiKey)) ||
     (access.includes('openai') && Boolean(keys.openaiApiKey)) ||
@@ -125,7 +126,7 @@ function keyStoredFor(agent: AgentId, keys: StoredProviderKeys): boolean {
 
 /** The credential today's runs of `agent` use: the stored key when it has one, else the CLI login. */
 function defaultCredential(agent: AgentId, keys: StoredProviderKeys): Credential {
-  const allowed = PROVIDER_RUNTIME[agent].credentials;
+  const allowed = PROVIDER_RUNTIME[agent]?.credentials ?? ['login'];
   return allowed.includes('api_key') && keyStoredFor(agent, keys) ? 'api_key' : allowed[0]!;
 }
 
@@ -169,28 +170,6 @@ function hasNonEmptyAntigravitySecrets(home: string): boolean {
     if (existsSync(jetskiPath)) {
       const pbtxt = readFileSync(jetskiPath, 'utf8');
       if (/oauth_token|refresh_token|access_token/i.test(pbtxt)) {
-        return true;
-      }
-    }
-  } catch {
-    // ignore read errors
-  }
-  return false;
-}
-
-function hasValidGeminiOAuth(home: string): boolean {
-  try {
-    if (
-      existsSync(path.join(home, '.gemini', 'oauth_creds.json')) ||
-      existsSync(path.join(home, '.gemini', 'gemini-credentials.json')) ||
-      existsSync(path.join(home, '.config', 'gcloud', 'application_default_credentials.json'))
-    ) {
-      return true;
-    }
-    const accountsPath = path.join(home, '.gemini', 'google_accounts.json');
-    if (existsSync(accountsPath)) {
-      const parsed = JSON.parse(readFileSync(accountsPath, 'utf8')) as { active?: string | null };
-      if (typeof parsed?.active === 'string' && parsed.active.trim().length > 0) {
         return true;
       }
     }
@@ -274,7 +253,6 @@ function detectRunnerProviderAuth(params: {
   // The runner's home, mounted read-only into core at the same path.
   const home = process.env.EMBERLINE_RUNNER_HOME ?? '/home/node';
   const claudeOAuth = hasClaudeTokens(home);
-  const geminiOAuth = hasValidGeminiOAuth(home);
   const antigravityOAuth = hasNonEmptyAntigravitySecrets(home);
   const codexOAuth = hasCodexLogin(home);
   const copilotOAuth = hasCopilotLogin(home);
@@ -311,48 +289,13 @@ function detectRunnerProviderAuth(params: {
           cliInstalled: true,
           loginCommandHint: 'agy',
         }
-      : params.geminiKeyConfigured
-        ? {
-            authenticated: true,
-            method: 'api_key' as const,
-            label: '✓ Gemini API Key',
-            cliInstalled: true,
-            loginCommandHint: 'agy',
-          }
-        : {
-            authenticated: false,
-            method: 'none' as const,
-            label: 'Google OAuth (No Key Needed)',
-            cliInstalled: true,
-            loginCommandHint: 'agy',
-          },
-    // A key wins. Consumer Google logins stopped working in Gemini CLI on 2026-06-18; only Code Assist
-    // Standard/Enterprise accounts still work, and the files cannot tell the two apart.
-    gemini: params.geminiKeyConfigured
-      ? {
-          authenticated: true,
-          method: 'api_key' as const,
-          label: '✓ Gemini API Key',
+      : {
+          authenticated: false,
+          method: 'none' as const,
+          label: 'Google OAuth (No Key Needed)',
           cliInstalled: true,
-          loginCommandHint: 'gemini',
-        }
-      : geminiOAuth
-        ? {
-            authenticated: true,
-            method: 'oauth_cli' as const,
-            label: 'Google login (Code Assist Standard/Enterprise only)',
-            cliInstalled: true,
-            loginCommandHint: 'gemini',
-            warning:
-              'Google login works only with Gemini Code Assist Standard/Enterprise. Consumer Google logins stopped working on 2026-06-18. Save a Gemini API key to be sure.',
-          }
-        : {
-            authenticated: false,
-            method: 'none' as const,
-            label: 'API Key Recommended',
-            cliInstalled: true,
-            loginCommandHint: 'gemini',
-          },
+          loginCommandHint: 'agy',
+        },
     codex: codexOAuth
       ? {
           authenticated: true,
@@ -460,7 +403,6 @@ export function getFactorySettings(db: Db): FactorySettings {
   const enabledSet = new Set<AgentId>(storedEnabled.length > 0 ? storedEnabled : ['claude']);
   if (!Array.isArray(raw.enabledProviders)) {
     if (openaiKeyConfigured || providerAuth.codex.authenticated) enabledSet.add('codex');
-    if (geminiKeyConfigured || providerAuth.gemini.authenticated) enabledSet.add('gemini');
   }
   const enabledProviders = Array.from(enabledSet);
 
@@ -627,9 +569,6 @@ export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody):
   const enabledSet = new Set<AgentId>(body.enabledProviders ?? current.enabledProviders ?? ['claude']);
   if (body.openaiApiKey && body.openaiApiKey.trim().length > 0) {
     enabledSet.add('codex');
-  }
-  if (body.geminiApiKey && body.geminiApiKey.trim().length > 0) {
-    enabledSet.add('gemini');
   }
   if (body.anthropicApiKey && body.anthropicApiKey.trim().length > 0) {
     enabledSet.add('claude');

@@ -1295,11 +1295,6 @@ export function registerProjectRoutes(
         instructions:
           'Select "1. Google OAuth" in the Antigravity CLI, open the URL in your browser, and paste the authorization code below (no API key required).',
       },
-      gemini: {
-        cmd: 'gemini',
-        instructions:
-          'Sign in with a Gemini Code Assist Standard/Enterprise account, or save a Gemini API key in Settings. Consumer Google logins stopped working on 2026-06-18.',
-      },
       // Device code flows: the browser flows wait for a redirect to localhost, which is the runner
       // container, not the machine the browser runs on.
       codex: {

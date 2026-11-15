@@ -3853,8 +3853,7 @@ dialog.cmd-dialog::backdrop {
 .provider-mark-claude {
   background: var(--violet);
 }
-.provider-mark-antigravity,
-.provider-mark-gemini {
+.provider-mark-antigravity {
   background: var(--info);
 }
 .provider-mark-codex {

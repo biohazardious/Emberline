@@ -3,6 +3,7 @@ import {
   type AgentPersona,
   type FactorySettings,
   getModelsForProvider,
+  isKnownAgent,
   type Lane,
   laneCovers,
   laneOf,
@@ -39,9 +40,6 @@ export function keySavedFor(settings: SettingsView, agent: AgentId): boolean {
       return settings.anthropicKeyStored;
     case 'codex':
       return settings.openaiKeyStored;
-    case 'gemini':
-    case 'antigravity':
-      return settings.geminiKeyStored;
     case 'aider':
       return settings.anthropicKeyStored || settings.openaiKeyStored || settings.geminiKeyStored;
     default:
@@ -98,6 +96,8 @@ export function handoffCandidates(
   for (const [source, routes] of sources) {
     for (const route of routes) {
       if (!route || sameRoute(route, current) || out.some((c) => sameRoute(c.route, route))) continue;
+      // An old run's chain may name an agent that is gone (Gemini CLI); nothing can run there.
+      if (!isKnownAgent(route.agent)) continue;
       if (route.credential === 'api_key' && settings && !keySavedFor(settings, route.agent)) continue;
       out.push({ route, source, exhausted: windows.some((w) => laneCovers(w, laneOf(route))) });
     }

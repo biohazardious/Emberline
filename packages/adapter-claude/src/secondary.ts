@@ -68,7 +68,7 @@ function claudeFallbackSettings(autonomous: boolean): Omit<ClaudeHookSettings, '
  * `aider`) on the SDK's generic wrapper, which reports `working` -> `done` / `failed` through
  * `emberline-hook`. If the CLI binary is not installed in the runner image, Antigravity and Copilot
  * fall back to `claude` with the corresponding model so runs never fail with `command not found`.
- * Codex and Gemini CLI have their own adapter packages.
+ * Codex has its own adapter package.
  */
 export function buildSecondaryCliLaunchSpec(options: SecondaryCliLaunchOptions): LaunchSpec {
   const autoApprove = isAutonomousPermissionMode(options.permissionMode);

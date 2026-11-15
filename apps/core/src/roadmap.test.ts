@@ -55,6 +55,38 @@ describe('roadmap.json', () => {
     expect(backups).toHaveLength(1);
   });
 
+  it('serves an item an older core wrote for Gemini CLI on the persona route instead', async () => {
+    const project = await createProject();
+    const file = path.join(project.path, '.emberline', 'roadmap.json');
+    await api('GET', `/api/projects/${project.id}/roadmap`);
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as {
+      milestones: { items: Record<string, unknown>[] }[];
+    };
+    stored.milestones[0]!.items.push({
+      id: 'item-gemini',
+      milestoneId: 'x',
+      title: 'Old Gemini item',
+      description: 'x',
+      category: 'feature',
+      persona: 'coder',
+      preferredAgent: 'gemini',
+      preferredModel: 'gemini-pro',
+      priority: 2,
+      status: 'planned',
+      ticketId: null,
+      ticketKey: null,
+      createdAt: new Date().toISOString(),
+    });
+    writeFileSync(file, JSON.stringify(stored));
+
+    const res = await api('GET', `/api/projects/${project.id}/roadmap`);
+    expect(res.statusCode).toBe(200);
+    const item = (res.json() as ProjectRoadmapState).milestones
+      .flatMap((m) => m.items)
+      .find((i) => i.id === 'item-gemini');
+    expect(item).toMatchObject({ preferredAgent: 'claude', preferredModel: 'opus' });
+  });
+
   it('re-creates the ticket of a dispatched item when it was deleted from the board', async () => {
     const project = await createProject();
     const added: ProjectRoadmapState = (

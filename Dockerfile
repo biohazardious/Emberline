@@ -4,7 +4,7 @@
 # Architecture:
 #   - Base OS: Ubuntu 26.04 LTS (Resolute Raccoon) + Node.js 24 LTS
 #   - Zero hardcoded AI CLIs in the image. All AI agent CLIs (Claude Code,
-#     Google Antigravity, Gemini CLI, OpenAI Codex, GitHub Copilot, Aider, etc.)
+#     Google Antigravity, OpenAI Codex, GitHub Copilot, Aider, etc.)
 #     are dynamically installed and updated at runtime inside the persistent
 #     `runner-tools` volume (/opt/ai-tools) via the UI Toolchain Manager or
 #     automatic startup bootstrap.
@@ -76,7 +76,6 @@ RUN mkdir -p /pnpm-store /run/emberline /data /workspaces \
     /workspace/packages/adapter-sdk/node_modules \
     /workspace/packages/adapter-claude/node_modules \
     /workspace/packages/adapter-codex/node_modules \
-    /workspace/packages/adapter-gemini/node_modules \
     /workspace/packages/hook/node_modules \
   && chown -R node:node /pnpm-store /run/emberline /data /workspaces /workspace
 USER node
@@ -100,7 +99,6 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/adapter-sdk/package.json packages/adapter-sdk/
 COPY packages/adapter-claude/package.json packages/adapter-claude/
 COPY packages/adapter-codex/package.json packages/adapter-codex/
-COPY packages/adapter-gemini/package.json packages/adapter-gemini/
 COPY packages/hook/package.json packages/hook/
 RUN --mount=type=cache,id=emberline-pnpm,target=/pnpm-store pnpm install --frozen-lockfile
 COPY . .

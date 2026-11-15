@@ -14,8 +14,8 @@ import {
 import type { CSSProperties, FormEvent } from 'react';
 import { PERSONA_LIST } from '../PersonaBadge';
 
-export const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot', 'aider'];
-export const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'gemini', 'codex', 'copilot'];
+export const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot', 'aider'];
+export const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot'];
 
 export const ST_PANEL_PAD: CSSProperties = { padding: '20px' };
 export const ST_PANEL_FORM: CSSProperties = {
@@ -159,15 +159,22 @@ export function buildPresetRoutes(
   personaRoutes: PersonaRouteMap,
   enabledProviders: AgentId[],
   defaultAgent: AgentId,
+  antigravityAcknowledged = false,
 ): { routes: PersonaRouteMap; notice: string } {
   if (preset === 'multi-provider') {
     const core: AgentId = enabledProviders.includes('claude') ? 'claude' : (enabledProviders[0] ?? 'claude');
-    const ui: AgentId = enabledProviders.includes('gemini') ? 'gemini' : core;
-    const qa: AgentId = enabledProviders.includes('gemini')
-      ? 'gemini'
+    // The UI/UX and QA specialist is Antigravity, but only once it is enabled and its terms are
+    // acknowledged; until then UI/UX keeps its route, and QA goes to Codex when it can.
+    const specialist = enabledProviders.includes('antigravity') && antigravityAcknowledged;
+    const pick = (agent: AgentId, rank: number, chain: Route[]): Route[] => [
+      defaultRoute(agent, selectProviderModelByRank(agent, rank), chain[0]?.credential),
+    ];
+    const ui = specialist ? pick('antigravity', 5, personaRoutes.ui_ux) : personaRoutes.ui_ux;
+    const qa = specialist
+      ? pick('antigravity', 3, personaRoutes.qa)
       : enabledProviders.includes('codex')
-        ? 'codex'
-        : (enabledProviders[0] ?? 'claude');
+        ? pick('codex', 3, personaRoutes.qa)
+        : personaRoutes.qa;
     return {
       routes: {
         product_owner: [
@@ -176,10 +183,10 @@ export function buildPresetRoutes(
         architect: [
           defaultRoute(core, selectProviderModelByRank(core, 5), personaRoutes.architect[0]?.credential),
         ],
-        ui_ux: [defaultRoute(ui, selectProviderModelByRank(ui, 5), personaRoutes.ui_ux[0]?.credential)],
+        ui_ux: ui,
         coder: [defaultRoute(core, selectProviderModelByRank(core, 4), personaRoutes.coder[0]?.credential)],
         dba: [defaultRoute(core, selectProviderModelByRank(core, 4), personaRoutes.dba[0]?.credential)],
-        qa: [defaultRoute(qa, selectProviderModelByRank(qa, 3), personaRoutes.qa[0]?.credential)],
+        qa,
         security: [
           defaultRoute(core, selectProviderModelByRank(core, 4), personaRoutes.security[0]?.credential),
         ],

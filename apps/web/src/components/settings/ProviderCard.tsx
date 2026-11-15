@@ -31,7 +31,6 @@ import {
 const MAKE_LOGIN_CMD: Partial<Record<AgentId, string>> = {
   antigravity: 'make agy-login',
   claude: 'make claude-login',
-  gemini: 'make gemini-login',
   codex: 'make codex-login',
   copilot: 'make copilot-login',
 };
@@ -99,11 +98,9 @@ export function ProviderCard({
   const isKeyConfigured =
     providerId === 'claude'
       ? Boolean(settings.anthropicKeyConfigured)
-      : providerId === 'gemini' || providerId === 'antigravity'
-        ? Boolean(settings.geminiKeyConfigured)
-        : providerId === 'codex'
-          ? Boolean(settings.openaiKeyConfigured)
-          : false;
+      : providerId === 'codex'
+        ? Boolean(settings.openaiKeyConfigured)
+        : false;
   const isAuthReady = Boolean(authStatus?.authenticated || isKeyConfigured);
   const makeLoginCmd = MAKE_LOGIN_CMD[providerId];
 
@@ -368,14 +365,11 @@ export function ProviderCard({
           />
         )}
 
-        {isEnabled && (providerId === 'gemini' || providerId === 'antigravity') && (
+        {/* Aider is the only CLI that reads the Gemini key; agy signs in with its own Google login. */}
+        {isEnabled && providerId === 'aider' && (
           <ApiKeyField
-            label={
-              providerId === 'gemini'
-                ? 'Google Gemini API Key (recommended)'
-                : 'Google Gemini API Key (optional)'
-            }
-            configured={isKeyConfigured}
+            label="Google Gemini API Key (Optional · for Aider's Gemini models)"
+            configured={Boolean(settings.geminiKeyConfigured)}
             placeholder="AIzaSy..."
             value={apiKeys.gemini}
             onChange={(gemini) => patchApiKeys({ gemini })}

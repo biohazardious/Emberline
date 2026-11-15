@@ -60,7 +60,7 @@ describe('recoverErrorText', () => {
   });
   it("keeps the server's message when the successor's agent needs Autonomous mode", () => {
     const message =
-      'Gemini runs without a terminal to answer in, so in Ask mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
+      'Copilot runs without a terminal to answer in, so in Ask mode it would refuse every command without telling anyone. Start it in Autonomous mode, or pick another agent.';
     expect(recoverErrorText('headless_needs_auto', message)).toBe(message);
   });
   it("keeps the server's message for a prompt too long for the successor and a closing session", () => {

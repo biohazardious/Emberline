@@ -18,11 +18,6 @@ describe('provider adapters', () => {
   it('registers an adapter for every AgentId, under its own id', () => {
     expect(providerIds().sort()).toEqual([...AgentId.options].sort());
     for (const id of providerIds()) expect(providerAdapter(id).id).toBe(id);
-    expect(providerAdapter('gemini')).toMatchObject({
-      displayName: 'Gemini',
-      hooks: 'wrapper',
-      completionSignal: 'exit',
-    });
     expect(providerAdapter('codex')).toMatchObject({
       displayName: 'Codex',
       hooks: 'wrapper',
@@ -35,8 +30,10 @@ describe('provider adapters', () => {
     });
   });
 
-  it('falls back to Claude for unknown agent ids', () => {
+  it('falls back to Claude for unknown agent ids, and Gemini CLI is one of them now', () => {
     expect(providerAdapter('made-up').id).toBe('claude');
+    expect(providerIds()).not.toContain('gemini');
+    expect(providerAdapter('gemini').id).toBe('claude');
   });
 
   it('builds Claude launches with hooks and secondary launches through the wrapper script', () => {
@@ -53,9 +50,7 @@ describe('provider adapters', () => {
       providerAdapter('codex').launch(ctx({ permissionMode: 'acceptEdits' })).env.EMBERLINE_AUTO_APPROVE,
     ).toBe('0');
     // Core hands each adapter the CLI's own id; the adapter passes it as it is.
-    expect(providerAdapter('gemini').launch(ctx({ model: 'gemini-3.8-pro-high' })).args[1]).toContain(
-      '--yolo --model gemini-3.8-pro-high -p',
-    );
+    expect(providerAdapter('codex').launch(ctx({ model: 'gpt-6.1-sol' })).args[1]).toContain('gpt-6.1-sol');
   });
 
   it('routes limit detection to the CLI that printed it', () => {
@@ -67,10 +62,6 @@ describe('provider adapters', () => {
     expect(providerAdapter('codex').rateLimitFromHook('StopFailure', codexLimit, { now })?.resetsAt).toEqual(
       new Date('2026-10-13T15:42:00Z'),
     );
-    const geminiLimit = { error: 'cli_exit', message: 'Your quota will reset after 1h.' };
-    expect(
-      providerAdapter('gemini').rateLimitFromHook('StopFailure', geminiLimit, { now })?.resetsAt,
-    ).toEqual(new Date('2026-10-13T10:30:00Z'));
     // Claude's own banner on its own lane, with its model pool.
     expect(
       providerAdapter('claude').rateLimitFromHook(
@@ -82,7 +73,7 @@ describe('provider adapters', () => {
   });
 
   it('asks each adapter whether a headless prompt can run in an asking mode', () => {
-    expect(providerAdapter('gemini').headlessProblem('default', true)).toContain('Gemini');
+    expect(providerAdapter('copilot').headlessProblem('default', true)).toContain('Copilot');
     expect(providerAdapter('copilot').headlessProblem('acceptEdits', true)).toContain('Copilot');
     expect(providerAdapter('codex').headlessProblem('default', true)).toBeNull();
     expect(providerAdapter('claude').headlessProblem('default', true)).toBeNull();

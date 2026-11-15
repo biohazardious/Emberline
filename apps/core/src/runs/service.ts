@@ -9,6 +9,7 @@ import { isPermissionNotification, type RateLimitInfo } from '@emberline/adapter
 import { CONTINUE_PROMPT, PERSONA_CATALOG, personaBrief } from '@emberline/adapter-claude';
 import {
   type AgentId,
+  isKnownAgent,
   AgentPreviewBody,
   type AgentPreviewResponse,
   type AgentModelId,
@@ -235,7 +236,7 @@ import {
   cliModelOf,
   currentRoute as routeOfRow,
   launchModel,
-  parseRouteTag,
+  routingTag,
   ROUTE_TAG,
   runModel,
   runRoutes,
@@ -444,6 +445,8 @@ const STALL_SCREEN_SAMPLE_MS = 60_000;
 const STALL_SCREEN_LINES = 50;
 /** 409 `session_closing`: a one-shot CLI is in its turn or exiting after it; a prompt respawns it once gone. */
 const SESSION_CLOSING = 'The agent is finishing its turn; try again in a moment.';
+/** 409 `agent_removed`: the run's agent is gone from Emberline; only a handoff carries its work on. */
+export const AGENT_REMOVED = 'Gemini CLI is no longer supported. Hand this run off to another agent.';
 const MAX_EVENTS_IN_DETAIL = 200;
 /** Hook payload fields worth keeping; tool inputs/outputs can be huge and are dropped. */
 const PAYLOAD_KEYS = [
@@ -515,6 +518,15 @@ export const toRun = (row: RunRow): Run => ({
   attention: null,
   reviewReady: false,
 });
+
+/**
+ * A run whose agent this core no longer has (Gemini CLI) cannot be started, resumed, prompted or
+ * answered: the adapter lookup would otherwise run it as Claude without a word. A handoff still
+ * moves its work to another route.
+ */
+function refuseRemovedAgent(row: Pick<RunRow, 'agent'>): void {
+  if (!isKnownAgent(row.agent)) throw conflict(AGENT_REMOVED, 'agent_removed');
+}
 
 function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> {
   const summary: Record<string, unknown> = {};
@@ -1166,7 +1178,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     origin?: RunOrigin,
   ): { persona: AgentPersona; routes: Route[]; routeIndex: number; route: Route; prompt: string } {
     const persona = body.persona ?? 'coder';
-    const tag = parseRouteTag(body.prompt ?? '');
+    const tag = routingTag(body.prompt ?? '');
     const explicitAgent = tag?.agent ?? input.agent;
     const explicitModel = (body.model && body.model !== 'auto' ? body.model : undefined) ?? tag?.model;
     // An agent picked by hand (no tag) runs only there.
@@ -1341,6 +1353,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async launch(id: string): Promise<Run> {
     const row = this.row(id);
     if (row.state !== 'queued') throw conflict(`run is ${row.state}, not queued`);
+    refuseRemovedAgent(row);
     return this.spawnAgent(row, { prompt: row.prompt || undefined, type: 'spawned' });
   }
 
@@ -1351,6 +1364,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     let row = this.row(id);
+    refuseRemovedAgent(row);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     if (row.handedOffTo)
       throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
@@ -1434,7 +1448,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     const row = this.row(id);
     const blocked = handoffBlocker(row, continuesHeld());
     if (blocked) throw conflict(blocked);
-    const routes = [...runRoutes(row)];
+    // A step on an agent that is gone (Gemini CLI, the predecessor's own) is not carried over.
+    const routes = runRoutes(row).filter((r) => isKnownAgent(r.agent));
     let routeIndex = routes.findIndex((r) => sameRoute(r, route));
     if (routeIndex < 0) {
       routes.push(route);
@@ -1638,6 +1653,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     row: RunRow,
     options: { prompt?: string; resumeSessionId?: string; type: 'spawned' | 'resumed' },
   ): Promise<Run> {
+    // Every way in checks this first; here it keeps an unknown agent from ever starting as Claude.
+    refuseRemovedAgent(row);
     const project = this.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
     if (!project) throw notFound('no such project');
     // Without a login Claude Code would sit at its sign-in screen in the run's terminal, which looks
@@ -2411,6 +2428,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
     // Typed and recorded before a held run's close looks at the session (closeHeldSession, the idle sweep).
     return this.sessionLock.run(id, async () => {
       const row = this.row(id);
+      refuseRemovedAgent(row);
       if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
       if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
       // A one-shot CLI exits after its turn: typed into it, the prompt would be lost with no one told.
@@ -2484,6 +2502,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   async prompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
     let row = this.row(id);
+    refuseRemovedAgent(row);
     if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
     // Also while it respawns for a resume: a second resume would start another agent.
     if (row.state === 'starting')
@@ -2498,6 +2517,7 @@ export class RunService extends EventEmitter<RunServiceEvents> {
   async sendKeys(id: string, keys: string): Promise<void> {
     return this.sessionLock.run(id, async () => {
       const row = this.row(id);
+      refuseRemovedAgent(row);
       if (!row.ptydSessionId || row.endedAt) throw conflict('the agent session has ended; start a new run');
       if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
       await this.ptyd.get().write(row.ptydSessionId, keys);

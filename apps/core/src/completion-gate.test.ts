@@ -194,11 +194,11 @@ async function nextTurn(run: Run, signal?: { summary: string; handoff?: string; 
 }
 
 /**
- * Makes the run a one-shot gemini run (started with its ticket prompt, like every headless ticket run)
+ * Makes the run a one-shot copilot run (started with its ticket prompt, like every headless ticket run)
  * whose CLI has exited, its exit not yet noted (no reconcile since). Respawns run the living stand-in.
  */
 async function oneShotExited(run: Run): Promise<void> {
-  t.db.update(runs).set({ agent: 'gemini', permissionMode: 'auto' }).where(eq(runs.id, run.id)).run();
+  t.db.update(runs).set({ agent: 'copilot', permissionMode: 'auto' }).where(eq(runs.id, run.id)).run();
   const sessionId = run.terminalId as string;
   await t.ptyd.get().kill(sessionId);
   await expect
@@ -847,7 +847,7 @@ describe('the ticket completion and a new run', () => {
   });
 
   it('a ticket follow-up to a one-shot run whose exit is not noted yet respawns it with the prompt', async () => {
-    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
     try {
       const project = await createProject();
       const ticket = await createTicket(project.id, { title: 'By hand' });
@@ -860,7 +860,7 @@ describe('the ticket completion and a new run', () => {
       expect(after).toMatchObject({ id: run.id, state: 'starting', endedAt: null });
       expect(await eventTypes(run)).toContain('respawning');
     } finally {
-      delete process.env.EMBERLINE_GEMINI_COMMAND;
+      delete process.env.EMBERLINE_COPILOT_COMMAND;
     }
   });
 
@@ -1647,7 +1647,7 @@ describe('the worktree config check before the merge', () => {
   });
 
   it('a one-shot run whose exit is not noted yet gets the request to fix the file by a respawn, not a hold', async () => {
-    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
     try {
       const { ticket, run } = await ymlTicket();
       writeRunYml(run, INVALID);
@@ -1663,7 +1663,7 @@ describe('the worktree config check before the merge', () => {
       expect(t.runs.getRun(run.id)).toMatchObject({ state: 'starting', endedAt: null });
       expect(await statusOf(ticket.id)).not.toBe('done');
     } finally {
-      delete process.env.EMBERLINE_GEMINI_COMMAND;
+      delete process.env.EMBERLINE_COPILOT_COMMAND;
     }
   });
 

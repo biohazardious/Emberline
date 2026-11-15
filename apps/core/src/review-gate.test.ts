@@ -666,10 +666,10 @@ describe('a lifted review hold keeps a run in the factory only until the next ou
 
 describe('a headless run in Accept edits', () => {
   beforeEach(() => {
-    process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+    process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
   });
   afterEach(() => {
-    delete process.env.EMBERLINE_GEMINI_COMMAND;
+    delete process.env.EMBERLINE_COPILOT_COMMAND;
   });
 
   async function headlessReview() {
@@ -680,12 +680,12 @@ describe('a headless run in Accept edits', () => {
     await settled(passes, 1);
     t.db
       .update(tickets)
-      .set({ body: '[Preferred Agent: gemini · Model: auto]' })
+      .set({ body: '[Preferred Agent: copilot · Model: auto]' })
       .where(eq(tickets.id, ticket.id))
       .run();
     t.db
       .update(runs)
-      .set({ agent: 'gemini', permissionMode: 'acceptEdits', endedAt: new Date(), cancelledAt: null })
+      .set({ agent: 'copilot', permissionMode: 'acceptEdits', endedAt: new Date(), cancelledAt: null })
       .where(eq(runs.id, run.id))
       .run();
     return run;

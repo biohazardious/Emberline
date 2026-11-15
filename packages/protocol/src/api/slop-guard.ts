@@ -61,7 +61,8 @@ export type CrossCriticIssue = z.infer<typeof CrossCriticIssue>;
 
 export const CrossCriticResult = z.object({
   runId: z.string(),
-  authorAgent: AgentId,
+  /** The run's agent as it ran; a saved result may name one that is gone since (Gemini CLI). */
+  authorAgent: z.string(),
   reviewerAgent: AgentId,
   reviewerModel: AgentModelId,
   verdict: z.enum(['PASS', 'NEEDS_FIX']),

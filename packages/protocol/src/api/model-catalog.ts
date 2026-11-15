@@ -51,7 +51,6 @@ export const KNOWN_AT_RELEASE: Record<AgentId, string[]> = {
     'gpt-oss-120b-medium',
   ],
   copilot: [],
-  gemini: [],
   // codex-cli 0.169.0: the `list` models of a free account's catalog and of the bundled one.
   codex: [
     'gpt-6-astra',

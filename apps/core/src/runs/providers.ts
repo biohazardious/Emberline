@@ -1,6 +1,5 @@
 import { claudeAdapter, secondaryCliAdapter } from '@emberline/adapter-claude';
 import { codexAdapter } from '@emberline/adapter-codex';
-import { geminiAdapter } from '@emberline/adapter-gemini';
 import type { ProviderAdapter } from '@emberline/adapter-sdk';
 import { AgentId } from '@emberline/protocol';
 
@@ -14,7 +13,6 @@ const PROVIDERS: Readonly<Record<AgentId, ProviderAdapter>> = {
   claude: claudeAdapter,
   antigravity: secondaryCliAdapter('antigravity', 'Antigravity'),
   copilot: secondaryCliAdapter('copilot', 'Copilot'),
-  gemini: geminiAdapter,
   codex: codexAdapter,
   aider: secondaryCliAdapter('aider', 'Aider'),
 };

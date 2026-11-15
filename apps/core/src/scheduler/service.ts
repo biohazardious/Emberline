@@ -5,6 +5,7 @@ import type { RateLimitInfo } from '@emberline/adapter-sdk';
 import {
   type AgentId,
   type CreateRunBody,
+  isKnownAgent,
   type Lane,
   laneCovers,
   laneOf,
@@ -358,7 +359,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
       // Re-read: a limit hit by a run we just started closes its lane synchronously.
       const closed = this.openWindows();
       const row = this.db.select().from(runs).where(eq(runs.id, candidate.id)).get();
-      if (!row || row.handedOffTo) continue;
+      // A run on an agent that is gone (Gemini CLI) is refused on every resume; it takes no slot.
+      if (!row || row.handedOffTo || !isKnownAgent(row.agent)) continue;
       if (this.laneClosed(laneOf(currentRoute(row)), closed)) {
         // Rate-limited runs wait for their own lane; a queued run may start on a fallback route.
         if (candidate.state !== 'queued' || policy.newRuns !== 'fallback') continue;
@@ -511,7 +513,8 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 
   /** A fallback route can take work: its lane has quota and, for an API-key route, the key still exists. */
   private routeOpen(runId: string, route: Route, closed: readonly WindowRow[]): boolean {
-    if (this.laneClosed(laneOf(route), closed)) return false;
+    // A step an older core stored for an agent that is gone (Gemini CLI) never opens.
+    if (!isKnownAgent(route.agent) || this.laneClosed(laneOf(route), closed)) return false;
     if (routeUsable(this.db, route)) return true;
     // Once per run and route: dispatch re-checks queued runs on every pass.
     const key = `${runId}|${route.agent}|${route.model}|${route.credential}`;

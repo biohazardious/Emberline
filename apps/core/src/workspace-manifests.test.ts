@@ -54,7 +54,6 @@ describe('workspace package discovery', () => {
       'apps/web',
       'packages/adapter-claude',
       'packages/adapter-codex',
-      'packages/adapter-gemini',
       'packages/adapter-sdk',
       'packages/hook',
       'packages/protocol',

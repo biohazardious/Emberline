@@ -7,6 +7,7 @@ import {
   type CrossCriticIssue,
   CrossCriticResult,
   type FactorySettings,
+  isKnownAgent,
   type Run,
   type SlopAuditGrade,
   SlopAuditReport,
@@ -765,7 +766,7 @@ export async function auditWorktreeSlop(params: {
 }
 
 export function selectRivalCriticAgent(
-  authorAgent: AgentId,
+  authorAgent: string,
   settings: FactorySettings,
   preferredReviewer?: AgentId,
 ): { reviewerAgent: AgentId; reviewerModel: AgentModelId } {
@@ -776,12 +777,11 @@ export function selectRivalCriticAgent(
     };
   }
 
-  const candidates: AgentId[] = ['antigravity', 'claude', 'gemini', 'codex', 'copilot'];
-  // A sign-in with a warning (a consumer Google login for Gemini) most likely fails; an API key works.
+  const candidates: AgentId[] = ['antigravity', 'claude', 'codex', 'copilot'];
+  // A sign-in with a warning most likely fails; an API key works.
   const keyConfigured: Partial<Record<AgentId, boolean>> = {
     claude: settings.anthropicKeyConfigured,
     codex: settings.openaiKeyConfigured,
-    gemini: settings.geminiKeyConfigured,
   };
   const doubtful = (candidate: AgentId) =>
     Boolean(settings.providerAuth?.[candidate]?.warning) && !keyConfigured[candidate];
@@ -804,10 +804,11 @@ export function selectRivalCriticAgent(
     }
   }
 
-  return {
-    reviewerAgent: authorAgent,
-    reviewerModel: selectProviderModelByRank(authorAgent, 4),
-  };
+  // No rival: the author reviews itself, which the critic reads as "no other provider". A run on an
+  // agent that is gone (Gemini CLI) has no CLI to review with, so Claude is tried; a failed review
+  // leaves the deterministic audit, as for any rival that cannot run.
+  const self = isKnownAgent(authorAgent) ? authorAgent : 'claude';
+  return { reviewerAgent: self, reviewerModel: selectProviderModelByRank(self, 4) };
 }
 
 export async function getSavedCrossCriticResult(
@@ -833,7 +834,7 @@ export async function runCrossProviderCritic(params: {
   preferredReviewer?: AgentId;
 }): Promise<CrossCriticResult> {
   const { run, workspacePath, settings, preferredReviewer } = params;
-  const authorAgent = (run.agent as AgentId) ?? 'claude';
+  const authorAgent = run.agent || 'claude';
   const { reviewerAgent, reviewerModel } = selectRivalCriticAgent(authorAgent, settings, preferredReviewer);
 
   const slopReport = await auditWorktreeSlop({ runId: run.id, workspacePath });

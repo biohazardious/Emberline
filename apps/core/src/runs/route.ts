@@ -2,6 +2,7 @@ import {
   type AgentId,
   BUILTIN_MODELS,
   getModelsForProvider,
+  isKnownAgent,
   MODEL_ID_RE,
   PROVIDER_REGISTRY,
   resolveCliModel,
@@ -41,6 +42,15 @@ export function parseRouteTag(text: string): { agent: string; model: string } | 
   return { agent, model: tagModelFor(agent, match[2]) };
 }
 
+/**
+ * The route tag a new run follows: one naming an agent this core has. A tag an older roadmap or
+ * ticket wrote for an agent that is gone (Gemini CLI) routes nothing, so the persona's route runs.
+ */
+export function routingTag(text: string): { agent: AgentId; model: string } | undefined {
+  const tag = parseRouteTag(text);
+  return tag && isKnownAgent(tag.agent) ? { agent: tag.agent, model: tag.model } : undefined;
+}
+
 /** The run's model; legacy rows keep it only in the prompt's route tag. */
 export function runModel(row: Pick<RunRow, 'model' | 'prompt'>): string | null {
   return row.model ?? parseRouteTag(row.prompt)?.model ?? null;
@@ -64,13 +74,6 @@ export function currentRoute(
 /** What a route on `auto` has always launched with where that is not the CLI's own default. */
 const AUTO_MODEL: Partial<Record<AgentId, string>> = { antigravity: 'argon' };
 
-/** Gemini CLI's ids for Emberline's Gemini built-ins before discovery. */
-const GEMINI_PRE_DISCOVERY: Readonly<Record<string, string>> = {
-  'gemini-pro': 'gemini-2.5-pro',
-  'gemini-flash': 'gemini-2.5-flash',
-  'gemini-flash-lite': 'gemini-2.5-flash-lite',
-};
-
 /**
  * The pre-discovery behaviour: what each CLI got for a built-in id before Emberline read its model
  * list. A provider whose list was never read keeps it, so a route that worked then still works.
@@ -78,7 +81,6 @@ const GEMINI_PRE_DISCOVERY: Readonly<Record<string, string>> = {
  */
 function preDiscoveryCliModel(agent: AgentId, id: string): string | undefined {
   if (agent === 'codex' || agent === 'aider' || agent === 'antigravity') return id;
-  if (agent === 'gemini') return GEMINI_PRE_DISCOVERY[id];
   return undefined;
 }
 
@@ -111,5 +113,7 @@ export function cliModelOf(
   model: string | null | undefined,
   listRead: boolean,
 ): string | undefined {
-  return model && model !== 'auto' ? launchModel(agent as AgentId, model, listRead).cliModel : undefined;
+  // An old run's agent may be gone (Gemini CLI): it has no CLI to read limits for.
+  if (!model || model === 'auto' || !isKnownAgent(agent)) return undefined;
+  return launchModel(agent, model, listRead).cliModel;
 }

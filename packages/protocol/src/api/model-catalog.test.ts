@@ -171,12 +171,14 @@ describe('resolveCliModel', () => {
       ...entry(id, rank),
       source: 'manual' as const,
     });
-    // Gemini CLI is read by hand only: typing in a Gemini 3 id must not move gemini-pro routes.
-    setModelCatalog({ gemini: [manual('gemini-3-pro-preview', 5), manual('gemini-3-flash', 5)] } as never);
-    expect(resolveCliModel('gemini', 'gemini-pro')).toBeNull();
-    expect(resolveCliModel('gemini', 'gemini-flash')).toBeNull();
+    // Typing in a Gemini 5 id must not move gemini-pro routes.
+    setModelCatalog({
+      antigravity: [manual('gemini-5-pro-preview', 5), manual('gemini-5-flash', 5)],
+    } as never);
+    expect(resolveCliModel('antigravity', 'gemini-pro')).toBeNull();
+    expect(resolveCliModel('antigravity', 'gemini-flash')).toBeNull();
     // The typed-in id itself still launches as typed.
-    expect(resolveCliModel('gemini', 'gemini-3-pro-preview')).toBe('gemini-3-pro-preview');
+    expect(resolveCliModel('antigravity', 'gemini-5-pro-preview')).toBe('gemini-5-pro-preview');
     // Next to a discovered family member, the discovered one wins even at a lower rank.
     setModelCatalog({
       antigravity: [entry('gemini-4-argon-medium', 3), manual('gemini-5-argon-xhigh', 5)],

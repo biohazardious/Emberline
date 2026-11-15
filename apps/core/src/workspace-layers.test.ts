@@ -17,7 +17,6 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   'packages/adapter-sdk': [],
   'packages/adapter-claude': ['@emberline/protocol', '@emberline/adapter-sdk'],
   'packages/adapter-codex': ['@emberline/adapter-sdk'],
-  'packages/adapter-gemini': ['@emberline/adapter-sdk'],
   'packages/hook': ['@emberline/protocol'],
   'apps/ptyd': ['@emberline/protocol'],
   'apps/web': ['@emberline/protocol'],
@@ -26,7 +25,6 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
     '@emberline/adapter-sdk',
     '@emberline/adapter-claude',
     '@emberline/adapter-codex',
-    '@emberline/adapter-gemini',
     '@emberline/ptyd',
   ],
 };

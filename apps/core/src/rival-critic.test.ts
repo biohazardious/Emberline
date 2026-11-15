@@ -21,7 +21,6 @@ const settings = {
   providerAuth: {
     claude: auth(true),
     antigravity: auth(true),
-    gemini: auth(false),
     codex: auth(false),
     copilot: auth(false),
     aider: auth(false),
@@ -96,6 +95,13 @@ describe('cross-provider critic', () => {
     expect(args).toContain('new-file.js (new, untracked)');
   });
 
+  it('reviews an old Gemini CLI run without throwing, naming its author as it ran', async () => {
+    process.env.EMBERLINE_AGY_COMMAND = fakeReviewer('agy', null, 1);
+    const res = await runCrossProviderCritic({ run: run('gemini'), workspacePath: repo, settings });
+    expect(res).toMatchObject({ authorAgent: 'gemini', reviewerAgent: 'antigravity' });
+    expect(res.reviewSource).toBe('deterministic');
+  });
+
   it('falls back to the deterministic audit and says why when the rival cannot review', async () => {
     process.env.EMBERLINE_AGY_COMMAND = fakeReviewer('agy', null, 1);
     const res = await runCrossProviderCritic({ run: run('claude'), workspacePath: repo, settings });
@@ -128,25 +134,32 @@ describe('cross-provider critic', () => {
 });
 
 describe('rival critic choice', () => {
-  it('skips a provider whose sign-in carries a warning (a consumer Google login) unless it has an API key', () => {
+  it('skips a provider whose sign-in carries a warning unless it has an API key', () => {
     const warned = {
       enabledProviders: ['claude'],
       providerAuth: {
         ...settings.providerAuth,
         antigravity: auth(false),
-        gemini: {
-          ...auth(true),
-          warning: 'Google login works only with Gemini Code Assist Standard/Enterprise',
-        },
+        codex: { ...auth(true), warning: 'The login may have expired' },
       },
     } as unknown as FactorySettings;
     expect(selectRivalCriticAgent('claude', warned).reviewerAgent).toBe('claude');
     expect(
-      selectRivalCriticAgent('claude', { ...warned, enabledProviders: ['claude', 'gemini'] }).reviewerAgent,
+      selectRivalCriticAgent('claude', { ...warned, enabledProviders: ['claude', 'codex'] }).reviewerAgent,
     ).toBe('claude');
-    expect(selectRivalCriticAgent('claude', { ...warned, geminiKeyConfigured: true }).reviewerAgent).toBe(
-      'gemini',
+    expect(selectRivalCriticAgent('claude', { ...warned, openaiKeyConfigured: true }).reviewerAgent).toBe(
+      'codex',
     );
+  });
+
+  it('picks a rival for an old Gemini CLI run, never Gemini itself', () => {
+    expect(selectRivalCriticAgent('gemini', settings).reviewerAgent).toBe('antigravity');
+    const alone = {
+      ...settings,
+      enabledProviders: ['aider'],
+      providerAuth: {},
+    } as unknown as FactorySettings;
+    expect(selectRivalCriticAgent('gemini', alone).reviewerAgent).toBe('claude');
   });
 });
 

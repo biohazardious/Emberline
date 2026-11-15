@@ -138,7 +138,7 @@ export async function collectReviewDiff(
 }
 
 export function buildRivalPrompt(params: {
-  authorAgent: AgentId;
+  authorAgent: string;
   ticketTitle?: string | null;
   ticketBody?: string | null;
   diff: string;

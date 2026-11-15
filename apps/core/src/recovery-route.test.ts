@@ -106,8 +106,8 @@ function seedRun(seed: RunSeed): string {
       projectId: 'p1',
       ticketId,
       agent: seed.agent ?? 'claude',
-      // A headless CLI (gemini) refuses a prompt in Ask, so it runs Autonomous.
-      permissionMode: seed.permissionMode ?? (seed.agent === 'gemini' ? 'auto' : 'default'),
+      // A headless CLI (copilot) refuses a prompt in Ask, so it runs Autonomous.
+      permissionMode: seed.permissionMode ?? (seed.agent === 'copilot' ? 'auto' : 'default'),
       state: 'done',
       branch: seed.branch ?? null,
       worktreePath: seed.worktreePath ?? path.join(t.dir, '.worktrees', seed.id),
@@ -734,10 +734,10 @@ describe('delivering a recovery prompt', () => {
 
   describe('resuming a provider without session resume (a fresh conversation)', () => {
     beforeEach(() => {
-      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+      process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
     });
     afterEach(() => {
-      delete process.env.EMBERLINE_GEMINI_COMMAND;
+      delete process.env.EMBERLINE_COPILOT_COMMAND;
     });
     /** The `-p` prompt of the run's latest start. */
     const freshPrompt = async (runId: string) =>
@@ -746,7 +746,7 @@ describe('delivering a recovery prompt', () => {
     it('an empty Resume of a held run gets the handoff context, then the hold prompt', async () => {
       seedRun({
         id: 'g1',
-        agent: 'gemini',
+        agent: 'copilot',
         ...worktree('g1', { 'new.js': 'x\n' }),
         hold: { type: 'completion_missing', payload: {} },
       });
@@ -758,7 +758,7 @@ describe('delivering a recovery prompt', () => {
     });
 
     it('explicit text gets the handoff context first', async () => {
-      seedRun({ id: 'g2', agent: 'gemini', ...worktree('g2', { 'new.js': 'x\n' }), hold: null });
+      seedRun({ id: 'g2', agent: 'copilot', ...worktree('g2', { 'new.js': 'x\n' }), hold: null });
       expect((await post('/api/runs/g2/resume', { text: 'my own words' })).statusCode).toBe(200);
       const prompt = await freshPrompt('g2');
       expect(prompt).toContain('Your previous session on this task ended');
@@ -766,7 +766,7 @@ describe('delivering a recovery prompt', () => {
     });
 
     it('a bare continue is the handoff context alone, as before', async () => {
-      seedRun({ id: 'g3', agent: 'gemini', ...worktree('g3', { 'new.js': 'x\n' }), hold: null });
+      seedRun({ id: 'g3', agent: 'copilot', ...worktree('g3', { 'new.js': 'x\n' }), hold: null });
       expect((await post('/api/runs/g3/resume', {})).statusCode).toBe(200);
       const prompt = await freshPrompt('g3');
       expect(prompt).toContain('Your previous session on this task ended');
@@ -776,7 +776,7 @@ describe('delivering a recovery prompt', () => {
     it('a finished run from before the headless check is not resumed in Accept edits, and keeps its result', async () => {
       seedRun({
         id: 'g4',
-        agent: 'gemini',
+        agent: 'copilot',
         permissionMode: 'acceptEdits',
         ...worktree('g4', { 'new.js': 'x\n' }),
         hold: null,
@@ -785,7 +785,7 @@ describe('delivering a recovery prompt', () => {
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });
       expect(res.json().message).toContain(
-        'Gemini runs without a terminal to answer in, so in Accept edits mode',
+        'Copilot runs without a terminal to answer in, so in Accept edits mode',
       );
       expect(t.runs.getRun('g4').state).toBe('done');
       expect(existsSync(path.join(t.dir, 'args-g4'))).toBe(false);
@@ -794,7 +794,7 @@ describe('delivering a recovery prompt', () => {
     it('a held headless run in Accept edits is refused before anything is handed off', async () => {
       seedRun({
         id: 'g5',
-        agent: 'gemini',
+        agent: 'copilot',
         permissionMode: 'acceptEdits',
         ...worktree('g5', { 'n.js': 'x\n' }),
         stops: [legacyStop, exitNoted],
@@ -810,7 +810,7 @@ describe('delivering a recovery prompt', () => {
       seedRun({ id: 'c6', permissionMode: 'acceptEdits', ...worktree('c6', { 'n.js': 'x\n' }), hold: null });
       t.db.update(runs).set({ state: 'failed' }).where(eq(runs.id, 'c6')).run();
       const res = await post('/api/runs/c6/handoff', {
-        route: { agent: 'gemini', model: 'auto', credential: 'login' },
+        route: { agent: 'copilot', model: 'auto', credential: 'login' },
       });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ error: 'headless_needs_auto' });

@@ -294,7 +294,7 @@ describe('headlessModeProblem', () => {
     expect(headlessModeProblem('copilot', undefined, true)).toContain('in Ask mode');
   });
 
-  it('aider and claude are unaffected (Gemini CLI answers for itself in adapter-gemini)', () => {
+  it('aider and claude are unaffected', () => {
     for (const agent of ['aider', 'claude']) {
       for (const mode of ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const) {
         expect(headlessModeProblem(agent, mode, true)).toBeNull();

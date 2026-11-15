@@ -19,10 +19,8 @@ describe('routing helpers', () => {
     expect(quotaPoolFor('claude', 'claude-opus-4-8')).toBe('opus');
     expect(quotaPoolFor('claude', 'claude-fable-5')).toBe('fable');
     expect(quotaPoolFor('claude', 'claude-mythos-5')).toBe('*');
-    expect(quotaPoolFor('gemini', 'gemini-3.8-flash-high')).toBe('gemini-flash');
-    expect(quotaPoolFor('gemini', 'gemini-3.8-flash-lite')).toBe('gemini-flash-lite');
-    expect(quotaPoolFor('gemini', 'gemini-3.8-pro-high')).toBe('gemini-pro');
-    expect(quotaPoolFor('gemini', 'gemini-pro')).toBe('gemini-pro');
+    // An agent that is gone (an old run's) gets the provider-wide pool.
+    expect(quotaPoolFor('gemini', 'gemini-3.8-pro-high')).toBe('*');
     expect(quotaPoolFor('copilot', 'gpt-5.4')).toBe('*');
     expect(quotaPoolFor('copilot', 'gpt-4o')).toBe('gpt-4o');
     // Codex names the exact model a limit is for, so each model is its own pool.
@@ -50,7 +48,7 @@ describe('routing helpers', () => {
     });
     expect(PROVIDER_RUNTIME.aider.credentials).toEqual(['api_key']);
     expect(PROVIDER_RUNTIME.claude.resumeMode).toBe('session');
-    expect(PROVIDER_RUNTIME.gemini.resumeMode).toBe('fresh');
+    expect(PROVIDER_RUNTIME.codex.resumeMode).toBe('fresh');
   });
 
   it('parses routes with a login default and compares them', () => {

@@ -46,10 +46,7 @@ const model = (id: string, over: Partial<StoredModel> = {}): StoredModel => ({
 });
 const empty = (): StoredCatalog =>
   Object.fromEntries(
-    ['claude', 'antigravity', 'copilot', 'gemini', 'codex', 'aider'].map((a) => [
-      a,
-      { models: [], read: null },
-    ]),
+    ['claude', 'antigravity', 'copilot', 'codex', 'aider'].map((a) => [a, { models: [], read: null }]),
   ) as unknown as StoredCatalog;
 
 let catalog: StoredCatalog;

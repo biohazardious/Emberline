@@ -293,9 +293,10 @@ describe('AI Coding Factory (F1–F4)', () => {
         theme: 'light',
         autoPickupBacklog: true,
         personaAgents: {
-          ui_ux: 'gemini',
+          ui_ux: 'codex',
           coder: 'claude',
         },
+        openaiApiKey: 'test-openai-key-123',
         geminiApiKey: 'test-gemini-key-123',
       },
     });
@@ -303,8 +304,10 @@ describe('AI Coding Factory (F1–F4)', () => {
     const updatedSettings = patchSettingsRes.json() as FactorySettings;
     expect(updatedSettings.theme).toBe('light');
     expect(updatedSettings.autoPickupBacklog).toBe(true);
-    expect(updatedSettings.personaAgents.ui_ux).toBe('gemini');
+    expect(updatedSettings.personaAgents.ui_ux).toBe('codex');
     expect(updatedSettings.geminiKeyConfigured).toBe(true);
+    // The Gemini key is Aider's; saving it enables no provider.
+    expect(updatedSettings.enabledProviders).toEqual(initialSettings.enabledProviders.concat('codex'));
 
     // Phase F8: Code Explorer file tree, read, write, and delete APIs
     const writeFileRes = await t.app.inject({
@@ -403,10 +406,9 @@ describe('AI Coding Factory (F1–F4)', () => {
       });
       expect(getProviderEnvFromSettings(db, 'claude')).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-test' });
       expect(getProviderEnvFromSettings(db, 'codex')).toEqual({ OPENAI_API_KEY: 'sk-openai-test' });
-      expect(getProviderEnvFromSettings(db, 'antigravity')).toEqual({
-        GEMINI_API_KEY: 'gem-test',
-        GOOGLE_API_KEY: 'gem-test',
-      });
+      // agy has no API-key mode; the Gemini key reaches Aider only.
+      expect(getProviderEnvFromSettings(db, 'antigravity')).toEqual({});
+      expect(getProviderEnvFromSettings(db, 'gemini')).toEqual({});
       expect(Object.keys(getProviderEnvFromSettings(db, 'aider')).sort()).toEqual([
         'ANTHROPIC_API_KEY',
         'GEMINI_API_KEY',

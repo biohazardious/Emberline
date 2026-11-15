@@ -52,15 +52,6 @@ const TOOL_SPECS: Record<AgentId, ToolSpec> = {
       'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /opt/ai-tools/bin',
     uninstallCommand: 'rm -f /opt/ai-tools/bin/agy',
   },
-  gemini: {
-    provider: 'gemini',
-    binaryName: 'gemini',
-    installMethod: 'npm',
-    npmPackage: '@google/gemini-cli',
-    installCommand: 'npm install -g --allow-scripts=@google/gemini-cli @google/gemini-cli@latest',
-    updateCommand: 'npm install -g --allow-scripts=@google/gemini-cli @google/gemini-cli@latest',
-    uninstallCommand: 'npm uninstall -g @google/gemini-cli',
-  },
   codex: {
     provider: 'codex',
     binaryName: 'codex',

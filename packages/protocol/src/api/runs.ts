@@ -25,8 +25,16 @@ export const RunState = z.enum([
 export type RunState = z.infer<typeof RunState>;
 
 /** Supported CLI coding agent adapters. */
-export const AgentId = z.enum(['claude', 'antigravity', 'copilot', 'gemini', 'codex', 'aider']);
+export const AgentId = z.enum(['claude', 'antigravity', 'copilot', 'codex', 'aider']);
 export type AgentId = z.infer<typeof AgentId>;
+
+/**
+ * A run row keeps the agent it ran on as a plain string, and an older core may have stored one that
+ * is gone now (Gemini CLI). Every lookup keyed by a run's agent checks it here first.
+ */
+export function isKnownAgent(agent: string): agent is AgentId {
+  return AgentId.safeParse(agent).success;
+}
 
 /** A model id: `auto` or a CLI-reported id. The pattern keeps ids safe to pass as one shell word. */
 export const AgentModelId = z.union([z.literal('auto'), z.string().regex(MODEL_ID_RE)]);

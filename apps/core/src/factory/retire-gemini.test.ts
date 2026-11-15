@@ -127,6 +127,25 @@ describe('retiring Gemini CLI on upgrade', () => {
     expect(result.lines).toEqual(['QA & Test Engineer → next in its chain']);
   });
 
+  it('counts an Antigravity step stored on the API key as the login step it runs as', () => {
+    // Antigravity has no key credential: its api_key step is read as login, so a moved Gemini step
+    // would repeat it and the notice must not claim a move that the read then merges away.
+    store({
+      enabledProviders: ['gemini', 'antigravity'],
+      personaRoutes: {
+        qa: [
+          { agent: 'gemini', model: 'gemini-pro', credential: 'api_key' },
+          { agent: 'antigravity', model: 'gemini-pro', credential: 'api_key' },
+        ],
+      },
+    });
+    const result = retire();
+    expect(result.lines).toEqual(['QA & Test Engineer → next in its chain']);
+    expect(getFactorySettings(t.db).personaRoutes.qa).toEqual([
+      { agent: 'antigravity', model: 'gemini-pro', credential: 'login' },
+    ]);
+  });
+
   it.each([
     { enabledProviders: ['gemini', 'codex', 'antigravity'], expected: 'antigravity' },
     { enabledProviders: ['gemini', 'codex', 'claude'], expected: 'codex' },

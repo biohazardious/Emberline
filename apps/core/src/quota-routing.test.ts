@@ -319,14 +319,14 @@ describe('handoff', () => {
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it('resumes a Gemini run without session support with the handoff prompt, not a bare "continue"', async () => {
-    process.env.EMBERLINE_GEMINI_COMMAND = path.join(t.dir, 'fake-gemini');
+  it('resumes a Copilot run without session support with the handoff prompt, not a bare "continue"', async () => {
+    process.env.EMBERLINE_COPILOT_COMMAND = path.join(t.dir, 'fake-copilot');
     try {
-      writeFake(t.dir, 'fake-gemini');
+      writeFake(t.dir, 'fake-copilot');
       updateFactorySettings(t.db, {
-        enabledProviders: ['claude', 'antigravity', 'gemini'],
+        enabledProviders: ['claude', 'antigravity', 'copilot'],
         antigravityTermsAcknowledged: true,
-        personaRoutes: { qa: [{ agent: 'gemini', model: 'gemini-pro', credential: 'login' }] },
+        personaRoutes: { qa: [{ agent: 'copilot', model: 'sonnet', credential: 'login' }] },
       });
       const { run } = await startTicket('Regression matrix', 'qa');
       const token = await work(run);
@@ -342,13 +342,13 @@ describe('handoff', () => {
         )
         .not.toBeNull();
       const resumed = await t.runs.resume(run.id);
-      expect(resumed).toMatchObject({ id: run.id, agent: 'gemini' });
+      expect(resumed).toMatchObject({ id: run.id, agent: 'copilot' });
       await expect
         .poll(() => readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8'), { timeout: 5_000 })
         .toContain('Your previous session on this task ended');
       expect(readFileSync(path.join(t.dir, `args-${run.id}`), 'utf8')).not.toContain('--resume');
     } finally {
-      delete process.env.EMBERLINE_GEMINI_COMMAND;
+      delete process.env.EMBERLINE_COPILOT_COMMAND;
     }
   });
 
@@ -1096,10 +1096,10 @@ describe('headless agents refuse modes that would need to ask', () => {
   });
 
   it('a factory request whose generated ticket text routes to a headless agent leaves no [Factory] ticket', async () => {
-    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'gemini'] });
+    updateFactorySettings(t.db, { enabledProviders: ['claude', 'antigravity', 'copilot'] });
     const real = vi.mocked(orchestration.buildFactoryOrchestratorPrompt).getMockImplementation()!;
     vi.mocked(orchestration.buildFactoryOrchestratorPrompt).mockImplementation(
-      (...args) => `${real(...args)}\n[Preferred Agent: gemini · Model: auto]`,
+      (...args) => `${real(...args)}\n[Preferred Agent: copilot · Model: auto]`,
     );
     try {
       const res = await api('POST', `/api/projects/${projectId}/factory-request`, {
@@ -1199,5 +1199,91 @@ describe('headless agents refuse modes that would need to ask', () => {
     const second = await startTicket('Second', 'coder', { permissionMode: 'acceptEdits' });
     await failsHeadless(second.run.id);
     expect((await getRun(second.run.id)).events.map((e) => e.type)).toContain('route_bound');
+  });
+});
+
+describe('an old Gemini CLI run', () => {
+  const REMOVED = 'Gemini CLI is no longer supported. Hand this run off to another agent.';
+
+  /** A ticket run turned into one an older core started on Gemini CLI; its session has ended. */
+  async function geminiRun(): Promise<Run> {
+    const { run } = await startTicket('Old Gemini work', 'coder');
+    await work(run);
+    await t.runs.stop(run.id).catch(() => undefined);
+    t.db
+      .update(runsTable)
+      .set({
+        agent: 'gemini',
+        model: 'gemini-pro',
+        credential: 'api_key',
+        routes: [
+          { agent: 'gemini', model: 'gemini-pro', credential: 'api_key' },
+          { agent: 'claude', model: 'opus', credential: 'login' },
+        ] as never,
+        state: 'waiting_input',
+        endedAt: new Date(),
+        cancelledAt: null,
+        agentSessionId: 'gemini-session',
+      })
+      .where(eq(runsTable.id, run.id))
+      .run();
+    return run;
+  }
+
+  it('is listed and shown as it ran', async () => {
+    const run = await geminiRun();
+    const list = (await api('GET', '/api/runs')).json() as Run[];
+    expect(list.find((r) => r.id === run.id)).toMatchObject({ agent: 'gemini', model: 'gemini-pro' });
+    expect((await api('GET', `/api/runs/${run.id}`)).statusCode).toBe(200);
+  });
+
+  it('refuses a resume or a prompt with 409 agent_removed and starts nothing', async () => {
+    const run = await geminiRun();
+    const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+    for (const [url, payload] of [
+      [`/api/runs/${run.id}/resume`, {}],
+      [`/api/runs/${run.id}/resume`, { text: 'carry on' }],
+      [`/api/runs/${run.id}/prompt`, { text: 'carry on' }],
+    ] as const) {
+      const res = await api('POST', url, payload);
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json(), url).toMatchObject({ error: 'agent_removed', message: REMOVED });
+    }
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await getRun(run.id)).toMatchObject({ agent: 'gemini', state: 'waiting_input' });
+  });
+
+  it('is never resumed by the scheduler, even when rate limited', async () => {
+    const run = await geminiRun();
+    t.db.update(runsTable).set({ state: 'rate_limited' }).where(eq(runsTable.id, run.id)).run();
+    const resume = vi.spyOn(t.runs, 'resume');
+    await t.scheduler.tick();
+    expect(resume).not.toHaveBeenCalledWith(run.id);
+  });
+
+  it('hands off to another route, without its Gemini step', async () => {
+    const run = await geminiRun();
+    const res = await api('POST', `/api/runs/${run.id}/handoff`, {
+      route: { agent: 'claude', model: 'sonnet', credential: 'login' },
+    });
+    expect(res.statusCode).toBe(201);
+    const successor = res.json() as Run;
+    expect(successor).toMatchObject({ agent: 'claude', model: 'sonnet', predecessorRunId: run.id });
+    expect(successor.routes.map((r) => r.agent)).not.toContain('gemini');
+    expect(await getRun(run.id)).toMatchObject({ handedOffTo: successor.id });
+  });
+
+  it('a ticket tagged for Gemini CLI runs on its persona route', async () => {
+    const ticket = (
+      await api('POST', `/api/projects/${projectId}/tickets`, {
+        title: 'Tagged',
+        status: 'ready',
+        persona: 'ui_ux',
+        body: 'Do it.\n\n[Preferred Agent: gemini · Model: gemini-pro]',
+      })
+    ).json();
+    const res = await api('POST', `/api/tickets/${ticket.id}/start`, { permissionMode: 'auto' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().run).toMatchObject({ agent: 'antigravity', model: 'argon' });
   });
 });

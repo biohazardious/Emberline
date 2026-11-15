@@ -81,11 +81,11 @@ describe('ToolchainService', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     await expect(
-      toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' }),
+      toolchain.executeAction('copilot', { action: 'install', customCommand: 'echo second' }),
     ).rejects.toMatchObject({ statusCode: 409 });
     expect((await slow).output).toContain('slow-done');
     expect(
-      (await toolchain.executeAction('gemini', { action: 'install', customCommand: 'echo second' })).output,
+      (await toolchain.executeAction('copilot', { action: 'install', customCommand: 'echo second' })).output,
     ).toContain('second');
   });
 

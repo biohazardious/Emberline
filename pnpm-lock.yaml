@@ -52,9 +52,6 @@ importers:
       '@emberline/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapter-codex
-      '@emberline/adapter-gemini':
-        specifier: workspace:*
-        version: link:../../packages/adapter-gemini
       '@emberline/adapter-sdk':
         specifier: workspace:*
         version: link:../../packages/adapter-sdk
@@ -192,12 +189,6 @@ importers:
         version: link:../protocol
 
   packages/adapter-codex:
-    dependencies:
-      '@emberline/adapter-sdk':
-        specifier: workspace:*
-        version: link:../adapter-sdk
-
-  packages/adapter-gemini:
     dependencies:
       '@emberline/adapter-sdk':
         specifier: workspace:*

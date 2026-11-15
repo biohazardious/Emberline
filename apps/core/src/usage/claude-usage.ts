@@ -358,7 +358,6 @@ async function readTelemetry(homeDir: string): Promise<ClaudeUsageTelemetry> {
         weeklyTokens: base.weeklyTokens,
       },
       antigravity: agy,
-      gemini: agy,
     },
   };
 }

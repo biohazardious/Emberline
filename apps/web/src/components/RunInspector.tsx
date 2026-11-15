@@ -62,8 +62,9 @@ export function formatAgentDisplayName(agent?: string | null): string {
   switch (agent) {
     case 'antigravity':
       return 'Google Antigravity (agy)';
+    // Old runs keep the agent they ran on; Gemini CLI is no longer a provider.
     case 'gemini':
-      return 'Google Gemini';
+      return 'Gemini CLI (removed)';
     case 'codex':
       return 'OpenAI Codex';
     case 'copilot':
@@ -80,7 +81,7 @@ export function formatAgentResumePlaceholder(agent?: string | null): string {
     case 'antigravity':
       return 'Continue the ended session (agy --continue)…';
     case 'gemini':
-      return 'Continue the ended session (gemini)…';
+      return 'Gemini CLI is no longer supported. Hand this run off to another agent.';
     case 'codex':
       return 'Continue the ended session (codex)…';
     case 'copilot':

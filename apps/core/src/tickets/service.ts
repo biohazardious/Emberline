@@ -6,7 +6,6 @@ import path from 'node:path';
 import {
   type AgentCreateTicketsPayload,
   AgentCreateTicketsPayload as AgentCreateTicketsPayloadSchema,
-  type AgentId,
   type AgentModelId,
   type AgentPersona,
   type BulkTicketBody,
@@ -106,7 +105,7 @@ import {
 } from '../runs/gates.js';
 import { type MergeHeal, mergeRunBranch, mergeTarget } from '../runs/worktree.js';
 import { providerAdapter } from '../runs/providers.js';
-import { parseRouteTag } from '../runs/route.js';
+import { routingTag } from '../runs/route.js';
 import type { RunOrigin, RunService } from '../runs/service.js';
 import type { Scheduler } from '../scheduler/service.js';
 
@@ -1059,13 +1058,13 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     const maxParallel = getFactorySettings(this.db).maxParallelTicketsPerProject;
     const leadBody = (attachments: string) =>
       buildFactoryOrchestratorPrompt(body.prompt, body.autoDispatch, attachments, maxParallel);
-    const tag = parseRouteTag(leadBody(''));
+    const tag = routingTag(leadBody(''));
     this.runs.assertStartable({
       projectId,
       prompt: body.prompt,
       permissionMode: body.permissionMode,
       persona: body.leadPersona,
-      ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
+      ...(tag ? { agent: tag.agent, model: tag.model as AgentModelId } : {}),
     });
     const attachmentContext =
       body.attachments && body.attachments.length > 0
@@ -2471,7 +2470,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
     prompt: string,
   ): { body: CreateRunBody; origin: RunOrigin } {
     const { permissionMode, persona } = StartTicketBodySchema.parse(input);
-    const tag = parseRouteTag(ticket.body ?? '');
+    const tag = routingTag(ticket.body ?? '');
     const slug = slugify(ticket.title).slice(0, 40).replace(/-+$/, '');
     return {
       body: {
@@ -2479,7 +2478,7 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
         prompt,
         permissionMode,
         persona: persona ?? ticket.persona,
-        ...(tag ? { agent: tag.agent as AgentId, model: tag.model as AgentModelId } : {}),
+        ...(tag ? { agent: tag.agent, model: tag.model as AgentModelId } : {}),
       },
       origin: {
         ticketId: ticket.id,

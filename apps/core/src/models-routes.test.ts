@@ -33,7 +33,7 @@ describe('models routes', () => {
     const res = await call('GET', '/api/models');
     expect(res.statusCode).toBe(200);
     expect(Object.keys(res.json<{ catalog: Catalog }>().catalog).sort()).toEqual(
-      ['aider', 'antigravity', 'claude', 'codex', 'copilot', 'gemini'].sort(),
+      ['aider', 'antigravity', 'claude', 'codex', 'copilot'].sort(),
     );
   });
 
@@ -82,7 +82,7 @@ describe('models routes', () => {
         copilot: 'runner_away',
       },
     });
-    // Emberline reads no list of Gemini CLI's or aider's.
+    // Emberline reads no list of aider's.
     expect((await call('POST', '/api/models/refresh', { agent: 'aider' })).json()).toEqual({
       reads: {},
       skipped: { aider: 'no_reader' },

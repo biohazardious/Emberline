@@ -123,11 +123,11 @@ describe('mergeDiscovery', () => {
 
 describe('recordReadFailure', () => {
   it('is a first failure until a read succeeds again', () => {
-    expect(recordReadFailure(opened.db, 'gemini', '1.0', 'boom', t1).firstFailure).toBe(true);
-    expect(recordReadFailure(opened.db, 'gemini', '1.0', 'boom', t2).firstFailure).toBe(false);
-    expect(readCatalog(opened.db).gemini.read).toMatchObject({ ok: false, error: 'boom' });
-    mergeDiscovery(opened.db, 'gemini', found(['gemini-x-high']), t2);
-    expect(recordReadFailure(opened.db, 'gemini', '1.0', 'boom', t3).firstFailure).toBe(true);
+    expect(recordReadFailure(opened.db, 'copilot', '1.0', 'boom', t1).firstFailure).toBe(true);
+    expect(recordReadFailure(opened.db, 'copilot', '1.0', 'boom', t2).firstFailure).toBe(false);
+    expect(readCatalog(opened.db).copilot.read).toMatchObject({ ok: false, error: 'boom' });
+    mergeDiscovery(opened.db, 'copilot', found(['gpt-x-high']), t2);
+    expect(recordReadFailure(opened.db, 'copilot', '1.0', 'boom', t3).firstFailure).toBe(true);
   });
 });
 

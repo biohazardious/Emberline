@@ -123,8 +123,8 @@ function seedRun(seed: RunSeed): string {
       projectId: 'p1',
       ticketId,
       agent: seed.agent ?? 'claude',
-      // A headless CLI (gemini) refuses a prompt in Ask, so it runs Autonomous.
-      permissionMode: seed.permissionMode ?? (seed.agent === 'gemini' ? 'auto' : 'default'),
+      // A headless CLI (copilot) refuses a prompt in Ask, so it runs Autonomous.
+      permissionMode: seed.permissionMode ?? (seed.agent === 'copilot' ? 'auto' : 'default'),
       state: 'done',
       branch: seed.branch ?? null,
       worktreePath: seed.worktreePath ?? path.join(t.dir, '.worktrees', seed.id),
@@ -420,6 +420,23 @@ describe('POST /api/runs/:id/answer', () => {
     expect(prompt).toContain('> no key');
     expect(prompt).toContain('My answer:\n\nuse the test key');
     expect(prompt).toContain(`- ${body.attachments[0]} (text/plain, 5 bytes)`);
+  });
+
+  it('an old Gemini CLI run is not answered: Gemini CLI is gone, and its files are not left behind', async () => {
+    const wt = worktree('gm1', { 'app.js': 'x\n' });
+    seedRun({ id: 'gm1', agent: 'gemini', permissionMode: 'auto', ...wt, hold: blocked });
+    const spawn = vi.spyOn(t.ptyd.get(), 'spawn');
+    const res = await post('/api/runs/gm1/answer', {
+      text: 'use the test key',
+      attachments: [{ name: 'note.txt', mimeType: 'text/plain', dataBase64: 'aGk=' }],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'agent_removed',
+      message: 'Gemini CLI is no longer supported. Hand this run off to another agent.',
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(readdirSync(path.join(wt.worktreePath, '.emberline', 'attachments', 'answers'))).toEqual([]);
   });
 
   it('files only: the answer section holds just the attachments block', async () => {

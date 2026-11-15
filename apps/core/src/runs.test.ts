@@ -1490,7 +1490,7 @@ describe('runs', () => {
         .values({
           id: 'gem-1',
           projectId: project.id,
-          agent: 'gemini',
+          agent: 'copilot',
           permissionMode: 'auto',
           state: 'done',
           prompt: 'do it',
@@ -1512,7 +1512,7 @@ describe('runs', () => {
     });
 
     it('a prompt to a one-shot CLI whose process has exited notes the exit and respawns it', async () => {
-      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+      process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
       try {
         const project = await createProject('One-shot exited', true);
         const now = new Date();
@@ -1521,13 +1521,13 @@ describe('runs', () => {
           .values({
             id: 'gem-2',
             projectId: project.id,
-            agent: 'gemini',
+            agent: 'copilot',
             permissionMode: 'auto',
             state: 'done',
             prompt: 'do it',
             worktreePath: project.path,
             hookTokenHash: 'h',
-            agentSessionId: 'gemini-gem-2',
+            agentSessionId: 'copilot-gem-2',
             ptydSessionId: 'pty-gone',
             stateChangedAt: now,
             createdAt: now,
@@ -1539,12 +1539,12 @@ describe('runs', () => {
         expect(t.runs.get('gem-2').events.map((e) => e.type)).toContain('respawning');
         await tokenFor('gem-2');
       } finally {
-        delete process.env.EMBERLINE_GEMINI_COMMAND;
+        delete process.env.EMBERLINE_COPILOT_COMMAND;
       }
     });
 
     it('the same prompt respawns it at once while a reconcile pass is running, and the pass leaves it alone', async () => {
-      process.env.EMBERLINE_GEMINI_COMMAND = t.config.claudeCommand;
+      process.env.EMBERLINE_COPILOT_COMMAND = t.config.claudeCommand;
       try {
         const project = await createProject('One-shot during a pass', true);
         const now = new Date();
@@ -1553,13 +1553,13 @@ describe('runs', () => {
           .values({
             id: 'gem-3',
             projectId: project.id,
-            agent: 'gemini',
+            agent: 'copilot',
             permissionMode: 'auto',
             state: 'done',
             prompt: 'do it',
             worktreePath: project.path,
             hookTokenHash: 'h',
-            agentSessionId: 'gemini-gem-3',
+            agentSessionId: 'copilot-gem-3',
             ptydSessionId: 'pty-gone-3',
             stateChangedAt: now,
             createdAt: now,
@@ -1585,7 +1585,7 @@ describe('runs', () => {
         expect(t.runs.get('gem-3').events.filter((e) => e.type === 'session_lost')).toHaveLength(1);
         await tokenFor('gem-3');
       } finally {
-        delete process.env.EMBERLINE_GEMINI_COMMAND;
+        delete process.env.EMBERLINE_COPILOT_COMMAND;
       }
     });
   });
@@ -1637,10 +1637,6 @@ describe('runs', () => {
     it('before the list was ever read, built-in ids launch exactly as before discovery, with no note', () => {
       expect(launchModel('codex', 'o3', false)).toEqual({ cliModel: 'o3' });
       expect(launchModel('aider', 'opus', false)).toEqual({ cliModel: 'opus' });
-      expect(launchModel('gemini', 'gemini-pro', false)).toEqual({ cliModel: 'gemini-2.5-pro' });
-      expect(launchModel('gemini', 'gemini-flash-lite', false)).toEqual({
-        cliModel: 'gemini-2.5-flash-lite',
-      });
       expect(launchModel('antigravity', 'argon', false)).toEqual({ cliModel: 'argon' });
       expect(launchModel('antigravity', 'auto', false)).toEqual({ cliModel: 'argon' });
       expect(launchModel('copilot', 'gpt-4o', false)).toEqual({});
@@ -1709,7 +1705,6 @@ describe('runs', () => {
       copilot: 'EMBERLINE_COPILOT_COMMAND',
       codex: 'EMBERLINE_CODEX_COMMAND',
       aider: 'EMBERLINE_AIDER_COMMAND',
-      gemini: 'EMBERLINE_GEMINI_COMMAND',
     };
 
     /** Respawns a finished one-shot run of `agent` on `model`; resolves with the launch script and its notes. */
@@ -1770,12 +1765,6 @@ describe('runs', () => {
       const aiderAfter = await launch('aid-2', 'aider', 'opus');
       expect(aiderAfter.script).toContain('--model opus ');
       expect(aiderAfter.notes).toEqual([]);
-    });
-
-    it('Gemini on a built-in id before its list is read gets the Gemini CLI id it always got', async () => {
-      const { script, notes } = await launch('gem-m1', 'gemini', 'gemini-pro');
-      expect(script).toContain('--model gemini-2.5-pro -p');
-      expect(notes).toEqual([]);
     });
 
     it('Copilot on a route its list lacks runs on its default, with one model_unresolved note', async () => {

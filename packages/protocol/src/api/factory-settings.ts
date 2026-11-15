@@ -44,7 +44,6 @@ export type ProviderAuthStatus = z.infer<typeof ProviderAuthStatus>;
 export const ProviderAuthStatusMap = z.object({
   claude: ProviderAuthStatus,
   antigravity: ProviderAuthStatus,
-  gemini: ProviderAuthStatus,
   codex: ProviderAuthStatus,
   copilot: ProviderAuthStatus,
   aider: ProviderAuthStatus,
