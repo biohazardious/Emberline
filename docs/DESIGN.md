@@ -24,7 +24,7 @@ In short: an issue tracker, an editor and a git client, with AI coding agents do
 
 ### 2.1 Real CLIs, your own logins
 
-Agents run as the **official CLIs inside a PTY**: Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot CLI and Aider. Emberline does not reimplement an agent and does not call model APIs on the user's behalf. The user logs in to each CLI once inside the runner; credentials live in the runner's home volume and never leave it.
+Agents run as the **official CLIs inside a PTY**: Claude Code, Codex, Antigravity, GitHub Copilot CLI and Aider. Emberline does not reimplement an agent and does not call model APIs on the user's behalf. The user logs in to each CLI once inside the runner; credentials live in the runner's home volume and never leave it.
 
 ### 2.2 One installation, one user
 
@@ -84,9 +84,9 @@ Every provider builds a launch spec (command, arguments, environment, files) for
 - **Other CLIs** run through a generic wrapper (`buildWrappedCliLaunchSpec` in the SDK) that reports start, completion and failure through the same hook endpoint. Its failure hook carries the end of the CLI's output and, for a CLI whose transcripts core cannot read (Codex's rollout files), the latest rate-limit record of the session transcript.
 - State detection prefers hooks, then the session transcript, and uses screen parsing only where unavoidable (usage-limit banners and reset times), covered by fixture tests.
 - Resume: a live PTY gets a continue prompt typed in; an ended session is restarted with the CLI's resume flag in the same worktree.
-- Provider API keys are scoped to the agent that uses them: Claude gets the Anthropic key, Codex the OpenAI key, Gemini and Antigravity the Gemini key.
+- Provider API keys are scoped to the agent that uses them: Claude gets the Anthropic key, Codex the OpenAI key, Aider the Gemini key. Antigravity uses its own Google sign-in, not a key.
 
-Every CLI has one `ProviderAdapter` (`packages/adapter-sdk`): Claude Code and the wrapped CLIs with a Claude fallback in `adapter-claude`, Codex in `adapter-codex`, Gemini CLI in `adapter-gemini`. Core registers them by `AgentId` and never reads a CLI's wording itself. The adapter contract lives in `packages/adapter-sdk`, the wire schemas in `packages/protocol`. Both are Apache-2.0 so third-party adapters can use any license.
+Every CLI has one `ProviderAdapter` (`packages/adapter-sdk`): Claude Code and the wrapped CLIs with a Claude fallback in `adapter-claude`, Codex in `adapter-codex`. Core registers them by `AgentId` and never reads a CLI's wording itself. The adapter contract lives in `packages/adapter-sdk`, the wire schemas in `packages/protocol`. Both are Apache-2.0 so third-party adapters can use any license.
 
 ### 3.4 Tickets and runs
 
@@ -158,7 +158,6 @@ packages/
   adapter-sdk/     agent adapter interface, shared limit parsing, the generic CLI wrapper
   adapter-claude/  Claude Code (hooks, settings, personas) and the Antigravity, Copilot and Aider wrappers
   adapter-codex/   Codex CLI
-  adapter-gemini/  Gemini CLI
   hook/            emberline-hook and the CLI wrappers
 e2e/               end-to-end smoke test against an isolated stack
 ```

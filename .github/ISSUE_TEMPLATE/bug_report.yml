@@ -35,7 +35,6 @@ body:
         - None / not agent related
         - Claude Code
         - Codex
-        - Gemini CLI
         - Antigravity
         - GitHub Copilot CLI
         - Aider

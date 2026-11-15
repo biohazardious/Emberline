@@ -10,7 +10,11 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - New models appear in the pickers but are never picked for you: a route or an agent keeps the model it had.
 - **Inbox** notices: one when new models were found (naming them), one when a provider's list could not be read, and a one-time notice that routes set to Fable now run Fable.
 - **Settings → Providers** shows each provider's model list with **Refresh models**, and lets you add a model by hand or remove one.
-- Known limits: a free Copilot account lists no model beyond Auto. Gemini CLI has no list to read, and aider's list is every model it knows of rather than the ones your keys reach, so neither is read: add their models by hand. Aider's own names (`sonnet`, `opus`, …) work as before.
+- Known limits: a free Copilot account lists no model beyond Auto. Aider's list is every model it knows of rather than the ones your keys reach, so it is not read: add its models by hand. Aider's own names (`sonnet`, `opus`, …) work as before.
+
+### Removed
+
+- **The Gemini CLI provider.** Google ended consumer access to Gemini CLI on 2026-06-18, so it can no longer be signed in with a Google account. It is gone from Settings, the route and model pickers, the agent list and the CLI installer; `make gemini-login` is gone too. Antigravity keeps its Gemini models. Runs it already made stay listed as **Gemini CLI (removed)** and can be handed off to another agent.
 
 ### Fixed
 
@@ -22,6 +26,18 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 - Codex and Copilot sign in with a device code (`make codex-login` and `make copilot-login` too): the browser's redirect went to localhost on the runner, never reached it, and the login never finished.
 - A Claude whose credentials were emptied (after a logout or a failed refresh) and a fresh `~/.copilot` folder no longer show as signed in, so routing no longer picks them and runs no longer sit at a sign-in screen. Claude needs a token in its credentials file, or the key an Anthropic Console login keeps; Copilot needs a user in its config or a `gh` token.
 - A pull that stopped keeps the ticket **Resolve with a ticket** made for it when origin moves on in the meantime: asking again answers with the same ticket instead of a second one, and **Match origin…** closes it instead of sending it back to Backlog.
+
+### Upgrade notes
+
+**Gemini CLI routes move to Antigravity.** On the first start, a route step that named Gemini CLI becomes Antigravity with the same model when Antigravity is enabled (`gemini-pro`, `gemini-flash` and `gemini-flash-lite` exist there), or Antigravity's closest model when it has none of that name, on its sign-in; a step that would repeat an Antigravity step already in the chain is dropped. Without Antigravity enabled, the step is dropped and the chain's next step runs. A default agent of Gemini CLI becomes Antigravity if it is enabled, else the first enabled provider, else Claude Code. One Inbox notice, "Gemini CLI was removed", lists each route that moved. Nothing changes on a fresh install.
+
+**Antigravity needs its own Google sign-in.** It no longer runs on a Gemini API key, and a step that used its key is moved to its sign-in. Sign in once under Settings → Providers (or `make agy-login`). Saving a Gemini key enables no provider.
+
+**The Gemini API key stays for Aider.** It is now on the Aider card; nothing to re-enter.
+
+**Old Gemini runs.** They stay readable, but cannot be resumed or answered: Emberline says "Gemini CLI is no longer supported. Hand this run off to another agent." and the hand-off continues the work with another agent.
+
+**The installed Gemini CLI is removed once** from the runner's tools volume (`npm uninstall -g @google/gemini-cli`); a failure only logs. `~/.gemini` stays, as Antigravity's sign-in lives under it.
 
 ## [0.9.2] - 2026-11-15
 

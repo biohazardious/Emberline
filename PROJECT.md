@@ -7,7 +7,7 @@
 
 ## 1. Product Vision & Overview
 
-Emberline is a self-hosted platform that runs the official AI coding CLIs (Claude Code, Codex, Gemini CLI,
+Emberline is a self-hosted platform that runs the official AI coding CLIs (Claude Code, Codex,
 Antigravity, GitHub Copilot CLI, Aider) against a ticket board. It tracks work as tickets, gives each run its
 own git worktree, waits out subscription usage limits and resumes after the reset, and puts every change
 through per-file, per-line review before it merges. It is managed from any browser, including a phone.
@@ -137,7 +137,6 @@ packages/protocol        zod schemas + types (ptyd RPC, hooks, REST/WS API, work
 packages/adapter-sdk     ProviderAdapter contract, shared limit/reset helpers, CLI wrapper → nothing
 packages/adapter-claude  Claude Code (+ Antigravity, Copilot, Aider wrappers), personas   → protocol, adapter-sdk
 packages/adapter-codex   Codex CLI launch, limits from hook, rollout transcript, screen   → adapter-sdk
-packages/adapter-gemini  Gemini CLI launch, limits from hook and screen (per-model pools) → adapter-sdk
 packages/hook            emberline-hook + CLI wrappers + MCP server                       → protocol
 apps/ptyd                PTY host daemon                                                  → protocol
 apps/web                 React UI (browser: no Node built-ins)                            → protocol

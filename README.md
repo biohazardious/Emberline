@@ -1,11 +1,11 @@
 # Emberline
 
-**A self-hosted workbench for AI coding agents.** Emberline runs the real agent CLIs (Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot CLI, Aider) in persistent terminals on your own server, and puts a ticket board, a review workflow and a usage-aware scheduler around them.
+**A self-hosted workbench for AI coding agents.** Emberline runs the real agent CLIs (Claude Code, Codex, Antigravity, GitHub Copilot CLI, Aider) in persistent terminals on your own server, and puts a ticket board, a review workflow and a usage-aware scheduler around them.
 
 Think of it as an issue tracker, an editor and a git client in one browser tab, with agents doing the work and you reviewing it.
 
 > [!NOTE]
-> **Early preview (0.x).** Emberline is used daily by its author, but it is young: expect rough edges, and back up before upgrading. Claude Code is the agent tested most; Codex, Gemini CLI, Antigravity, GitHub Copilot CLI and Aider support is **experimental**.
+> **Early preview (0.x).** Emberline is used daily by its author, but it is young: expect rough edges, and back up before upgrading. Claude Code is the agent tested most; Codex, Antigravity, GitHub Copilot CLI and Aider support is **experimental**.
 
 > [!IMPORTANT]
 > **One installation = one user = that user's own subscriptions.**
@@ -65,7 +65,7 @@ make logs                # the first start prints a one-time setup token
 Open `http://127.0.0.1:7420`, enter the setup token and choose the admin password. Then:
 
 1. **Install the CLIs** you want from **Settings → Multi-Agent & Model Matrix**. They are installed into a persistent volume in the runner, so they survive image updates and can be updated from the same page.
-2. **Log in** to each provider once, with your own account: use the provider's **CLI OAuth Login (Terminal)** button on the same page, which opens a terminal in the runner, or run the CLI's login from a shell (`make claude-login`, `make codex-login`, `make gemini-login`, `make agy-login`, `make copilot-login` when built from source). Credentials stay in the runner's home volume. API keys, if you prefer them, can be set on the same page instead.
+2. **Log in** to each provider once, with your own account: use the provider's **CLI OAuth Login (Terminal)** button on the same page, which opens a terminal in the runner, or run the CLI's login from a shell (`make claude-login`, `make codex-login`, `make agy-login`, `make copilot-login` when built from source). Credentials stay in the runner's home volume. API keys, if you prefer them, can be set on the same page instead.
 3. **Create a project** (wizard, empty directory or `git clone`) and start a ticket.
 
 The running version is shown next to the logo.
@@ -251,7 +251,6 @@ Emberline runs each vendor's official CLI, signed in with your own account, and 
 
 - **Claude Code:** Anthropic allows running the unmodified Claude Code binary with your own Claude subscription, including on a platform that hosts it. Their plans are sized for ordinary individual use, so keep concurrency and automatic runs reasonable.
 - **Antigravity:** Google does not support using an Antigravity consumer login (Google AI Pro/Ultra) inside third-party tools and has suspended accounts for it. Settings asks you to accept that risk before Antigravity can be enabled, and Emberline never adds it to a fallback chain for you.
-- **Gemini CLI:** Google ended consumer Google logins in Gemini CLI on 2026-06-18. Use a Gemini API key or a Gemini Code Assist Standard/Enterprise account.
 - **Others:** check the current terms of each CLI you enable. An API key is always the safest route.
 
 Last checked 2026-10-16. Vendors change these terms without notice; Settings shows the current notes per provider.
@@ -279,7 +278,6 @@ Last checked 2026-10-16. Vendors change these terms without notice; Settings sho
 | `packages/adapter-sdk`    | Agent adapter interface                                                                     |
 | `packages/adapter-claude` | Claude Code adapter (hooks, settings, personas)                                             |
 | `packages/adapter-codex`  | Codex CLI adapter (launch, usage limits from output, rollout transcript and screen)         |
-| `packages/adapter-gemini` | Gemini CLI adapter (launch, usage limits from output and screen)                            |
 | `packages/hook`           | `emberline-hook` and CLI wrappers; forward agent events from the runner to core             |
 
 Design decisions and the reasons behind them are in [docs/DESIGN.md](docs/DESIGN.md).
