@@ -289,6 +289,21 @@ export function failureReason(error: unknown): string {
   return reason.length > REASON_CHARS ? `${reason.slice(0, REASON_CHARS - 1)}…` : reason;
 }
 
+/**
+ * Why a provider was not read: Emberline has no reader for its CLI, Emberline is shutting down, the
+ * runner is away, the provider is off or its CLI not installed (or being installed), or the CLI has
+ * no login to read with.
+ */
+export type SkipReason =
+  'no_reader' | 'stopped' | 'runner_away' | 'not_enabled' | 'installing' | 'not_installed' | 'not_signed_in';
+
+export interface RefreshResult {
+  reads: Partial<Record<AgentId, ProviderRead>>;
+  skipped: Partial<Record<AgentId, SkipReason>>;
+}
+
+type Outcome = { read: ProviderRead } | { skipped: SkipReason };
+
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 const settle = <T>(p: Promise<T>): Promise<Settled<T>> =>
   p.then(
@@ -306,7 +321,7 @@ export class ModelDiscovery {
   /** Every job waits for the one before it. */
   private chain: Promise<unknown> = Promise.resolve();
   /** Jobs queued and not started yet, per provider: asking again joins the queued one. */
-  private readonly queued = new Map<AgentId, Promise<ProviderRead | null>>();
+  private readonly queued = new Map<AgentId, Promise<Outcome>>();
   /** Stops the job running now (shutdown). */
   private stopCurrent: (() => void) | null = null;
   /** The running job: when it started (ISO, as ptyd stamps sessions) and the terminal it opened. */
@@ -379,12 +394,23 @@ export class ModelDiscovery {
 
   /**
    * Reads `agent`'s models, or every readable provider's, one job at a time. Resolves with the read
-   * of each provider that was read (skipped: not installed or enabled, no job, runner away).
+   * of each provider that was read (see {@link refreshDetailed} for why the others were not).
    */
   async refresh(agent?: AgentId): Promise<Partial<Record<AgentId, ProviderRead>>> {
+    return (await this.refreshDetailed(agent)).reads;
+  }
+
+  /** As {@link refresh}, also naming why each provider that was not read was skipped. */
+  async refreshDetailed(agent?: AgentId): Promise<RefreshResult> {
     const agents = agent ? [agent] : (Object.keys(this.jobs) as AgentId[]);
-    const reads = await Promise.all(agents.map((a) => this.enqueue(a)));
-    return Object.fromEntries(agents.flatMap((a, i) => (reads[i] ? [[a, reads[i]]] : [])));
+    const outcomes = await Promise.all(agents.map((a) => this.enqueue(a)));
+    const result: RefreshResult = { reads: {}, skipped: {} };
+    agents.forEach((a, i) => {
+      const outcome = outcomes[i]!;
+      if ('read' in outcome) result.reads[a] = outcome.read;
+      else result.skipped[a] = outcome.skipped;
+    });
+    return result;
   }
 
   /** The runner is connected and may start something. */
@@ -409,7 +435,7 @@ export class ModelDiscovery {
     void this.refresh().catch((err: unknown) => this.deps.log('model discovery failed', err));
   }
 
-  private enqueue(agent: AgentId): Promise<ProviderRead | null> {
+  private enqueue(agent: AgentId): Promise<Outcome> {
     const waiting = this.queued.get(agent);
     if (waiting) return waiting;
     const job = this.chain.then(() => {
@@ -421,21 +447,26 @@ export class ModelDiscovery {
     return job;
   }
 
-  private async runOne(agent: AgentId): Promise<ProviderRead | null> {
+  private async runOne(agent: AgentId): Promise<Outcome> {
     const job = this.jobs[agent];
+    if (!job) return { skipped: 'no_reader' };
+    if (this.stopped) return { skipped: 'stopped' };
     // A runner that is away or refuses to start anything is not a failed read.
-    if (!job || this.stopped || !this.runnerReady()) return null;
-    if (!getFactorySettings(this.deps.db).enabledProviders.includes(agent)) return null;
+    if (!this.runnerReady()) return { skipped: 'runner_away' };
+    if (!getFactorySettings(this.deps.db).enabledProviders.includes(agent)) return { skipped: 'not_enabled' };
     const tool = await this.deps.toolchain.getToolStatus(agent);
     // An install in progress triggers its own read when it is done.
-    if ((!tool.installed && !commandOverridden(agent)) || tool.installing) return null;
+    if (tool.installing) return { skipped: 'installing' };
+    if (!tool.installed && !commandOverridden(agent)) return { skipped: 'not_installed' };
     // `installed` is what the toolchain says when it cannot tell the version without running the CLI.
     const cliVersion = tool.version && tool.version !== 'installed' ? tool.version : null;
 
-    if (this.stopped) return null;
+    if (this.stopped) return { skipped: 'stopped' };
 
     const outcome = await this.runWithTimeout(agent, job);
-    if (outcome === 'shutdown' || (outcome.ok && outcome.value === null)) return null;
+    if (outcome === 'shutdown') return { skipped: 'stopped' };
+    // A job finds nothing to read only without a login to read with (Codex).
+    if (outcome.ok && outcome.value === null) return { skipped: 'not_signed_in' };
     const now = this.now();
     if (outcome.ok) {
       const { added } = mergeDiscovery(this.deps.db, agent, { ...outcome.value!, cliVersion }, now);
@@ -448,7 +479,7 @@ export class ModelDiscovery {
       this.deps.log(`could not read ${agent}'s models: ${reason}`);
     }
     publishCatalog(this.deps.db);
-    return readCatalog(this.deps.db)[agent].read;
+    return { read: readCatalog(this.deps.db)[agent].read! };
   }
 
   /**

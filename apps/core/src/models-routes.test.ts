@@ -69,10 +69,24 @@ describe('models routes', () => {
     expect(res.json<{ message: string }>().message).toBe('Only models you added can be removed');
   });
 
-  it('refresh answers with the reads (none when no runner is there to read from)', async () => {
+  it('refresh answers with the reads, and why each provider was not read', async () => {
     const res = await call('POST', '/api/models/refresh', {});
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ reads: {} });
+    // No runner is there to read from.
+    expect(res.json()).toEqual({
+      reads: {},
+      skipped: {
+        claude: 'runner_away',
+        antigravity: 'runner_away',
+        codex: 'runner_away',
+        copilot: 'runner_away',
+      },
+    });
+    // Emberline reads no list of Gemini CLI's or aider's.
+    expect((await call('POST', '/api/models/refresh', { agent: 'aider' })).json()).toEqual({
+      reads: {},
+      skipped: { aider: 'no_reader' },
+    });
   });
 
   it('tells the open events sockets when the catalog changes, so the browsers fetch it again', async () => {

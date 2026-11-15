@@ -166,6 +166,44 @@ describe('refresh', () => {
     vi.unstubAllEnvs();
   });
 
+  it('says why each provider it did not read was skipped', async () => {
+    enable(['claude', 'antigravity', 'codex', 'copilot']);
+    const toolchain = fakeToolchain(['claude', 'antigravity', 'codex']);
+    const status = toolchain.getToolStatus;
+    toolchain.getToolStatus = async (provider: AgentId) =>
+      ({ ...(await status(provider)), installing: provider === 'antigravity' }) as CliToolStatus;
+    const d = discovery({
+      toolchain,
+      jobs: {
+        claude: listed('opus'),
+        antigravity: listed('a-1'),
+        codex: async () => null,
+        copilot: listed('c-1'),
+        aider: listed('x'),
+      },
+    });
+    expect(await d.refreshDetailed()).toEqual({
+      reads: { claude: expect.objectContaining({ ok: true }) },
+      skipped: {
+        antigravity: 'installing',
+        codex: 'not_signed_in',
+        copilot: 'not_installed',
+        aider: 'not_enabled',
+      },
+    });
+    expect(await discovery({ jobs: {} }).refreshDetailed('gemini')).toEqual({
+      reads: {},
+      skipped: { gemini: 'no_reader' },
+    });
+    const away = new FakePtyd();
+    away.status = 'disconnected';
+    expect(
+      (await discovery({ ptyd: away, jobs: { claude: listed('opus') } }).refreshDetailed()).skipped,
+    ).toEqual({
+      claude: 'runner_away',
+    });
+  });
+
   it('joins a read of the same provider that is still queued', async () => {
     const calls: AgentId[] = [];
     const d = discovery({

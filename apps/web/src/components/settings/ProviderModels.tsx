@@ -3,11 +3,44 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LoaderCircle, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { api, errorMessage } from '../../api';
-import { invalidateModelCatalog, type StoredCatalog, useModelCatalog } from '../../modelCatalog';
+import {
+  invalidateModelCatalog,
+  type ProviderRead,
+  type StoredCatalog,
+  useModelCatalog,
+} from '../../modelCatalog';
 import { timeAgo } from '../../time';
 import { ico } from '../SectionState';
 
 const SOURCE_LABEL: Record<string, string> = { cli: 'CLI', picker: 'Model picker', manual: 'Added by you' };
+
+/** What `POST /api/models/refresh` answers: the reads made, and why the others were skipped. */
+type RefreshAnswer = {
+  reads: Partial<Record<AgentId, ProviderRead>>;
+  skipped?: Partial<Record<AgentId, string>>;
+};
+
+/** Why a provider's list was not read, as core names it. */
+const SKIPPED: Record<string, string> = {
+  no_reader: "Emberline does not read this CLI's model list; add its models by hand.",
+  runner_away: 'Not read: the runner is not connected.',
+  not_enabled: 'Not read: this provider is not enabled.',
+  not_installed: 'Not read: its CLI is not installed.',
+  installing: 'Not read yet: its CLI is being installed, and is read when that is done.',
+  not_signed_in: 'Not read: its CLI is not signed in.',
+  stopped: 'Not read: Emberline is shutting down.',
+};
+
+/** The line the card shows after Refresh models: read, failed, or why it was not read. */
+function refreshOutcome(agent: AgentId, answer: RefreshAnswer): { text: string; bad: boolean } {
+  const read = answer.reads[agent];
+  if (read)
+    return read.ok
+      ? { text: 'Read just now.', bad: false }
+      : { text: `The read failed: ${read.error ?? 'unknown error'}`, bad: true };
+  const why = answer.skipped?.[agent];
+  return { text: (why && SKIPPED[why]) || 'Not read.', bad: false };
+}
 
 /** One provider's models as stored: where each came from, when, and the last read of the CLI. */
 export function ProviderModels({ providerId }: { providerId: AgentId }) {
@@ -15,12 +48,15 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
   const query = useModelCatalog();
   const entry = query.data?.[providerId];
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [outcome, setOutcome] = useState<{ text: string; bad: boolean } | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
+    setOutcome(null);
     try {
       await work();
       await invalidateModelCatalog(client);
@@ -30,7 +66,17 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
       setBusy(false);
     }
   };
-  const refresh = () => run(() => api('/api/models/refresh', 'POST', { agent: providerId }));
+  // A read can take up to a minute (and waits for any read before it).
+  const refresh = () =>
+    run(async () => {
+      setRefreshing(true);
+      try {
+        const answer = await api<RefreshAnswer>('/api/models/refresh', 'POST', { agent: providerId });
+        setOutcome(refreshOutcome(providerId, answer));
+      } finally {
+        setRefreshing(false);
+      }
+    });
   const add = () =>
     run(async () => {
       const id = draft.trim();
@@ -115,7 +161,8 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
           onClick={() => void refresh()}
           title="Ask the CLI which models it offers now"
         >
-          {busy ? ico(LoaderCircle, true) : ico(RefreshCw)} Refresh models
+          {refreshing ? ico(LoaderCircle, true) : ico(RefreshCw)}{' '}
+          {refreshing ? 'Reading models…' : 'Refresh models'}
         </button>
         <input
           className="input mono"
@@ -140,6 +187,20 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
           Add a model id
         </button>
       </div>
+      {refreshing && (
+        <div className="small muted" style={small} role="status">
+          Asking the CLI for its models; this can take up to a minute.
+        </div>
+      )}
+      {outcome && (
+        <div
+          className={outcome.bad ? 'small' : 'small muted'}
+          style={{ ...small, ...(outcome.bad ? { color: 'var(--bad)' } : {}) }}
+          role="status"
+        >
+          {outcome.text}
+        </div>
+      )}
       {error && <div style={{ ...small, color: 'var(--bad)' }}>{error}</div>}
     </div>
   );

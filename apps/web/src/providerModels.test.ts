@@ -54,10 +54,13 @@ const empty = (): StoredCatalog =>
 
 let catalog: StoredCatalog;
 let posts: { path: string; body: unknown }[];
+/** What the next Refresh models answers; a promise to hold the request open. */
+let refreshAnswer: unknown;
 
 beforeEach(() => {
   setModelCatalog(null);
   posts = [];
+  refreshAnswer = { reads: {}, skipped: {} };
   catalog = empty();
   catalog.copilot = {
     models: [model('gpt-9-preview', { label: 'GPT 9 Preview' }), model('old-one', { missingSince: AT })],
@@ -68,7 +71,7 @@ beforeEach(() => {
       'GET /api/models': () => ({ catalog: structuredClone(catalog) }),
       'POST /api/models/refresh': (body) => {
         posts.push({ path: 'refresh', body });
-        return { reads: {} };
+        return refreshAnswer;
       },
       'POST /api/models/copilot/manual': (body) => {
         posts.push({ path: 'manual', body });
@@ -125,6 +128,40 @@ describe('a provider card lists its models', () => {
     await waitFor(() => expect(container.textContent).toContain('GPT 9 Preview'));
     await click(getButton('Refresh models', container));
     await waitFor(() => expect(posts).toEqual([{ path: 'refresh', body: { agent: 'copilot' } }]));
+  });
+
+  it('shows that a read is under way, then whether it was read, failed or skipped and why', async () => {
+    const { container } = await renderDom(createElement(Harness));
+    await waitFor(() => expect(container.textContent).toContain('GPT 9 Preview'));
+    let answer!: (value: unknown) => void;
+    refreshAnswer = new Promise((resolve) => (answer = resolve));
+    await click(getButton('Refresh models', container));
+    await waitFor(() => expect(container.textContent).toContain('Reading models…'));
+    expect(container.textContent).toContain('this can take up to a minute');
+    expect(getButton('Reading models…', container).disabled).toBe(true);
+    answer({ reads: {}, skipped: { copilot: 'not_installed' } });
+    await waitFor(() => expect(container.textContent).toContain('Not read: its CLI is not installed.'));
+    expect(container.textContent).not.toContain('Reading models…');
+
+    refreshAnswer = { reads: {}, skipped: { copilot: 'not_signed_in' } };
+    await click(getButton('Refresh models', container));
+    await waitFor(() => expect(container.textContent).toContain('Not read: its CLI is not signed in.'));
+
+    refreshAnswer = {
+      reads: { copilot: { at: AT, cliVersion: '1.2.3', ok: true, error: null } },
+      skipped: {},
+    };
+    await click(getButton('Refresh models', container));
+    await waitFor(() => expect(container.textContent).toContain('Read just now.'));
+
+    refreshAnswer = {
+      reads: { copilot: { at: AT, cliVersion: '1.2.3', ok: false, error: 'Copilot refused session/new' } },
+      skipped: {},
+    };
+    await click(getButton('Refresh models', container));
+    await waitFor(() =>
+      expect(container.textContent).toContain('The read failed: Copilot refused session/new'),
+    );
   });
 
   it('Add a model id posts the typed id, and the id shows up in a route picker', async () => {

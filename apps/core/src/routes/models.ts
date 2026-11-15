@@ -30,7 +30,7 @@ export function registerModelRoutes(app: FastifyInstance, db: Db, discovery: Mod
   app.post('/api/models/refresh', async (request) => {
     const parsed = RefreshRequest.safeParse(request.body ?? {});
     if (!parsed.success) throw badRequest('Unknown provider.');
-    return { reads: await discovery.refresh(parsed.data.agent) };
+    return discovery.refreshDetailed(parsed.data.agent);
   });
 
   app.post<{ Params: { agent: string } }>('/api/models/:agent/manual', async (request) => {
