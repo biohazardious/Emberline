@@ -4,18 +4,17 @@ import type { runs } from '../db/schema.js';
 type RunRow = typeof runs.$inferSelect;
 
 /** A model id as the catalog writes it (MODEL_ID_RE's characters), so dotted and slashed ids route too. */
-const TAG_MODEL = '[a-z0-9][a-z0-9._:/@-]*';
+const TAG_MODEL = '[A-Za-z0-9][A-Za-z0-9._:/@-]*';
 /** The routing tag roadmap/delegated tickets carry in their body (and pre-0.2.0 run prompts). */
 export const ROUTE_TAG = new RegExp(
   `\\[Preferred Agent:\\s*([a-z0-9_-]+)\\s*·\\s*Model:\\s*(${TAG_MODEL})\\]`,
   'i',
 );
 
+/** The agent and model a route tag names. Agent ids are lowercase; a model id keeps its case (ids are case-sensitive). */
 export function parseRouteTag(text: string): { agent: string; model: string } | undefined {
   const match = ROUTE_TAG.exec(text);
-  return match?.[1] && match[2]
-    ? { agent: match[1].toLowerCase(), model: match[2].toLowerCase() }
-    : undefined;
+  return match?.[1] && match[2] ? { agent: match[1].toLowerCase(), model: match[2] } : undefined;
 }
 
 /** The run's model; legacy rows keep it only in the prompt's route tag. */

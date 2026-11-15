@@ -19,6 +19,13 @@ describe('run routes', () => {
     expect(parseRouteTag('no tag')).toBeUndefined();
   });
 
+  it("keeps a hand-added model id's case and lowercases only the agent", () => {
+    expect(parseRouteTag('[Preferred Agent: Copilot · Model: Claude-Opus-4.5-Preview]')).toEqual({
+      agent: 'copilot',
+      model: 'Claude-Opus-4.5-Preview',
+    });
+  });
+
   it('reads a pre-0.2.0 row: model from the tag, a one-step chain', () => {
     expect(runModel(legacy)).toBe('argon');
     expect(runRoutes(legacy)).toEqual([{ agent: 'antigravity', model: 'argon', credential: 'login' }]);
