@@ -1234,7 +1234,12 @@ describe('an old Gemini CLI run', () => {
   it('is listed and shown as it ran', async () => {
     const run = await geminiRun();
     const list = (await api('GET', '/api/runs')).json() as Run[];
-    expect(list.find((r) => r.id === run.id)).toMatchObject({ agent: 'gemini', model: 'gemini-pro' });
+    // Not offered for a resume: the Dashboard's Resume button and the gates read this.
+    expect(list.find((r) => r.id === run.id)).toMatchObject({
+      agent: 'gemini',
+      model: 'gemini-pro',
+      resumable: false,
+    });
     expect((await api('GET', `/api/runs/${run.id}`)).statusCode).toBe(200);
   });
 
@@ -1252,6 +1257,23 @@ describe('an old Gemini CLI run', () => {
     }
     expect(spawn).not.toHaveBeenCalled();
     expect(await getRun(run.id)).toMatchObject({ agent: 'gemini', state: 'waiting_input' });
+  });
+
+  it('a stopped or handed-off one is told so, not told to hand it off', async () => {
+    const stopped = await geminiRun();
+    t.db.update(runsTable).set({ cancelledAt: new Date() }).where(eq(runsTable.id, stopped.id)).run();
+    const handedOff = await geminiRun();
+    t.db.update(runsTable).set({ handedOffTo: stopped.id }).where(eq(runsTable.id, handedOff.id)).run();
+    for (const url of ['resume', 'prompt']) {
+      const a = await api('POST', `/api/runs/${stopped.id}/${url}`, { text: 'carry on' });
+      expect(a.statusCode, url).toBe(409);
+      expect(a.json().message, url).toBe('this run was stopped; start a new run');
+      const b = await api('POST', `/api/runs/${handedOff.id}/${url}`, { text: 'carry on' });
+      expect(b.statusCode, url).toBe(409);
+      expect(b.json().message, url).toBe(
+        `this run was handed off to run ${stopped.id.slice(0, 8)}; continue that one`,
+      );
+    }
   });
 
   it('is never resumed by the scheduler, even when rate limited', async () => {

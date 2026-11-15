@@ -498,8 +498,10 @@ export const toRun = (row: RunRow): Run => ({
   stateChangedAt: row.stateChangedAt.toISOString(),
   createdAt: row.createdAt.toISOString(),
   endedAt: row.endedAt?.toISOString() ?? null,
-  // A handed-off run's work continues in its successor; resuming it is refused.
+  // A handed-off run's work continues in its successor; resuming it is refused, and so is resuming a
+  // run on an agent this core no longer has (Gemini CLI): only a hand-off carries its work on.
   resumable:
+    isKnownAgent(row.agent) &&
     row.endedAt !== null &&
     row.agentSessionId !== null &&
     row.cancelledAt === null &&
@@ -1364,10 +1366,11 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   async resume(id: string, text: string = CONTINUE_PROMPT): Promise<Run> {
     let row = this.row(id);
-    refuseRemovedAgent(row);
     if (row.cancelledAt) throw conflict('this run was stopped; start a new run');
     if (row.handedOffTo)
       throw conflict(`this run was handed off to run ${row.handedOffTo.slice(0, 8)}; continue that one`);
+    // After those two: a stopped or handed-off run cannot be handed off, so it is not told to.
+    refuseRemovedAgent(row);
     if (this.settingUp.has(id))
       throw conflict('the worktree is still being set up; the agent starts once setup is done');
     // A pending automatic retry is taken now (by the scheduler or the user's own resume).
@@ -2504,7 +2507,8 @@ export class RunService extends EventEmitter<RunServiceEvents> {
    */
   async prompt(id: string, text: string, opts: { automatic?: boolean } = {}): Promise<Run> {
     let row = this.row(id);
-    refuseRemovedAgent(row);
+    // Resume refuses it, and says first that it was stopped or handed off when it was.
+    if (!isKnownAgent(row.agent)) return this.resume(id, text);
     if (row.state === 'queued') throw conflict('the agent has not started yet; it is queued');
     // Also while it respawns for a resume: a second resume would start another agent.
     if (row.state === 'starting')

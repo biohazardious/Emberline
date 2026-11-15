@@ -11,6 +11,7 @@ import {
 import { X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link } from 'wouter';
+import { formatAgentDisplayName } from '../agentLabel';
 import { api, errorMessage } from '../api';
 import { modelAfterAgentChange } from '../runFormModel';
 import {
@@ -249,7 +250,7 @@ function RunRow({
               ? run.autoRetry
                 ? 'Retry now instead of waiting'
                 : 'Try now instead of waiting for the reset'
-              : `Continue this ${run.agent ?? 'agent'} session`
+              : `Continue this ${formatAgentDisplayName(run.agent)} session`
           }
         >
           Resume

@@ -65,6 +65,12 @@ describe('InboxPage', () => {
   it('shows no "Project" placeholder while the project list is not loaded', () => {
     expect(page([run('r1', 'p1')], null)).not.toContain('>Project<');
   });
+  it('names agents as people read them, an old Gemini CLI run as removed', () => {
+    const html = page([run('r1', 'p1'), { ...run('r2', 'p1'), agent: 'gemini' }], null);
+    expect(html).toContain('>Claude</span>');
+    expect(html).toContain('>Gemini CLI (removed)</span>');
+    expect(html).not.toContain('>gemini</span>');
+  });
   it('offers an Answer button, not an inline reply box, for a question', () => {
     const html = page([run('r1', 'p1')], null);
     expect(html).toContain('>Answer</button>');

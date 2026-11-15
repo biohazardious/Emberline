@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Check, EyeOff, Hourglass, Maximize2, Package, RotateCw, Trash, X } from 'lucide-react';
 import { type FormEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
+import { formatAgentDisplayName } from '../agentLabel';
 import { api, errorMessage } from '../api';
 import { isRunCompleted } from '../attention';
 import { outputsBadge } from '../buildOutputs';
@@ -303,7 +304,7 @@ export function FleetPane({
                 )}
               </span>
               <span className="muted small mono">
-                Provider: <strong>{run.agent}</strong>
+                Provider: <strong>{formatAgentDisplayName(run.agent)}</strong>
               </span>
               {run.endedAt && <span className="muted small mono">Ended {timeAgo(run.endedAt)}</span>}
             </div>

@@ -1,6 +1,7 @@
 import { type Project, type Run, type Ticket } from '@emberline/protocol';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import { formatAgentDisplayName } from '../agentLabel';
 import { answerOffered, answerTarget, refreshAfterAnswer } from '../answerDialog';
 import {
   ATTENTION_LABELS,
@@ -86,7 +87,7 @@ function InboxItem({
         {heading.key && <span className="mono">{heading.key}</span>} {heading.title}
       </h3>
       <div className="inbox-meta muted small">
-        <span className="mono">{run.agent}</span>
+        <span className="mono">{formatAgentDisplayName(run.agent)}</span>
         <PersonaBadge persona={run.persona} />
       </div>
       {detail && (
