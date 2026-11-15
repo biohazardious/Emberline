@@ -2,7 +2,13 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { coerceModelForProvider, selectProviderModelByRank } from '@emberline/protocol';
+import {
+  coerceModelForProvider,
+  getModelsForProvider,
+  type ProviderModelInfo,
+  selectProviderModelByRank,
+  setModelCatalog,
+} from '@emberline/protocol';
 import { RUNNER_BIN } from './command-exec.js';
 import { settings } from './db/schema.js';
 import {
@@ -21,6 +27,7 @@ beforeEach(async () => {
   t = await createTestApp();
 });
 afterEach(async () => {
+  setModelCatalog(null);
   await t.close();
 });
 
@@ -443,5 +450,44 @@ describe('the provider Login terminal', () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0]!.file).toBe(RUNNER_BIN.bash);
     expect(spawned[0]!.args[1]).toMatch(new RegExp(`exec ${RUNNER_BIN.bash} -i$`));
+  });
+});
+
+describe('a route model the agent lacks, over HTTP', () => {
+  const route = (model: string) => ({ coder: [{ agent: 'claude', model, credential: 'login' }] });
+
+  it('is refused with the models the agent knows, and accepted once the catalog has it', async () => {
+    const cookie = await setupAndLogin(t.app);
+    const patch = (model: string) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: '/api/factory/settings',
+        payload: { personaRoutes: route(model) },
+        headers: authHeaders(cookie),
+      });
+    const ids = getModelsForProvider('claude')
+      .map((m) => m.id)
+      .join(', ');
+    const refused = await patch('gemini-4-carbon-high');
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().message).toBe(
+      `gemini-4-carbon-high is not a Claude model Emberline knows. Add it in Settings → Providers, or pick one of: ${ids}.`,
+    );
+
+    const added: ProviderModelInfo = {
+      id: 'gemini-4-carbon-high',
+      label: 'Carbon',
+      shortLabel: 'carbon',
+      rank: 4,
+      tier: 'high',
+      badge: '',
+      capabilities: ['code'],
+      description: '',
+      source: 'manual',
+    };
+    setModelCatalog({ claude: [added] } as never);
+    const accepted = await patch('gemini-4-carbon-high');
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().personaRoutes.coder[0].model).toBe('gemini-4-carbon-high');
   });
 });

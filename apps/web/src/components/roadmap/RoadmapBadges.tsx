@@ -22,22 +22,6 @@ export const AGENT_LABELS: Record<AgentId, string> = {
   aider: 'Aider CLI',
 };
 
-export const MODEL_LABELS: Record<AgentModelId, string> = {
-  auto: 'Auto (Match Persona Rank)',
-  fable: 'Claude Fable (★5 Frontier)',
-  opus: 'Claude Opus (★4 Flagship)',
-  sonnet: 'Claude Sonnet (★3 Balanced)',
-  haiku: 'Claude Haiku (★2 Fast)',
-  argon: 'Antigravity Argon (★5 Frontier)',
-  'gemini-pro': 'Gemini Pro (★5 / ★4 High)',
-  'gemini-flash': 'Gemini Flash (★3 Balanced)',
-  'gemini-flash-lite': 'Gemini Flash-Lite (★1 Fast)',
-  o3: 'OpenAI o3 (★5 Frontier)',
-  'gpt-4o': 'GPT-4o / 4.1 (★4 Flagship)',
-  'o4-mini': 'OpenAI o4-mini (★3 Balanced)',
-  'gpt-4o-mini': 'GPT-4o Mini (★2 Fast)',
-};
-
 export const ROADMAP_STATUS_LABEL: Record<RoadmapItemStatus, string> = {
   idea: 'Idea',
   planned: 'To do',

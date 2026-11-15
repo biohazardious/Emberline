@@ -17,6 +17,7 @@ import {
   type FactoryRequestBody,
   FactoryRequestBody as FactoryRequestBodySchema,
   type FactoryRequestResponse,
+  coerceModelForProvider,
   type FactorySettings,
   type ForgeIssue,
   type ForgeProvider,
@@ -1135,7 +1136,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
       let body = draft.body ?? '';
       if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
         const agentStr = draft.preferredAgent ?? 'claude';
-        const modelStr = draft.preferredModel ?? 'auto';
+        const modelStr = draft.preferredModel
+          ? coerceModelForProvider(agentStr, draft.preferredModel, draft.persona)
+          : 'auto';
         body = `${body}\n\n[Preferred Agent: ${agentStr} · Model: ${modelStr}]`.trim();
       }
       created.push({
@@ -1477,7 +1480,9 @@ export class TicketService extends EventEmitter<TicketServiceEvents> {
           let body = draft.body ?? '';
           if ((draft.preferredAgent || draft.preferredModel) && !body.includes('[Preferred Agent:')) {
             const agentStr = draft.preferredAgent ?? 'claude';
-            const modelStr = draft.preferredModel ?? 'auto';
+            const modelStr = draft.preferredModel
+              ? coerceModelForProvider(agentStr, draft.preferredModel, draft.persona)
+              : 'auto';
             const routeTag = `[Preferred Agent: ${agentStr} · Model: ${modelStr}]`;
             // Keep the tag inside the body limit even for drafts that already use all of it.
             body = `${body.slice(0, TICKET_BODY_MAX - routeTag.length - 2)}\n\n${routeTag}`.trim();

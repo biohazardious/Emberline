@@ -19,12 +19,7 @@ import {
   type RoadmapFilter,
 } from '../roadmapFilter';
 
-export {
-  AGENT_LABELS,
-  AgentModelBadge,
-  MODEL_LABELS,
-  RouteBadgeSelect,
-} from '../components/roadmap/RoadmapBadges';
+export { AGENT_LABELS, AgentModelBadge, RouteBadgeSelect } from '../components/roadmap/RoadmapBadges';
 
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();

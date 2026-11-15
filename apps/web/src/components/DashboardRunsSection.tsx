@@ -1,9 +1,18 @@
-import type { AgentId, AgentModelId, AgentPersona, PermissionMode, Project, Run } from '@emberline/protocol';
+import {
+  type AgentId,
+  type AgentModelId,
+  type AgentPersona,
+  getModelsForProvider,
+  modelLabel,
+  type PermissionMode,
+  type Project,
+  resolveCliModel,
+  type Run,
+} from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { MODEL_LABELS } from '../pages/RoadmapPage';
 import {
   countDashboardRunCategories,
   DASHBOARD_CATEGORY_LABELS,
@@ -355,7 +364,13 @@ export function StartRunForm({
               className={agent === a ? 'active' : ''}
               onClick={() => {
                 setAgent(a);
-                if (a === 'antigravity' && model === 'auto') setModel('argon');
+                // Antigravity cannot run `auto`: start on its best model the CLI still offers.
+                if (a === 'antigravity' && model === 'auto') {
+                  const usable = getModelsForProvider(a).find((m) => resolveCliModel(a, m.id) !== null);
+                  if (usable) setModel(usable.id);
+                } else if (model !== 'auto' && !getModelsForProvider(a).some((m) => m.id === model)) {
+                  setModel('auto');
+                }
               }}
             >
               {a === 'claude'
@@ -377,9 +392,10 @@ export function StartRunForm({
           onChange={(e) => setModel(e.target.value as AgentModelId)}
           title="Model Tier (Fable / Opus / Sonnet / Argon / Auto)"
         >
-          {(Object.keys(MODEL_LABELS) as AgentModelId[]).map((m) => (
-            <option key={m} value={m}>
-              {MODEL_LABELS[m]}
+          <option value="auto">Auto (Match Persona Rank)</option>
+          {getModelsForProvider(agent).map((m) => (
+            <option key={m.id} value={m.id}>
+              {modelLabel(agent, m.id)}
             </option>
           ))}
         </select>

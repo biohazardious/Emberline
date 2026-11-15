@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  type AgentId,
+  AgentId,
   type AgentModelId,
   type AgentPersona,
   type AutoGenerateRoadmapBody,
@@ -28,6 +28,7 @@ import {
   type UpdateRoadmapItemBody,
 } from '@emberline/protocol';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { ROUTE_TAG } from '../runs/route.js';
 import { keepRejected, parseAgentFile } from './agent-files.js';
 import type { TicketService } from '../tickets/service.js';
 import { listWorkspaceFilesFlat, readProjectBlueprint } from './service.js';
@@ -1126,9 +1127,8 @@ async function readOrInitRoadmapFile(
     const ms = stored.milestones[msIdx] ?? stored.milestones[0];
     if (!ms) continue;
     const routing = defaultRoutingForPersona(t.persona, fSettings);
-    const routeTagMatch = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i.exec(
-      t.body ?? '',
-    );
+    const routeTagMatch = ROUTE_TAG.exec(t.body ?? '');
+    const taggedAgent = AgentId.safeParse(routeTagMatch?.[1]?.toLowerCase()).data;
     ms.items.push({
       id: `item-${t.id.slice(0, 8)}`,
       milestoneId: ms.id,
@@ -1136,8 +1136,13 @@ async function readOrInitRoadmapFile(
       description: t.body || t.title,
       category: categoryForPersona(t.persona),
       persona: t.persona,
-      preferredAgent: (routeTagMatch?.[1] as AgentId | undefined) ?? routing.preferredAgent,
-      preferredModel: (routeTagMatch?.[2] as AgentModelId | undefined) ?? routing.preferredModel,
+      preferredAgent: taggedAgent ?? routing.preferredAgent,
+      // A tag naming a model the agent lacks is coerced, like every other agent-written route.
+      preferredModel: coerceModelForProvider(
+        taggedAgent ?? routing.preferredAgent,
+        routeTagMatch?.[2] ?? routing.preferredModel,
+        t.persona,
+      ),
       priority: t.priority,
       status:
         t.status === 'done'
@@ -1513,9 +1518,7 @@ async function updateRoadmapItemUnlocked(
   ) {
     try {
       const existingTicket = ticketService.get(found.ticketId);
-      const cleanBody = existingTicket.body
-        .replace(/\n*\[Preferred Agent:\s*[a-z0-9_-]+\s*·\s*Model:\s*[a-z0-9_-]+\]/gi, '')
-        .trim();
+      const cleanBody = existingTicket.body.replace(new RegExp(`\\n*${ROUTE_TAG.source}`, 'gi'), '').trim();
       const updatedBody =
         `${cleanBody}\n\n[Preferred Agent: ${found.preferredAgent} · Model: ${found.preferredModel}]`.trim();
       ticketService.update(found.ticketId, {

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Run, RunDetail, Ticket } from '@emberline/protocol';
+import { coerceModelForProvider, type Run, type RunDetail, type Ticket } from '@emberline/protocol';
 import { PtydServer } from '@emberline/ptyd/server';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -191,6 +191,41 @@ describe('tickets', () => {
     );
     expect(huge?.body.length).toBeLessThanOrEqual(20_000);
     expect(huge?.body).toContain('[Preferred Agent: codex');
+  });
+
+  it('ingests a draft whose model the agent lacks with the persona model for that agent', async () => {
+    const project = await createProject();
+    const ticket = await createTicket(project.id, { title: 'Plan the work', status: 'ready' });
+    const { run } = (await api('POST', `/api/tickets/${ticket.id}/start`, {})).json() as { run: Run };
+    mkdirSync(path.join(run.worktreePath, '.emberline'), { recursive: true });
+    writeFileSync(
+      path.join(run.worktreePath, '.emberline', 'new-tickets.json'),
+      JSON.stringify({
+        autoDispatch: false,
+        tickets: [
+          {
+            title: 'Odd model',
+            persona: 'coder',
+            preferredAgent: 'antigravity',
+            preferredModel: 'gemini-9-unknown',
+          },
+        ],
+      }),
+    );
+    const token = await waitFile(`token-${run.id}`);
+    await hook(run.id, 'SessionStart', token, { session_id: 's-odd-model' });
+    await hook(run.id, 'UserPromptSubmit', token);
+    await hook(run.id, 'Stop', token);
+
+    const expected = coerceModelForProvider('antigravity', 'gemini-9-unknown', 'coder');
+    await expect
+      .poll(
+        async () =>
+          ((await api('GET', `/api/projects/${project.id}/tickets`)).json() as Ticket[]).find(
+            (x) => x.title === 'Odd model',
+          )?.body,
+      )
+      .toContain(`[Preferred Agent: antigravity · Model: ${expected}]`);
   });
 
   it('limits agent ticket generations to maxTicketDepth (S16)', async () => {

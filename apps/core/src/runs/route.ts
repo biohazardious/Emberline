@@ -3,8 +3,13 @@ import type { runs } from '../db/schema.js';
 
 type RunRow = typeof runs.$inferSelect;
 
+/** A model id as the catalog writes it (MODEL_ID_RE's characters), so dotted and slashed ids route too. */
+const TAG_MODEL = '[a-z0-9][a-z0-9._:/@-]*';
 /** The routing tag roadmap/delegated tickets carry in their body (and pre-0.2.0 run prompts). */
-export const ROUTE_TAG = /\[Preferred Agent:\s*([a-z0-9_-]+)\s*·\s*Model:\s*([a-z0-9_-]+)\]/i;
+export const ROUTE_TAG = new RegExp(
+  `\\[Preferred Agent:\\s*([a-z0-9_-]+)\\s*·\\s*Model:\\s*(${TAG_MODEL})\\]`,
+  'i',
+);
 
 export function parseRouteTag(text: string): { agent: string; model: string } | undefined {
   const match = ROUTE_TAG.exec(text);

@@ -12,9 +12,12 @@ import {
   DEFAULT_MCP_SERVERS,
   DEFAULT_SKILL_PLUGINS,
   FactorySettings,
+  getModelsForProvider,
+  isModelValidForProvider,
   MAX_ROUTES,
   type McpServerEntry,
   PROJECT_GATE_KEYS,
+  PROVIDER_REGISTRY,
   PROVIDER_RUNTIME,
   type ProjectGateOverrides,
   type QuotaPolicy,
@@ -514,8 +517,26 @@ export function effectiveFactorySettings(db: Db, projectId: string): FactorySett
   return { ...getFactorySettings(db), ...readProjectGates(db, projectId) };
 }
 
+/** A saved route names a model its agent's catalog has (built-in, discovered or added by hand), else it is refused. */
+function refuseUnknownRouteModels(routes: UpdateFactorySettingsBody['personaRoutes']): void {
+  for (const chain of Object.values(routes ?? {})) {
+    for (const step of chain ?? []) {
+      if (step.model === 'auto' || isModelValidForProvider(step.agent, step.model)) continue;
+      const ids = getModelsForProvider(step.agent)
+        .map((m) => m.id)
+        .join(', ');
+      throw new HttpError(
+        400,
+        'unknown_model',
+        `${step.model} is not a ${PROVIDER_REGISTRY[step.agent].shortLabel} model Emberline knows. Add it in Settings → Providers, or pick one of: ${ids}.`,
+      );
+    }
+  }
+}
+
 export function updateFactorySettings(db: Db, input: UpdateFactorySettingsBody): FactorySettings {
   const body = UpdateFactorySettingsBody.parse(input);
+  refuseUnknownRouteModels(body.personaRoutes);
   const current = getFactorySettings(db);
 
   const enabledSet = new Set<AgentId>(body.enabledProviders ?? current.enabledProviders ?? ['claude']);
@@ -628,7 +649,7 @@ export function resolveRunRoutes(
   if (tagged.success) {
     // `Model: auto` (or no model) never reaches the CLI: a same-agent chain step's model, else
     // the persona's model mapped onto the tagged agent.
-    const explicitModel = preferredModel ?? (preferred?.model as AgentModelId | undefined);
+    const explicitModel = preferredModel;
     const sameAgent = chain.find((r) => r.agent === tagged.data && r.model !== 'auto');
     const personaModel =
       chain[0] && chain[0].model !== 'auto' ? chain[0].model : DEFAULT_PERSONA_MODELS[persona];
@@ -636,7 +657,7 @@ export function resolveRunRoutes(
       agent: tagged.data,
       model:
         explicitModel && explicitModel !== 'auto'
-          ? explicitModel
+          ? coerceModelForProvider(tagged.data, explicitModel, persona)
           : (sameAgent?.model ?? coerceModelForProvider(tagged.data, personaModel, persona)),
       credential:
         chain.find((r) => r.agent === tagged.data)?.credential ?? defaultCredential(tagged.data, keys),
