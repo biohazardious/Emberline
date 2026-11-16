@@ -55,7 +55,7 @@ export function ReviewArtifactsPane({
                 <span className="review-file-path mono" title={art.path}>
                   {art.path}
                 </span>
-                <span className="muted mono review-tabular" style={{ fontSize: '0.68rem' }}>
+                <span className="muted mono review-tabular" style={{ fontSize: '0.8rem' }}>
                   {formatBytes(art.sizeBytes)}
                 </span>
               </div>
