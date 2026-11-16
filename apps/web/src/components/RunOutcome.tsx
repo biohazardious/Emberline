@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { formatBytes } from '../buildOutputs';
 import { copyText } from '../clipboard';
-import { CopyFallback } from './CopyFallback';
 import { timeAgo } from '../time';
+import { CopyFallback } from './CopyFallback';
+import { Disclosure } from './ui/Disclosure';
+import './runInspector/run-inspector.css';
 
 /** Text longer than this (or with more lines) starts collapsed. */
 const COLLAPSE_CHARS = 420;
@@ -33,25 +35,23 @@ export function ExpandableText({
   );
 }
 
-/** The agent's last answer, in full. */
+/** The agent's outcome summary / last answer. */
 export function FinalAnswer({ text }: { text: string }) {
   return (
-    <section className="run-outcome" aria-label="Final answer">
-      <span className="eyebrow">Final answer</span>
+    <section className="run-outcome" aria-label="Outcome">
+      <span className="eyebrow">Outcome</span>
       <ExpandableText text={text} className="run-outcome-text" />
     </section>
   );
 }
 
-/** The terminal's last screen, kept after its session closed. */
+/** The terminal's last screen, kept behind a disclosure after its session closed. */
 export function LastScreen({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
   return (
     <section className="run-outcome" aria-label="Last terminal screen">
-      <button type="button" className="link-btn" onClick={() => setOpen((v) => !v)}>
-        <span className="eyebrow">{open ? '▾' : '▸'} Last terminal screen</span>
-      </button>
-      {open && <pre className="run-outcome-screen mono">{text}</pre>}
+      <Disclosure label="Last terminal screen">
+        <pre className="run-outcome-screen mono">{text}</pre>
+      </Disclosure>
     </section>
   );
 }
@@ -87,19 +87,17 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
           <li key={o.path} className="build-output">
             <div className="build-output-main">
               <strong className="mono">{o.name}</strong>
-              <span className="muted small">
+              <span className="muted build-output-meta">
                 {formatBytes(o.sizeBytes)} · {timeAgo(o.mtime)}
                 {!o.tracked && ' · not in git (stays in this run’s worktree)'}
               </span>
-              <code className="build-output-path mono" title={fullPath(o)}>
-                {fullPath(o)}
-              </code>
+              <code className="build-output-path mono">{fullPath(o)}</code>
             </div>
             <div className="build-output-actions">
               <button
                 type="button"
                 className="icon-btn"
-                title="Copy the full path"
+                aria-label={`Copy path for ${o.name}`}
                 onClick={() =>
                   void copyText(fullPath(o)).then((ok) => setManualCopy(ok ? null : fullPath(o)))
                 }
@@ -108,7 +106,7 @@ export function BuildOutputsList({ runId, refreshKey }: { runId: string; refresh
               </button>
               <a
                 className="icon-btn"
-                title="Download"
+                aria-label={`Download ${o.name}`}
                 href={`/api/runs/${runId}/build-outputs/download?path=${encodeURIComponent(o.path)}`}
                 download={o.name}
               >

@@ -1,329 +1,42 @@
-import type { Run, RunDetail, RunEvent } from '@emberline/protocol';
-import { completionEventText } from '../completionSignal';
-import { Globe, KeyRound, Maximize2, TriangleAlert, X } from 'lucide-react';
+import type { Run } from '@emberline/protocol';
+import { Globe, Maximize2, Square, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import { AGENT_REMOVED_TEXT } from '../holdRecovery';
-import { timeAgo } from '../time';
-import { EVENT_LABEL } from '../runEventLabels';
+import { HANDOFF_STATES } from '../handoffCandidates';
 import { HoldRecovery, useHoldAnswer } from './HoldRecovery';
 import { HandoffMenu } from './QuotaLanes';
-import {
-  BuildOutputsList,
-  ConflictEventDetail,
-  conflictEventInfo,
-  ExpandableText,
-  FinalAnswer,
-  LastScreen,
-} from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
-import { formatAgentDisplayName } from '../agentLabel';
+import { RunEventTimeline } from './runInspector/RunEventTimeline';
+import { RunFailureBanner } from './runInspector/RunFailureBanner';
+import {
+  extractFailureDetails,
+  failureFetchNeeded,
+  formatAgentDisplayName,
+  formatAgentResumePlaceholder,
+  handoffTarget,
+  payloadSummary,
+  STAGE_TEMPLATES,
+  type StageTemplate,
+} from './runInspector/runInspectorMeta';
+import { Disclosure } from './ui/Disclosure';
+import { MoreMenu, type MoreMenuItem } from './ui/MoreMenu';
+import './runInspector/run-inspector.css';
 
 const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
 
-export interface StageTemplate {
-  id: string;
-  label: string;
-  hint: string;
-  prompt: string;
-}
-
-/** Pipeline stage prompt templates inspired by herdr-board & Omnigent critic flows. */
-export const STAGE_TEMPLATES: StageTemplate[] = [
-  {
-    id: 'plan',
-    label: 'Plan & Scope',
-    hint: 'Ask the agent to inspect the codebase and propose a plan first',
-    prompt:
-      'Analyze the task and relevant files first. Propose a concise step-by-step implementation plan and list the files to touch before making code changes.',
-  },
-  {
-    id: 'implement',
-    label: 'Implement',
-    hint: 'Execute the planned changes cleanly',
-    prompt:
-      'Proceed with the implementation. Follow existing codebase conventions, keep edits minimal and focused, and verify compilation.',
-  },
-  {
-    id: 'verify',
-    label: 'Verify & Test',
-    hint: 'Run tests, typecheck, and fix any failures',
-    prompt: 'Run the relevant tests, typecheck, and linter. Fix any failures or regressions you uncover.',
-  },
-  {
-    id: 'review',
-    label: 'Self-Review',
-    hint: 'Critic pass over git diff before accepting',
-    prompt:
-      'Review your git diff critically for edge cases, security issues, or unintended changes. Fix anything questionable and summarize what was done.',
-  },
-];
-
-export { formatAgentDisplayName };
-
-export function formatAgentResumePlaceholder(agent?: string | null): string {
-  switch (agent) {
-    case 'antigravity':
-      return 'Continue the ended session (agy --continue)…';
-    case 'gemini':
-      return AGENT_REMOVED_TEXT;
-    case 'codex':
-      return 'Continue the ended session (codex)…';
-    case 'copilot':
-      return 'Continue the ended session (copilot)…';
-    case 'aider':
-      return 'Continue the ended session (aider)…';
-    default:
-      return 'Continue the ended session (claude --resume)…';
-  }
-}
-
-/** The tool and the one line shown under a run event. */
-export function payloadSummary(payload: unknown): { tool?: string; detail?: string } {
-  if (!payload || typeof payload !== 'object') return {};
-  const rec = payload as Record<string, unknown>;
-  const tool = typeof rec.tool_name === 'string' ? rec.tool_name : undefined;
-  const exitPrefix =
-    typeof rec.exitCode === 'number' && rec.exitCode !== 0 ? `Exit code ${rec.exitCode}` : undefined;
-  const msg =
-    (typeof rec.tool_input_summary === 'string' && rec.tool_input_summary) ||
-    (typeof rec.message === 'string' && rec.message) ||
-    (typeof rec.error_details === 'string' && rec.error_details) ||
-    (typeof rec.last_assistant_message === 'string' && rec.last_assistant_message) ||
-    (typeof rec.reason === 'string' && rec.reason) ||
-    (typeof rec.error === 'string' && rec.error) ||
-    // A merge's outcome (why it failed).
-    (typeof rec.summary === 'string' && rec.summary) ||
-    undefined;
-  const detail = exitPrefix && msg ? `${exitPrefix}: ${msg}` : msg || exitPrefix;
-  return { tool, detail };
-}
-
-export function extractFailureDetails(
-  events: RunEvent[],
-  agent?: string | null,
-): {
-  reason: string;
-  exitCode?: number;
-  needsAuth: boolean;
-} {
-  let reason = '';
-  let exitCode: number | undefined;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i];
-    if (!ev || !ev.payload || typeof ev.payload !== 'object') continue;
-    const rec = ev.payload as Record<string, unknown>;
-    if (typeof rec.exitCode === 'number' && exitCode === undefined) {
-      exitCode = rec.exitCode;
-    }
-    if (!reason) {
-      const candidate =
-        (typeof rec.message === 'string' && rec.message) ||
-        (typeof rec.error_details === 'string' && rec.error_details) ||
-        (typeof rec.reason === 'string' && rec.reason) ||
-        (typeof rec.error === 'string' && rec.error !== 'cli_exit' ? rec.error : '');
-      if (candidate) {
-        reason = candidate;
-      }
-    }
-  }
-  const lower = reason.toLowerCase();
-  const needsAuth =
-    exitCode === 41 ||
-    lower.includes('api_key') ||
-    lower.includes('api key') ||
-    lower.includes('not authenticated') ||
-    lower.includes('authentication') ||
-    lower.includes('login') ||
-    lower.includes('oauth') ||
-    lower.includes('credentials');
-
-  if (!reason || reason === `${agent ?? 'Agent'} exited with non-zero code`) {
-    if (exitCode === 41) {
-      reason = `${formatAgentDisplayName(agent)} exited with code 41 (Authentication / API Key required). Open Factory Settings to sign in via Console Login or save your API key.`;
-    } else if (exitCode !== undefined) {
-      reason = `${formatAgentDisplayName(agent)} process exited unexpectedly with exit code ${exitCode}.`;
-    } else {
-      reason = `${formatAgentDisplayName(agent)} execution failed.`;
-    }
-  }
-  return { reason, exitCode, needsAuth };
-}
-
-/**
- * Whether the run shows a failure, so its events are fetched for the reason. A stop is `failed` +
- * `cancelled`: the pill already says "cancelled", and nothing exited unexpectedly.
- */
-export function failureFetchNeeded(run: Pick<Run, 'state' | 'cancelled'>): boolean {
-  return run.state === 'failed' && !run.cancelled;
-}
-
-export function RunFailureBanner({ run }: { run: Run }) {
-  const [detail, setDetail] = useState<RunDetail>();
-  const fetchNeeded = failureFetchNeeded(run);
-
-  useEffect(() => {
-    if (!fetchNeeded) return;
-    let cancelled = false;
-    void api<RunDetail>(`/api/runs/${run.id}`)
-      .then((res) => {
-        if (!cancelled) setDetail(res);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [run.id, fetchNeeded, run.stateChangedAt]);
-
-  if (!fetchNeeded) return null;
-
-  const { reason, exitCode, needsAuth } = extractFailureDetails(detail?.events ?? [], run.agent);
-
-  return (
-    <div
-      className="run-failure-banner"
-      role="alert"
-      style={{
-        background: 'color-mix(in srgb, var(--bad) 10%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--bad) 35%, transparent)',
-        borderRadius: '8px',
-        padding: '10px 12px',
-        marginBottom: '10px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '8px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <strong style={{ color: 'var(--bad)', fontSize: '0.85rem' }}>
-          <TriangleAlert className="icon" aria-hidden /> {formatAgentDisplayName(run.agent)} Run Failed
-          {exitCode !== undefined ? ` (exit code ${exitCode})` : ''}
-        </strong>
-        {needsAuth && (
-          <Link href="/settings" className="btn btn-sm btn-primary" style={{ textDecoration: 'none' }}>
-            <KeyRound className="icon" aria-hidden /> Configure Auth & Keys →
-          </Link>
-        )}
-      </div>
-      <pre
-        className="mono"
-        style={{
-          margin: 0,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontSize: '0.78rem',
-          color: 'var(--bad)',
-          background: 'var(--surface-2)',
-          padding: '6px 8px',
-          borderRadius: '6px',
-          maxHeight: '120px',
-          overflowY: 'auto',
-        }}
-      >
-        {reason}
-      </pre>
-    </div>
-  );
-}
-
-/** The other run of a handoff or conflict resolver escalation (`handed_off`, `handoff_from`, `conflict_resolver_started`). */
-export function handoffTarget(ev: RunEvent): string | undefined {
-  const payload = ev.payload as { toRunId?: unknown; fromRunId?: unknown; runId?: unknown } | null;
-  const id =
-    ev.type === 'handed_off'
-      ? payload?.toRunId
-      : ev.type === 'handoff_from'
-        ? payload?.fromRunId
-        : ev.type === 'conflict_resolver_started'
-          ? payload?.runId
-          : undefined;
-  return typeof id === 'string' && id.trim() ? id.trim() : undefined;
-}
-
-/** The text after the label of a `dependency_dropped` event: "<ticket> → <ref> (<reason>)". */
-function droppedDependencyText(payload: unknown): string | undefined {
-  const rec = (payload ?? {}) as Record<string, unknown>;
-  if (typeof rec.ticket !== 'string' || typeof rec.ref !== 'string') return undefined;
-  const reason = typeof rec.reason === 'string' ? ` (${rec.reason.replace(/_/g, ' ')})` : '';
-  return `${rec.ticket} → ${rec.ref}${reason}`;
-}
-
-export function RunEventTimeline({ run }: { run: Run }) {
-  const [detail, setDetail] = useState<RunDetail>();
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    void api<RunDetail>(`/api/runs/${run.id}`)
-      .then((res) => {
-        if (!cancelled) setDetail(res);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [run.id, run.state, run.stateChangedAt, run.lastEvent]);
-
-  // The saved last screen is shown on its own above the timeline, not as an entry in it.
-  const events: RunEvent[] = (detail?.events ?? []).filter((e) => e.type !== 'last_screen');
-
-  if (loading && events.length === 0) {
-    return <p className="muted small">Loading activity timeline…</p>;
-  }
-
-  if (events.length === 0) {
-    return <p className="muted small">No events recorded yet.</p>;
-  }
-
-  return (
-    <>
-      {detail?.finalMessage && (run.state === 'done' || run.state === 'failed' || run.endedAt) && (
-        <FinalAnswer text={detail.finalMessage} />
-      )}
-      <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />
-      {detail?.lastScreen && !run.terminalId && <LastScreen text={detail.lastScreen} />}
-      <ol className="event-timeline" aria-label="Agent event timeline">
-        {[...events].reverse().map((ev) => {
-          const summary = payloadSummary(ev.payload);
-          const tool = summary.tool;
-          const conflict = conflictEventInfo(ev.type, ev.payload);
-          const dropped = ev.type === 'dependency_dropped' ? droppedDependencyText(ev.payload) : undefined;
-          const text = dropped ?? completionEventText(ev.type, ev.payload) ?? summary.detail;
-          return (
-            <li key={ev.id} className={`event-item event-src-${ev.source}`}>
-              <div className="event-head">
-                <span className="event-source mono">{ev.source}</span>
-                <span className="event-type mono">{EVENT_LABEL[ev.type] ?? ev.type}</span>
-                {handoffTarget(ev) && (
-                  <Link href={`/runs/${handoffTarget(ev)}/review`} className="badge badge-soft mono">
-                    run {handoffTarget(ev)?.slice(0, 8)} →
-                  </Link>
-                )}
-                {tool && <span className="badge badge-soft mono">{tool}</span>}
-                {ev.state && <RunStatePill state={ev.state} />}
-                <span className="event-time mono">{timeAgo(ev.ts)}</span>
-              </div>
-              {conflict ? <ConflictEventDetail info={conflict} /> : text && <ExpandableText text={text} />}
-            </li>
-          );
-        })}
-      </ol>
-    </>
-  );
-}
+export {
+  extractFailureDetails,
+  failureFetchNeeded,
+  formatAgentDisplayName,
+  formatAgentResumePlaceholder,
+  handoffTarget,
+  payloadSummary,
+  RunEventTimeline,
+  RunFailureBanner,
+  STAGE_TEMPLATES,
+  type StageTemplate,
+};
 
 export function RunInspector({
   run,
@@ -344,6 +57,7 @@ export function RunInspector({
 
   const live = !run.endedAt;
   const canPrompt = (live && run.state !== 'queued') || run.resumable;
+  const showHandoff = !run.handedOffTo && !run.cancelled && HANDOFF_STATES.has(run.state);
 
   useEffect(() => {
     if (!run.terminalId && tab === 'terminal') setTab('timeline');
@@ -370,6 +84,41 @@ export function RunInspector({
     });
   };
 
+  const moreItems: MoreMenuItem[] = [
+    {
+      id: 'browser',
+      label: 'Open browser',
+      description: run.branch ? `Branch: ${run.branch}` : `Mode: ${run.permissionMode}`,
+      icon: <Globe className="icon" aria-hidden />,
+      href: `/projects/${run.projectId}/browser`,
+    },
+  ];
+  if (run.worktreePath) {
+    moreItems.push({
+      id: 'review',
+      label: 'Open review',
+      href: `/runs/${run.id}/review`,
+    });
+  }
+  if (run.terminalId) {
+    moreItems.push({
+      id: 'terminal',
+      label: 'Open terminal',
+      icon: <Maximize2 className="icon" aria-hidden />,
+      href: `/terminals/${run.terminalId}`,
+    });
+  }
+  if (live) {
+    moreItems.push({
+      id: 'stop',
+      label: run.state === 'queued' ? 'Cancel run' : 'Stop run',
+      icon: <Square className="icon" aria-hidden />,
+      danger: true,
+      disabled: !!busy,
+      onSelect: () => void act('stop', () => api(`/api/runs/${run.id}/stop`, 'POST')),
+    });
+  }
+
   return (
     <aside className="dock-inspector" aria-label="Run inspector">
       <header className="dock-head">
@@ -380,14 +129,11 @@ export function RunInspector({
             autoRetry={run.autoRetry}
             handedOffTo={run.handedOffTo}
           />
-          <strong className="dock-title">{run.title ?? projectName ?? 'Agent Run'}</strong>
-          {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
-          <span className="badge mono">{run.permissionMode}</span>
+          <strong className="dock-title">{run.title ?? projectName ?? 'Agent run'}</strong>
         </div>
-        <HandoffMenu run={run} />
         <div className="dock-head-actions">
-          <div className="segmented" role="tablist" aria-label="Inspector view">
-            {run.terminalId && (
+          {run.terminalId && (
+            <div className="segmented" role="tablist" aria-label="Inspector view">
               <button
                 type="button"
                 role="tab"
@@ -397,8 +143,6 @@ export function RunInspector({
               >
                 Split
               </button>
-            )}
-            {run.terminalId && (
               <button
                 type="button"
                 role="tab"
@@ -408,42 +152,32 @@ export function RunInspector({
               >
                 Terminal
               </button>
-            )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'timeline'}
+                className={tab === 'timeline' ? 'active' : ''}
+                onClick={() => setTab('timeline')}
+              >
+                Events
+              </button>
+            </div>
+          )}
+          {run.worktreePath ? (
+            <Link href={`/runs/${run.id}/review`} className="btn btn-sm">
+              Open review
+            </Link>
+          ) : run.state === 'rate_limited' ? (
             <button
               type="button"
-              role="tab"
-              aria-selected={tab === 'timeline'}
-              className={tab === 'timeline' ? 'active' : ''}
-              onClick={() => setTab('timeline')}
+              className="btn btn-sm"
+              disabled={!!busy}
+              onClick={() => void act('resume', () => api(`/api/runs/${run.id}/resume`, 'POST', {}))}
             >
-              Events
+              Resume
             </button>
-          </div>
-          <Link
-            href={`/projects/${run.projectId}/browser`}
-            className="btn btn-sm btn-ghost"
-            title="Watch shared Live Browser Studio"
-          >
-            <Globe className="icon" aria-hidden /> Live Browser
-          </Link>
-          {run.worktreePath && (
-            <Link
-              href={`/runs/${run.id}/review`}
-              className="btn btn-sm btn-ghost"
-              title="Open Diff & Review workspace"
-            >
-              Diff & Review
-            </Link>
-          )}
-          {run.terminalId && (
-            <Link
-              href={`/terminals/${run.terminalId}`}
-              className="btn btn-sm btn-ghost"
-              title="Open full-page terminal"
-            >
-              <Maximize2 className="icon" aria-hidden />
-            </Link>
-          )}
+          ) : null}
+          <MoreMenu items={moreItems} ariaLabel="Inspector actions" />
           <button type="button" className="icon-btn" aria-label="Close inspector" onClick={onClose}>
             <X className="icon" aria-hidden />
           </button>
@@ -463,10 +197,27 @@ export function RunInspector({
           <div className="dock-events-pane">
             <RunFailureBanner run={run} />
             <HoldRecovery key={run.id} run={run} onAnswer={holdAnswer.open} />
-            <div className="dock-section-head">
-              <span className="eyebrow">Hook & Activity Stream</span>
-              <span className="muted small mono">{run.lastEvent ?? 'idle'}</span>
-            </div>
+            <section className="dock-section" aria-label="Handoff">
+              <Disclosure label="Handoff">
+                {showHandoff ? (
+                  <HandoffMenu run={run} />
+                ) : run.handedOffTo ? (
+                  <p className="muted small">
+                    Continued in{' '}
+                    <Link href={`/runs/${run.handedOffTo}/review`} className="mono">
+                      {run.handedOffTo.slice(0, 8)}
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <p className="muted small">
+                    Route: <span className="mono">{formatAgentDisplayName(run.agent)}</span>
+                    {run.model ? ` · ${run.model}` : ''}. Handoff is available when a run is waiting, paused,
+                    or failed.
+                  </p>
+                )}
+              </Disclosure>
+            </section>
             <RunEventTimeline run={run} />
           </div>
         )}
@@ -475,21 +226,21 @@ export function RunInspector({
       <footer className="dock-foot">
         {canPrompt && (
           <>
-            <div className="template-bar" aria-label="Stage prompt templates">
-              <span className="template-label mono">Stage:</span>
-              {STAGE_TEMPLATES.map((tpl) => (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  className="chip-btn"
-                  title={tpl.hint}
-                  disabled={!!busy}
-                  onClick={() => setPrompt(tpl.prompt)}
-                >
-                  {tpl.label}
-                </button>
-              ))}
-            </div>
+            <Disclosure label="Templates">
+              <div className="template-bar" aria-label="Stage prompt templates">
+                {STAGE_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    className="chip-btn"
+                    disabled={!!busy}
+                    onClick={() => setPrompt(tpl.prompt)}
+                  >
+                    {tpl.label}
+                  </button>
+                ))}
+              </div>
+            </Disclosure>
             <div className="dock-prompt-row">
               <textarea
                 className="input"
@@ -511,15 +262,30 @@ export function RunInspector({
                 }}
               />
               <div className="dock-prompt-actions">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={!prompt.trim() || !!busy}
-                  onClick={() => sendPrompt()}
-                >
-                  {busy === 'send' ? 'Sending…' : live ? 'Send' : 'Resume'}
-                </button>
-                {(run.state === 'rate_limited' || run.resumable) && (
+                {live ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={!prompt.trim() || !!busy}
+                    onClick={() => sendPrompt()}
+                  >
+                    {busy === 'send' ? 'Sending…' : 'Send'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={!!busy}
+                    onClick={() =>
+                      prompt.trim()
+                        ? sendPrompt()
+                        : void act('resume', () => api(`/api/runs/${run.id}/resume`, 'POST', {}))
+                    }
+                  >
+                    {busy === 'send' || busy === 'resume' ? 'Resuming…' : 'Resume'}
+                  </button>
+                )}
+                {live && run.state === 'rate_limited' && (
                   <button
                     type="button"
                     className="btn btn-sm"

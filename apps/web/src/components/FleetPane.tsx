@@ -1,6 +1,6 @@
 import type { Project, Run, RunBuildOutputsResponse, RunDetail } from '@emberline/protocol';
 import { useQuery } from '@tanstack/react-query';
-import { Check, EyeOff, Hourglass, Maximize2, Package, RotateCw, Trash, X } from 'lucide-react';
+import { Check, Hourglass, Package, X } from 'lucide-react';
 import { type FormEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { formatAgentDisplayName } from '../agentLabel';
@@ -8,16 +8,18 @@ import { api, errorMessage } from '../api';
 import { isRunCompleted } from '../attention';
 import { outputsBadge } from '../buildOutputs';
 import { latestCompletionBlockers } from '../completionSignal';
+import { HANDOFF_STATES } from '../handoffCandidates';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
 import { useApi } from '../hooks/useApi';
 import { useInView } from '../hooks/useInView';
 import { timeAgo } from '../time';
 import { ErrorBoundary } from './ErrorBoundary';
-import { PersonaBadge } from './PersonaBadge';
 import { HandoffMenu } from './QuotaLanes';
-import { STAGE_TEMPLATES } from './RunInspector';
 import { FinalAnswer, LastScreen } from './RunOutcome';
 import { RunStatePill } from './RunStatePill';
+import { Disclosure } from './ui/Disclosure';
+import { MoreMenu, type MoreMenuItem } from './ui/MoreMenu';
+import './fleet/fleet-ux.css';
 
 const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
 
@@ -51,13 +53,7 @@ function FinishedOutcome({ run }: { run: Run }) {
     <div className="fleet-outcome">
       {detail.data?.finalMessage && <FinalAnswer text={detail.data.finalMessage} />}
       {blockers.length > 0 && (
-        <span
-          className="badge mono"
-          title={blockers.join('\n')}
-          style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}
-        >
-          blocked
-        </span>
+        <span className="badge mono fleet-blocker-badge">blocked: {blockers.join(', ')}</span>
       )}
       <BuildOutputsBadge run={run} />
       {detail.data?.lastScreen && !run.terminalId && <LastScreen text={detail.data.lastScreen} />}
@@ -75,14 +71,11 @@ function TerminalThumbnail({ runId }: { runId: string }) {
   );
 }
 
-/** Badge colours of a run's placeholder card: handed-off runs read as info, distinct from muted. */
-function placeholderTone(run: Run): { border: string; text: string } {
-  if (run.state === 'done' && run.handedOffTo) return { border: 'var(--border)', text: 'var(--info)' };
-  if (run.state === 'done')
-    return { border: 'color-mix(in srgb, var(--ok) 45%, transparent)', text: 'var(--ok)' };
-  if (run.state === 'failed')
-    return { border: 'color-mix(in srgb, var(--bad) 45%, transparent)', text: 'var(--bad)' };
-  return { border: 'var(--border)', text: 'var(--muted)' };
+function placeholderBadgeClass(run: Run): string {
+  if (run.state === 'done' && run.handedOffTo) return 'badge mono fleet-placeholder-badge-info';
+  if (run.state === 'done') return 'badge mono fleet-placeholder-badge-ok';
+  if (run.state === 'failed') return 'badge mono fleet-placeholder-badge-bad';
+  return 'badge mono fleet-placeholder-badge-muted';
 }
 
 export function FleetPane({
@@ -118,6 +111,11 @@ export function FleetPane({
   const attachTerminal = view === 'live' && inView;
   useEffect(() => () => clearPresenceRun(run.id, 'fleet'), [run.id]);
   const showPromptFooter = (live && run.state !== 'queued') || (completed && showReopenBar && run.resumable);
+  const canHandoff =
+    !run.handedOffTo &&
+    !run.cancelled &&
+    HANDOFF_STATES.has(run.state) &&
+    (run.state === 'waiting_input' || run.state === 'rate_limited');
 
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -140,6 +138,61 @@ export function FleetPane({
       setShowReopenBar(false);
     });
   };
+
+  const moreItems: MoreMenuItem[] = [
+    {
+      id: 'inspect',
+      label: 'Inspect run',
+      description: run.branch ? `Branch: ${run.branch}` : undefined,
+      onSelect: onInspect,
+    },
+  ];
+  if (run.worktreePath) {
+    moreItems.push({
+      id: 'review',
+      label: 'Open review',
+      href: `/runs/${run.id}/review`,
+    });
+  }
+  if (live && run.terminalId) {
+    moreItems.push({
+      id: 'terminal',
+      label: 'Open terminal',
+      href: `/terminals/${run.terminalId}`,
+    });
+  }
+  if (project) {
+    moreItems.push({
+      id: 'board',
+      label: 'Open board',
+      description: project.name,
+      href: `/projects/${project.id}/board`,
+    });
+  }
+  if (completed && run.resumable) {
+    moreItems.push({
+      id: 'reopen',
+      label: showReopenBar ? 'Hide prompt' : 'Reopen session',
+      disabled: !!busy,
+      onSelect: () => setShowReopenBar((v) => !v),
+    });
+  }
+  if (onDismiss) {
+    moreItems.push({
+      id: 'dismiss',
+      label: 'Hide pane',
+      onSelect: onDismiss,
+    });
+  }
+  if (completed) {
+    moreItems.push({
+      id: 'remove',
+      label: 'Remove run',
+      danger: true,
+      disabled: !!busy,
+      onSelect: () => void act('remove', () => api(`/api/runs/${run.id}`, 'DELETE')),
+    });
+  }
 
   return (
     <article
@@ -165,44 +218,11 @@ export function FleetPane({
           autoRetry={run.autoRetry}
           handedOffTo={run.handedOffTo}
         />
-        <PersonaBadge persona={run.persona} />
-        <button
-          type="button"
-          className="fleet-pane-title"
-          onClick={onInspect}
-          title="Open run inspector & timeline"
-        >
-          {run.title ?? project?.name ?? 'Agent Run'}
+        <button type="button" className="fleet-pane-title" onClick={onInspect}>
+          {run.title ?? project?.name ?? 'Agent run'}
         </button>
-        {project && run.title && (
-          <Link href={`/projects/${project.id}/board`} className="badge mono">
-            {project.name}
-          </Link>
-        )}
-        {run.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
-        <span className="fleet-pane-meta mono">
-          {run.lastEvent ? `${run.lastEvent} · ` : ''}
-          {timeAgo(run.stateChangedAt)}
-        </span>
         <div className="fleet-pane-actions">
-          {run.worktreePath && (
-            <Link
-              href={`/runs/${run.id}/review`}
-              className="btn btn-sm btn-ghost"
-              title="Inspect git diff & review"
-            >
-              Review
-            </Link>
-          )}
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={onInspect}
-            title="Inspect events & details"
-          >
-            Timeline
-          </button>
-          {run.state === 'rate_limited' && (
+          {run.state === 'rate_limited' ? (
             <button
               type="button"
               className="btn btn-sm"
@@ -211,19 +231,7 @@ export function FleetPane({
             >
               Resume
             </button>
-          )}
-          {completed && run.resumable && (
-            <button
-              type="button"
-              className={`btn btn-sm ${showReopenBar ? 'btn-primary' : 'btn-ghost'}`}
-              disabled={!!busy}
-              onClick={() => setShowReopenBar((v) => !v)}
-              title="Re-open this finished session with a follow-up prompt"
-            >
-              <RotateCw className="icon" aria-hidden /> Re-open
-            </button>
-          )}
-          {live && (
+          ) : live ? (
             <button
               type="button"
               className="btn btn-sm btn-ghost danger"
@@ -232,40 +240,35 @@ export function FleetPane({
             >
               {run.state === 'queued' ? 'Cancel' : 'Stop'}
             </button>
-          )}
-          {onDismiss && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={onDismiss}
-              title="Hide this finished run from the Active view (it stays under Completed)"
-            >
-              <EyeOff className="icon" aria-hidden />
-            </button>
-          )}
-          {completed && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost danger"
-              disabled={!!busy}
-              onClick={() => void act('remove', () => api(`/api/runs/${run.id}`, 'DELETE'))}
-              title="Remove this finished session from history"
-            >
-              <Trash className="icon" aria-hidden />
-            </button>
-          )}
-          {live && run.terminalId && (
-            <Link
-              href={`/terminals/${run.terminalId}`}
-              className="btn btn-sm btn-ghost"
-              title="Full-screen terminal"
-            >
-              <Maximize2 className="icon" aria-hidden />
+          ) : run.worktreePath ? (
+            <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost">
+              Open review
             </Link>
+          ) : completed && run.resumable ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={!!busy}
+              onClick={() => setShowReopenBar((v) => !v)}
+            >
+              Resume
+            </button>
+          ) : (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onInspect}>
+              Inspect
+            </button>
           )}
+          <MoreMenu items={moreItems} ariaLabel={`More actions for ${run.title ?? project?.name ?? 'run'}`} />
         </div>
       </header>
-      <HandoffMenu run={run} />
+
+      {canHandoff && (
+        <div className="fleet-pane-handoff">
+          <Disclosure label="Hand off">
+            <HandoffMenu run={run} />
+          </Disclosure>
+        </div>
+      )}
 
       <div className="fleet-pane-body">
         {live && run.terminalId && attachTerminal ? (
@@ -277,64 +280,33 @@ export function FleetPane({
         ) : live && run.terminalId ? (
           <TerminalThumbnail runId={run.id} />
         ) : (
-          <div className="fleet-placeholder" style={{ padding: '18px 20px' }}>
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}
-            >
-              <span
-                className="badge mono"
-                style={{
-                  borderColor: placeholderTone(run).border,
-                  color: placeholderTone(run).text,
-                }}
-              >
+          <div className="fleet-placeholder">
+            <div className="fleet-placeholder-head">
+              <span className={placeholderBadgeClass(run)}>
                 {run.state === 'queued' ? (
                   <>
-                    <Hourglass className="icon" aria-hidden /> Queued in Scheduler
+                    <Hourglass className="icon" aria-hidden /> Queued
                   </>
                 ) : run.state === 'done' ? (
                   <>
-                    <Check className="icon" aria-hidden />{' '}
-                    {run.handedOffTo ? 'Handed off to another route' : 'Completed & Terminal Closed'}
+                    <Check className="icon" aria-hidden /> {run.handedOffTo ? 'Handed off' : 'Completed'}
                   </>
                 ) : (
                   <>
-                    <X className="icon" aria-hidden /> Session Ended / Failed
+                    <X className="icon" aria-hidden /> Session ended
                   </>
                 )}
               </span>
-              <span className="muted small mono">
-                Provider: <strong>{formatAgentDisplayName(run.agent)}</strong>
-              </span>
-              {run.endedAt && <span className="muted small mono">Ended {timeAgo(run.endedAt)}</span>}
+              <span className="muted small mono">{formatAgentDisplayName(run.agent)}</span>
+              {run.endedAt && <span className="muted small mono">{timeAgo(run.endedAt)}</span>}
             </div>
-            <p className="mono" style={{ margin: '0 0 8px', fontSize: '0.82rem' }}>
-              {run.state === 'queued' ? (
-                'Waiting in scheduler queue for an execution slot…'
-              ) : run.state === 'done' && run.handedOffTo ? (
-                <>
-                  Handed off: run{' '}
-                  <Link href={`/runs/${run.handedOffTo}/review`}>{run.handedOffTo.slice(0, 8)}</Link>{' '}
-                  continues this work in the same worktree. Click Timeline to follow it, or{' '}
-                  <Trash className="icon" aria-hidden /> to remove.
-                </>
-              ) : run.state === 'done' ? (
-                <>
-                  Task finished and changes synced. Click Review to inspect git changes,{' '}
-                  <RotateCw className="icon" aria-hidden /> Re-open to send a follow-up prompt, or{' '}
-                  <Trash className="icon" aria-hidden /> to remove.
-                </>
-              ) : (
-                <>
-                  Session stopped or exited with an error. Click Timeline to inspect events or{' '}
-                  <Trash className="icon" aria-hidden /> to remove.
-                </>
-              )}
-            </p>
-            {run.prompt && (
-              <p className="muted small mono" style={{ margin: 0, opacity: 0.8 }}>
-                {run.prompt.slice(0, 260)}
-                {run.prompt.length > 260 ? '…' : ''}
+            {run.state === 'queued' && (
+              <p className="mono fleet-placeholder-summary">Waiting for a free execution slot.</p>
+            )}
+            {run.state === 'done' && run.handedOffTo && (
+              <p className="mono fleet-placeholder-summary">
+                Continued in{' '}
+                <Link href={`/runs/${run.handedOffTo}/review`}>{run.handedOffTo.slice(0, 8)}</Link>.
               </p>
             )}
             {completed && <FinishedOutcome run={run} />}
@@ -344,33 +316,20 @@ export function FleetPane({
 
       {showPromptFooter && (
         <form className="fleet-pane-foot" onSubmit={submitPrompt}>
-          <div className="fleet-templates hide-sm">
-            {STAGE_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                className="chip-btn"
-                title={tpl.hint}
-                onClick={() => setPrompt(tpl.prompt)}
-              >
-                {tpl.label}
-              </button>
-            ))}
-          </div>
           <input
             className="input fleet-input"
             placeholder={
               run.state === 'waiting_input'
-                ? 'Agent is waiting for input — reply here…'
+                ? 'Reply to agent…'
                 : completed
-                  ? 'Enter follow-up prompt to re-open this session…'
+                  ? 'Enter follow-up prompt to resume…'
                   : 'Steer this agent…'
             }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
-          <button type="submit" className="btn btn-sm btn-primary" disabled={!prompt.trim() || !!busy}>
-            {busy === 'send' ? '…' : live ? 'Send' : 'Re-open'}
+          <button type="submit" className="btn btn-sm" disabled={!prompt.trim() || !!busy}>
+            {busy === 'send' ? 'Sending…' : live ? 'Send' : 'Resume'}
           </button>
         </form>
       )}

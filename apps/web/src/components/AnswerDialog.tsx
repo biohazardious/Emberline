@@ -15,6 +15,7 @@ import { timeAgo, useNow } from '../time';
 import { useAnswerDialog } from './useAnswerDialog';
 import { MaterialList } from './wizard/MaterialList';
 import { droppedFiles, type MaterialCandidate, type WizardMaterial } from './wizard/materials';
+import './runInspector/run-inspector.css';
 
 export interface AnswerDialogViewProps {
   heading: { key: string | null; title: string };
@@ -66,6 +67,9 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
   const locked = permission || p.busy;
   const note = q ? pickerNote(q) : null;
   const suggestReason = q && !q.suggest.available ? q.suggest.reason : null;
+  const hasSecondaryPrimary = Boolean(p.confirmReplace || p.confirmClose);
+  const moreOpen = p.files.length > 0 || p.problems.length > 0 ? true : undefined;
+
   return (
     // A click on the backdrop stays here: inside the ticket drawer it would close the drawer too.
     <div
@@ -102,10 +106,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
         </header>
         <section className="answer-question" aria-label="What the agent asks">
           {q ? (
-            <>
-              <pre className="answer-question-text">{q.text || 'The agent did not say what it needs.'}</pre>
-              <p className="muted small answer-question-source">{QUESTION_SOURCE_LINES[q.source]}</p>
-            </>
+            <pre className="answer-question-text">{q.text || 'The agent did not say what it needs.'}</pre>
           ) : (
             p.loading && <p className="muted small">Loading the question…</p>
           )}
@@ -133,8 +134,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             ))}
           </div>
         )}
-        {note && !permission && <p className="muted small">{note}</p>}
-        {permission ? (
+        {permission && (
           <p className="small">
             A permission prompt is answered in the agent's terminal.{' '}
             <button
@@ -146,23 +146,6 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               Open terminal
             </button>
           </p>
-        ) : (
-          <div className="answer-suggest">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={!q?.suggest.available || p.suggesting || p.busy}
-              aria-describedby={suggestReason ? 'answer-suggest-reason' : undefined}
-              onClick={p.onSuggest}
-            >
-              {p.suggesting ? 'Suggesting…' : 'Suggest an answer'}
-            </button>
-            {suggestReason && (
-              <span id="answer-suggest-reason" className="muted small">
-                {suggestReason}
-              </span>
-            )}
-          </div>
         )}
         <form
           className="answer-form"
@@ -176,7 +159,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
             <textarea
               ref={p.textRef}
               className="input answer-text"
-              rows={8}
+              rows={6}
               maxLength={20_000}
               value={p.text}
               disabled={permission}
@@ -194,40 +177,65 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
               </button>
             </div>
           )}
-          <div
-            className="answer-files"
-            onDragOver={(e: DragEvent) => e.preventDefault()}
-            onDrop={(e: DragEvent) => {
-              e.preventDefault();
-              if (!locked) p.onFiles(droppedFiles(e.dataTransfer));
-            }}
-          >
-            <div className="answer-files-head">
-              <label className="btn btn-sm wizard-file">
-                <Paperclip className="icon" aria-hidden /> Attach files
-                <input
-                  type="file"
-                  className="wizard-file-input"
-                  multiple
-                  disabled={locked}
-                  onChange={(e) => {
-                    if (e.target.files)
-                      p.onFiles([...e.target.files].map((file) => ({ file, name: file.name })));
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-              <span className="muted small">{answerCapLine(p.files)} · or drop files here</span>
+          <details className="answer-more" open={moreOpen}>
+            <summary className="ui-disclosure-trigger">More options</summary>
+            <div className="answer-more-body">
+              {q && <p className="muted small answer-question-source">{QUESTION_SOURCE_LINES[q.source]}</p>}
+              {note && !permission && <p className="muted small">{note}</p>}
+              {!permission && (
+                <div className="answer-suggest">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!q?.suggest.available || p.suggesting || p.busy}
+                    aria-describedby={suggestReason ? 'answer-suggest-reason' : undefined}
+                    onClick={p.onSuggest}
+                  >
+                    {p.suggesting ? 'Suggesting…' : 'Suggest an answer'}
+                  </button>
+                  {suggestReason && (
+                    <span id="answer-suggest-reason" className="muted small">
+                      {suggestReason}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div
+                className="answer-files"
+                onDragOver={(e: DragEvent) => e.preventDefault()}
+                onDrop={(e: DragEvent) => {
+                  e.preventDefault();
+                  if (!locked) p.onFiles(droppedFiles(e.dataTransfer));
+                }}
+              >
+                <div className="answer-files-head">
+                  <label className="btn btn-sm wizard-file">
+                    <Paperclip className="icon" aria-hidden /> Attach files
+                    <input
+                      type="file"
+                      className="wizard-file-input"
+                      multiple
+                      disabled={locked}
+                      onChange={(e) => {
+                        if (e.target.files)
+                          p.onFiles([...e.target.files].map((file) => ({ file, name: file.name })));
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  <span className="muted small">{answerCapLine(p.files)} · or drop files here</span>
+                </div>
+                <MaterialList materials={p.files} onRemove={locked ? undefined : p.onRemoveFile} />
+              </div>
             </div>
-            <MaterialList materials={p.files} onRemove={locked ? undefined : p.onRemoveFile} />
-            {/* Always there, so a screen reader hears each problem as it appears. */}
-            <div role="status" aria-live="polite" className="answer-file-problems">
-              {p.problems.map((m) => (
-                <p key={m.id} className="small banner banner-warn">
-                  {m.text}
-                </p>
-              ))}
-            </div>
+          </details>
+          {/* Always there, so a screen reader hears each problem as it appears. */}
+          <div role="status" aria-live="polite" className="answer-file-problems">
+            {p.problems.map((m) => (
+              <p key={m.id} className="small banner banner-warn">
+                {m.text}
+              </p>
+            ))}
           </div>
           {p.error && (
             <div className="banner banner-error" role="alert">
@@ -251,7 +259,7 @@ export function AnswerDialogView(p: AnswerDialogViewProps) {
           <div className="request-dialog-actions">
             <button
               type="submit"
-              className="btn btn-primary"
+              className={`btn${hasSecondaryPrimary ? '' : ' btn-primary'}`}
               disabled={!canSend(p.text, p.files, p.busy) || permission}
             >
               {p.busy ? 'Sending…' : 'Send'}

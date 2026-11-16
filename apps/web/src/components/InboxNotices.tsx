@@ -2,8 +2,9 @@ import type { Notice } from '@emberline/protocol';
 import { Link } from 'wouter';
 import { api } from '../api';
 import { useApi } from '../hooks/useApi';
-import { toastError } from '../toast';
 import { timeAgo } from '../time';
+import { toastError } from '../toast';
+import '../pages/inbox-ux.css';
 
 /** The notices still open, newest first. */
 export const openNotices = (list: Notice[] | undefined): Notice[] =>
@@ -34,15 +35,13 @@ export function InboxNotices() {
           <li key={notice.id} className="inbox-item" data-kind={notice.kind}>
             <div className="inbox-item-head">
               <h3 className="inbox-title">{notice.title}</h3>
-              <span className="inbox-age muted mono" title={notice.createdAt}>
-                {timeAgo(notice.createdAt)}
-              </span>
+              <span className="inbox-age muted mono">{timeAgo(notice.createdAt)}</span>
             </div>
             <p className="inbox-detail">{notice.text}</p>
             <div className="inbox-actions">
               {notice.link && (
                 <Link className="btn btn-sm" href={notice.link}>
-                  Open Settings
+                  Open settings
                 </Link>
               )}
               <button type="button" className="btn btn-sm btn-ghost" onClick={() => dismiss(notice)}>

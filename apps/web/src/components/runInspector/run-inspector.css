@@ -1,0 +1,528 @@
+/* M6 RunInspector, RunOutcome, HoldRecovery, AnswerDialog, and TerminalPage styles. */
+
+/* --- Docked RunInspector --------------------------------------------------- */
+
+.dock-inspector {
+  width: min(520px, 46vw);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.dock-inspector .small,
+.dock-inspector .btn-sm,
+.dock-inspector .btn-xs,
+.dock-inspector .chip-btn,
+.dock-inspector .badge,
+.dock-inspector .eyebrow,
+.dock-inspector .link-btn {
+  font-size: 0.8rem;
+}
+
+.dock-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dock-head-main,
+.dock-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dock-head-main {
+  flex: 1 1 200px;
+}
+
+.dock-head-actions {
+  flex: none;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.dock-title {
+  flex: 1 1 80px;
+  min-width: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dock-term-pane {
+  flex: 3;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+.dock-events-pane {
+  flex: 2;
+  min-height: 140px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dock-body-timeline .dock-events-pane {
+  border-top: 0;
+}
+
+.dock-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dock-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dock-foot {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  display: grid;
+  gap: 8px;
+}
+
+.template-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.template-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.dock-prompt-row {
+  display: grid;
+  gap: 6px;
+}
+
+.dock-prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* --- RunFailureBanner ------------------------------------------------------ */
+
+.run-failure-banner {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-failure-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.run-failure-title {
+  color: var(--bad);
+  font-size: 0.85rem;
+}
+
+.run-failure-auth-link {
+  text-decoration: none;
+}
+
+.run-failure-reason {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  color: var(--bad);
+  background: var(--surface-2);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* --- RunEventTimeline ------------------------------------------------------ */
+
+.event-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.event-item {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  display: grid;
+  gap: 4px;
+}
+
+.event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.event-source {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.event-type {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.event-time {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.event-detail {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.event-payload {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.conflict-event-detail {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.conflict-event-files {
+  margin: 0;
+  padding-left: 1.15em;
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.conflict-event-file code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+/* --- RunOutcome ------------------------------------------------------------ */
+
+.run-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.run-outcome .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.run-outcome-text {
+  margin: 0;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-outcome-screen {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.8rem;
+  white-space: pre;
+}
+
+.build-outputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.build-output {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.build-output-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.build-output-meta {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.build-output-path {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.build-output-actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+/* --- HoldRecovery ---------------------------------------------------------- */
+
+.hold-recovery {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.hold-recovery .small,
+.hold-recovery .btn-sm,
+.hold-recovery .btn-xs {
+  font-size: 0.8rem;
+}
+
+.hold-recovery-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  font-size: 0.84rem;
+}
+
+.hold-recovery-none {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.hold-recovery-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hold-recovery-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.hold-recovery-detail {
+  flex: 1 1 160px;
+  font-size: 0.8rem;
+}
+
+.hold-recovery-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.hold-recovery-manual {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hold-recovery-files {
+  margin: 0;
+  padding-left: 1.1em;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.hold-recovery-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hold-recovery-command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+/* --- AnswerDialog ---------------------------------------------------------- */
+
+.answer-dialog .small,
+.answer-dialog .btn-sm,
+.answer-dialog .btn-xs {
+  font-size: 0.8rem;
+}
+
+.answer-more {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.answer-more > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+}
+
+.answer-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.answer-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* --- TerminalPage ---------------------------------------------------------- */
+
+.terminal-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.terminal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-title {
+  flex: 1 1 140px;
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+@media (max-width: 820px) {
+  .dock-inspector {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(500px, 100vw);
+    z-index: 45;
+  }
+}
+
+@media (max-width: 640px) {
+  .dock-inspector {
+    width: 100vw;
+  }
+
+  .dock-head-actions .btn,
+  .dock-prompt-actions .btn,
+  .hold-recovery-item .btn,
+  .terminal-head .icon-btn {
+    min-height: 44px;
+  }
+}
