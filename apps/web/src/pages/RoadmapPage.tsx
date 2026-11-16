@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { BrainstormingColumn } from '../components/roadmap/BrainstormingColumn';
 import { MilestonesColumn } from '../components/roadmap/MilestonesColumn';
 import { RoadmapHeaderPanel } from '../components/roadmap/RoadmapHeaderPanel';
+import '../components/roadmap/roadmap-ux.css';
 import { useRuns } from '../hooks/liveData';
 import { useFactorySettings } from '../hooks/useFactorySettings';
 import { useProject } from '../hooks/useProjects';
@@ -19,7 +20,13 @@ import {
   type RoadmapFilter,
 } from '../roadmapFilter';
 
-export { AGENT_LABELS, AgentModelBadge, RouteBadgeSelect } from '../components/roadmap/RoadmapBadges';
+export {
+  AGENT_LABELS,
+  AgentModelBadge,
+  RoadmapPriorityBadge,
+  RoadmapStateBadge,
+  RouteBadgeSelect,
+} from '../components/roadmap/RoadmapBadges';
 
 export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   const [, navigate] = useLocation();
@@ -188,7 +195,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div className="roadmap-studio">
       <RoadmapHeaderPanel
         projectName={project?.name}
         roadmap={roadmap}
@@ -212,38 +219,7 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
         error={error}
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))',
-          gap: 14,
-          alignItems: 'start',
-        }}
-      >
-        <BrainstormingColumn
-          projectName={project?.name}
-          filteredSuggestions={filteredSuggestions}
-          selectedSuggestions={selectedSuggestions}
-          onToggleSuggestion={toggleSuggestion}
-          onToggleSelectAllSuggestions={handleToggleSelectAllSuggestions}
-          onClearAllSuggestions={actions.handleClearAllSuggestions}
-          onBuildAllSuggestions={() => void actions.handleBuildAllSuggestions()}
-          brainstormFocus={brainstormFocus}
-          onBrainstormFocusChange={setBrainstormFocus}
-          categoryFilter={categoryFilter}
-          onCategoryFilterChange={setCategoryFilter}
-          onBrainstorm={(mode) => void actions.handleBrainstorm(mode)}
-          busy={busy}
-          isAgentBrainstorming={isAgentBrainstorming}
-          activeBrainstormRun={activeBrainstormRun}
-          enabledProviders={enabledProviders}
-          onChangeRoute={(id, agent, model) => void actions.handleChangeRoute(id, agent, model)}
-          onQuickPromoteSuggestion={(sug, autoStart) =>
-            void actions.handleQuickPromoteSuggestion(sug, autoStart)
-          }
-          onDismissSuggestion={actions.handleDismissSuggestion}
-        />
-
+      <div className="roadmap-columns">
         <MilestonesColumn
           projectId={projectId}
           totalMilestoneCount={roadmap.milestones.length}
@@ -266,6 +242,30 @@ export function RoadmapStudioPanel({ projectId }: { projectId: string }) {
           enabledProviders={enabledProviders}
           onChangeRoute={(id, agent, model) => void actions.handleChangeRoute(id, agent, model)}
           busy={busy}
+        />
+
+        <BrainstormingColumn
+          projectName={project?.name}
+          filteredSuggestions={filteredSuggestions}
+          selectedSuggestions={selectedSuggestions}
+          onToggleSuggestion={toggleSuggestion}
+          onToggleSelectAllSuggestions={handleToggleSelectAllSuggestions}
+          onClearAllSuggestions={actions.handleClearAllSuggestions}
+          onBuildAllSuggestions={() => void actions.handleBuildAllSuggestions()}
+          brainstormFocus={brainstormFocus}
+          onBrainstormFocusChange={setBrainstormFocus}
+          categoryFilter={categoryFilter}
+          onCategoryFilterChange={setCategoryFilter}
+          onBrainstorm={(mode) => void actions.handleBrainstorm(mode)}
+          busy={busy}
+          isAgentBrainstorming={isAgentBrainstorming}
+          activeBrainstormRun={activeBrainstormRun}
+          enabledProviders={enabledProviders}
+          onChangeRoute={(id, agent, model) => void actions.handleChangeRoute(id, agent, model)}
+          onQuickPromoteSuggestion={(sug, autoStart) =>
+            void actions.handleQuickPromoteSuggestion(sug, autoStart)
+          }
+          onDismissSuggestion={actions.handleDismissSuggestion}
         />
       </div>
     </div>
