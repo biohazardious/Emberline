@@ -89,7 +89,7 @@ afterEach(async () => {
 });
 
 describe('BoardPage filtering, loading, and error recovery', () => {
-  it('shows loading state, recovers from a failed ticket read via Retry without offering Seed Starter Backlog on error, and filters cards', async () => {
+  it('shows loading state, recovers from a failed ticket read via Retry without offering Seed starter backlog on error, and filters cards', async () => {
     const ticketsGate = deferred<Ticket[]>();
     let shouldFailTickets = true;
     const tickets = [
@@ -126,7 +126,7 @@ describe('BoardPage filtering, loading, and error recovery', () => {
         'Could not load board tickets: Database connection busy',
       ),
     );
-    expect(document.body.textContent).not.toContain('Seed Starter Backlog');
+    expect(document.body.textContent).not.toContain('Seed starter backlog');
 
     shouldFailTickets = false;
     await click(getButton(/Retry/));

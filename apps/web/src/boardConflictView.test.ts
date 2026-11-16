@@ -230,8 +230,8 @@ describe('BoardPage & TicketDrawer sync-worktree conflict resolutions (Spec 1)',
       { path: '/projects/p1/board?ticket=t1' },
     );
 
-    await waitFor(() => expect(getButton('Mark done ✓')).toBeTruthy());
-    await click(getButton('Mark done ✓'));
+    await waitFor(() => expect(getButton('Accept and merge')).toBeTruthy());
+    await click(getButton('Accept and merge'));
 
     await waitFor(() => expect(patchBodies).toHaveLength(1));
     expect(patchBodies[0]).toMatchObject({ status: 'done' });
@@ -280,8 +280,8 @@ describe('BoardPage & TicketDrawer sync-worktree conflict resolutions (Spec 1)',
       path: '/projects/p1/board?ticket=t1',
     });
 
-    await waitFor(() => expect(getButton('Mark done ✓')).toBeTruthy());
-    await click(getButton('Mark done ✓'));
+    await waitFor(() => expect(getButton('Accept and merge')).toBeTruthy());
+    await click(getButton('Accept and merge'));
 
     await waitFor(() => {
       const banner = document.querySelector('.sync-resolution-banner');
@@ -293,7 +293,7 @@ describe('BoardPage & TicketDrawer sync-worktree conflict resolutions (Spec 1)',
     expect(patchBodies).toHaveLength(0);
 
     resolutionMode = 'resolver_started';
-    await click(getButton('Mark done ✓'));
+    await click(getButton('Accept and merge'));
 
     await waitFor(() => {
       expect(document.querySelector('.sync-resolution-banner a')?.getAttribute('href')).toBe(
@@ -360,8 +360,8 @@ describe('BoardPage & TicketDrawer sync-worktree conflict resolutions (Spec 1)',
       path: '/projects/p1/board?ticket=t1',
     });
 
-    await waitFor(() => expect(getButton('Mark done ✓')).toBeTruthy());
-    await click(getButton('Mark done ✓'));
+    await waitFor(() => expect(getButton('Accept and merge')).toBeTruthy());
+    await click(getButton('Accept and merge'));
 
     await waitFor(() => {
       const held = document.querySelector('[aria-label="Held run"]');

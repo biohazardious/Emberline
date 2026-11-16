@@ -1,4 +1,4 @@
-import type { Ticket } from '@emberline/protocol';
+import type { Ticket, TicketStatus } from '@emberline/protocol';
 import { X } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'wouter';
@@ -6,7 +6,6 @@ import { api, errorMessage } from '../../api';
 import { dependencyCandidates } from '../../ticketDeps';
 import { timeAgo } from '../../time';
 import { BOARD_COLUMNS, BOARD_PRIORITIES, IssueChips } from '../BoardCard';
-import { PersonaPicker, TaskTemplateBar } from '../PersonaBadge';
 import { ico } from '../SectionState';
 import type { DrawerCtx } from './boardMeta';
 
@@ -20,9 +19,6 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
     setBody,
     priority,
     setPriority,
-    persona,
-    setPersona,
-    setPermissionMode,
     dirty,
     busyAction,
     setBusyAction,
@@ -47,18 +43,24 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
   };
 
   return (
-    <>
-      <TaskTemplateBar
-        onSelect={(tpl) => {
-          setPersona(tpl.persona);
-          setPermissionMode(tpl.permissionMode);
-          if (!title.trim()) setTitle(tpl.titlePlaceholder);
-          setBody(tpl.promptTemplate);
-        }}
-      />
+    <section className="drawer-section" aria-label="Details">
+      <div className="drawer-section-head">
+        <h2>Details</h2>
+        <button
+          id="drawer-save"
+          type="button"
+          className="btn btn-sm"
+          disabled={!dirty || !!busyAction || !title.trim()}
+          onClick={() => void save()}
+        >
+          {busyAction === 'save' ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+
       <input
         id="drawer-title"
         className="input drawer-title"
+        aria-label="Title"
         value={title}
         maxLength={200}
         onChange={(e) => setTitle(e.target.value)}
@@ -67,27 +69,24 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
       <textarea
         id="drawer-body"
         className="input drawer-body"
+        aria-label="Description"
         rows={5}
-        placeholder="Details, acceptance criteria, files to look at… (sent to the assigned agent with the title)"
+        placeholder="Details, acceptance criteria, files to inspect…"
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
+
       {ticket.completion && (
         <section className="drawer-completion" aria-label="Completion">
-          <label className="drawer-label">
-            Completion
+          <div className="drawer-completion-head">
+            <span className="drawer-label">Completion</span>
             {ticket.completion.blockers.length > 0 && (
-              <span
-                className="badge mono"
-                style={{ marginLeft: 8, borderColor: 'var(--warn)', color: 'var(--warn)' }}
-              >
-                blocked
-              </span>
+              <span className="badge mono drawer-completion-blocked">blocked</span>
             )}
-          </label>
-          <p style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>{ticket.completion.summary}</p>
+          </div>
+          <p className="drawer-completion-summary">{ticket.completion.summary}</p>
           {ticket.completion.blockers.length > 0 && (
-            <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>
+            <ul className="drawer-completion-blockers">
               {ticket.completion.blockers.map((b) => (
                 <li key={b}>{b}</li>
               ))}
@@ -95,10 +94,8 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
           )}
           {ticket.completion.handoff && (
             <>
-              <div className="muted small">Handoff for dependent tickets</div>
-              <p className="small" style={{ margin: '2px 0', whiteSpace: 'pre-wrap' }}>
-                {ticket.completion.handoff}
-              </p>
+              <div className="muted small">Handoff</div>
+              <p className="drawer-completion-handoff">{ticket.completion.handoff}</p>
             </>
           )}
           <div className="muted small mono">
@@ -110,70 +107,79 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
           </div>
         </section>
       )}
-      <label className="drawer-label">Specialist Persona</label>
-      <PersonaPicker value={persona} onChange={setPersona} />
-      <div className="drawer-row">
-        <div className="segmented" role="radiogroup" aria-label="Priority">
-          {BOARD_PRIORITIES.map((label, value) => (
-            <button
-              key={label}
-              type="button"
-              role="radio"
-              aria-checked={priority === value}
-              className={priority === value ? 'active' : ''}
-              onClick={() => setPriority(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <button
-          id="drawer-save"
-          className="btn btn-sm"
-          disabled={!dirty || !!busyAction || !title.trim()}
-          onClick={() => void save()}
-        >
-          {busyAction === 'save' ? 'Saving…' : 'Save'}
-        </button>
+
+      <div className="drawer-grid-row">
+        <label className="drawer-field" htmlFor="drawer-status">
+          <span>Column</span>
+          <select
+            id="drawer-status"
+            className="input"
+            value={ticket.status}
+            onChange={(e) => onMove(e.target.value as TicketStatus)}
+          >
+            {BOARD_COLUMNS.map((c) => (
+              <option key={c.status} value={c.status}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="drawer-field" htmlFor="drawer-priority">
+          <span>Priority</span>
+          <select
+            id="drawer-priority"
+            className="input"
+            value={priority}
+            onChange={(e) => setPriority(Number(e.target.value))}
+          >
+            {BOARD_PRIORITIES.map((label, value) => (
+              <option key={label} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <label className="drawer-label" htmlFor="drawer-dep-add">
-        Depends on
-      </label>
       <div className="dep-editor">
-        {ticket.dependsOn.length === 0 && <p className="muted small">No dependencies.</p>}
-        <ul className="dep-list">
-          {ticket.dependsOn.map((id) => {
-            const dep = byId.get(id);
-            return (
-              <li key={id} className="dep-item">
-                {dep ? (
-                  <>
-                    <Link
-                      href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`}
-                      className="mono dep-key"
-                    >
-                      {dep.key}
-                    </Link>
-                    <span className="dep-title">{dep.title}</span>
-                    <span className="badge badge-soft">{dep.status.replace('_', ' ')}</span>
-                  </>
-                ) : (
-                  <span className="mono muted dep-title">{id}</span>
-                )}
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label={`Remove dependency ${dep?.key ?? id}`}
-                  disabled={!!busyAction}
-                  onClick={() => void setDependsOn(ticket.dependsOn.filter((d) => d !== id))}
-                >
-                  {ico(X)}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <label className="drawer-label" htmlFor="drawer-dep-add">
+          Depends on
+        </label>
+        {ticket.dependsOn.length > 0 && (
+          <ul className="dep-list">
+            {ticket.dependsOn.map((id) => {
+              const dep = byId.get(id);
+              return (
+                <li key={id} className="dep-item">
+                  {dep ? (
+                    <>
+                      <Link
+                        href={`/projects/${ticket.projectId}/board?ticket=${dep.id}`}
+                        className="mono dep-key"
+                      >
+                        {dep.key}
+                      </Link>
+                      <span className="dep-title">{dep.title}</span>
+                      <span className="badge badge-soft">{dep.status.replace('_', ' ')}</span>
+                    </>
+                  ) : (
+                    <span className="mono muted dep-title">{id}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={`Remove dependency ${dep?.key ?? id}`}
+                    disabled={!!busyAction}
+                    onClick={() => void setDependsOn(ticket.dependsOn.filter((d) => d !== id))}
+                  >
+                    {ico(X)}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
         <select
           id="drawer-dep-add"
           className="input"
@@ -181,7 +187,7 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
           disabled={!!busyAction || candidates.length === 0}
           onChange={(e) => e.target.value && void setDependsOn([...ticket.dependsOn, e.target.value])}
         >
-          <option value="">{candidates.length === 0 ? 'No tickets to add' : 'Add a dependency…'}</option>
+          <option value="">{candidates.length === 0 ? 'None available' : 'Add dependency…'}</option>
           {candidates.map((c) => (
             <option key={c.id} value={c.id}>
               {c.key} {c.title}
@@ -194,24 +200,6 @@ export function DrawerDetailsSection({ ctx }: { ctx: DrawerCtx }) {
           </p>
         )}
       </div>
-
-      <label className="drawer-label" htmlFor="drawer-status">
-        Column
-      </label>
-      <div id="drawer-status" className="segmented segmented-wrap" role="radiogroup" aria-label="Column">
-        {BOARD_COLUMNS.map((c) => (
-          <button
-            key={c.status}
-            type="button"
-            role="radio"
-            aria-checked={ticket.status === c.status}
-            className={ticket.status === c.status ? 'active' : ''}
-            onClick={() => onMove(c.status)}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
-    </>
+    </section>
   );
 }

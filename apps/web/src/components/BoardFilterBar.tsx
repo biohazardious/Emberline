@@ -55,7 +55,6 @@ export function SearchInput({
           type="button"
           className="icon-btn search-field-clear"
           aria-label={`Clear ${ariaLabel.toLowerCase()}`}
-          title="Clear search (Esc)"
           onClick={() => onChange('')}
         >
           <X className="icon" aria-hidden />
@@ -100,7 +99,7 @@ export function BoardFilterBar({
         id="board-search"
         className="board-search"
         ariaLabel="Filter tickets"
-        placeholder="Filter by key, title, branch, label…"
+        placeholder="Filter tickets…"
         value={filter.query}
         onChange={(query) => onChange({ ...filter, query })}
       />
@@ -115,7 +114,6 @@ export function BoardFilterBar({
                 type="button"
                 className={`chip-btn${pressed ? ' chip-on' : ''}`}
                 aria-pressed={pressed}
-                title={p.hint}
                 onClick={() => onChange({ ...filter, personas: toggled(filter.personas, p.id) })}
               >
                 {p.shortLabel}
