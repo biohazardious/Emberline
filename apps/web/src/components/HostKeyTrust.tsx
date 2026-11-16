@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { hostLabel, TRUSTED_HOSTS_HREF } from '../sshKeys';
+import './project-settings-ux.css';
 
 /**
  * "Trust this host key?" for a server Emberline does not know (`host_key_unknown`): the fingerprint
@@ -49,10 +50,9 @@ export function HostKeyTrust({
         </strong>
       </p>
       <p className="small">
-        Emberline has not connected to <span className="mono">{hostLabel(hostKey)}</span> before. It offers a{' '}
+        <span className="mono">{hostLabel(hostKey)}</span> offers a{' '}
         <span className="mono">{hostKey.keyType}</span> key. Compare it with the fingerprint the server&apos;s
-        admin publishes (on your own server: <span className="mono">ssh-keygen -lf</span> on its host key
-        file), and trust it only if they match.
+        admin publishes and trust it only if they match.
       </p>
       <div className="actions">
         <button
@@ -106,8 +106,7 @@ export function HostKeyChangedNote({
         </p>
       )}
       <p className="small">
-        Someone may be between Emberline and the server, or the server&apos;s key was replaced. Ask the
-        server&apos;s admin. If the key really changed, remove the old one in{' '}
+        Verify with the server&apos;s admin. If the key was replaced, remove the old one in{' '}
         {newTab ? (
           <a href={TRUSTED_HOSTS_HREF} target="_blank" rel="noreferrer">
             {where}
@@ -115,8 +114,7 @@ export function HostKeyChangedNote({
         ) : (
           <Link href={TRUSTED_HOSTS_HREF}>{where}</Link>
         )}{' '}
-        and try again. For GitHub, GitLab and Bitbucket Emberline uses its own list: update Emberline when
-        they announce a new key.
+        and try again.
       </p>
     </div>
   );

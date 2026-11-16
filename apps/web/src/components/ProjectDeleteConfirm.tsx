@@ -2,6 +2,8 @@ import type { Project } from '@emberline/protocol';
 import { useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { projectDeleteChoices } from '../projectDelete';
+import './project-settings-ux.css';
+import { Disclosure } from './ui/Disclosure';
 
 export interface ProjectDeleted {
   ok: boolean;
@@ -58,10 +60,15 @@ export function ProjectDeleteConfirm({
       <p>
         <strong>Remove “{project.name}”?</strong>
       </p>
-      <p className="small">{keep.description}</p>
       <p className="small">
-        <strong>{purge.label}:</strong> {purge.description}
+        {keep.label} keeps <span className="mono">{project.path}</span>; {purge.label} deletes it.
       </p>
+      <Disclosure label="Details">
+        <p className="small">{keep.description}</p>
+        <p className="small">
+          <strong>{purge.label}:</strong> {purge.description}
+        </p>
+      </Disclosure>
       {error && (
         <p className="form-error small" role="alert">
           {error}

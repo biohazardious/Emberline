@@ -1,0 +1,115 @@
+/* Project wizard M6 layout, step guidance, progress steps and compact summary styles. */
+
+.wizard-step-lead {
+  margin: -6px 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.wizard-card-hint,
+.wizard-card-best,
+.wizard-card-tradeoff,
+.wizard-dim-affects,
+.wizard-dim-hint,
+.wizard-dim-edited,
+.wizard-file-preview,
+.wizard-tail {
+  font-size: 0.8rem;
+}
+
+.wizard-rail-index {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-progress-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-progress-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.wizard-progress-item-active {
+  border-color: var(--ember-1);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wizard-progress-item-done {
+  border-color: color-mix(in hsl, var(--ok) 55%, var(--border));
+  color: var(--ok);
+}
+
+.wizard-progress-item-failed {
+  border-color: color-mix(in hsl, var(--bad) 55%, var(--border));
+  color: var(--bad);
+}
+
+.wizard-progress-state {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.wizard-summary-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0 12px;
+  min-width: 0;
+}
+
+.wizard-summary-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font-size: 0.82rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-preset-details {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.wizard-preset-details dt {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wizard-preset-details dd {
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+
+.wizard-char-count {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .wizard-progress-steps {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

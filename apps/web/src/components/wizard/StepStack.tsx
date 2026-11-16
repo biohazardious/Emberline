@@ -10,6 +10,7 @@ import {
   VERSION_POLICIES,
 } from '@emberline/protocol';
 import { type Dispatch, useState } from 'react';
+import { Disclosure } from '../ui/Disclosure';
 import {
   branchProblem,
   choiceHint,
@@ -38,7 +39,6 @@ function DimensionRow({
 }) {
   const id = `wizard-dim-${dimension.id}`;
   const options = optionsForType(dimension.id, type);
-  // A value from a draft or detection that is not in the list still shows as itself.
   const current =
     typeof value === 'string' && value !== 'none' && value !== 'agent'
       ? findOption(dimension.id, value)
@@ -48,7 +48,6 @@ function DimensionRow({
   const other = typeof value === 'object' ? value.other : null;
   const problem = other !== null && other.length > 0 ? choiceProblem(value) : null;
   const typeLabel = getProjectType(type)?.label ?? type;
-
   const hint = choiceHint(dimension.id, value);
 
   return (
@@ -58,16 +57,13 @@ function DimensionRow({
           {dimension.label}
           {edited && <span className="wizard-dim-edited">changed</span>}
         </label>
-        <p id={`${id}-affects`} className="wizard-dim-affects">
-          {dimension.affects}
-        </p>
       </div>
       <div className="wizard-dim-control">
         <select
           id={id}
           className="input"
           value={selectValue}
-          aria-describedby={hint ? `${id}-affects ${id}-hint` : `${id}-affects`}
+          aria-describedby={hint ? `${id}-hint` : undefined}
           data-autofocus={autoFocus ? '' : undefined}
           onChange={(e) => {
             const v = e.target.value;
@@ -94,6 +90,9 @@ function DimensionRow({
             {hint}
           </p>
         )}
+        <Disclosure label="Details">
+          <p>{dimension.affects}</p>
+        </Disclosure>
         {other !== null && (
           <>
             <input
@@ -126,7 +125,6 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
   const basic = STACK_DIMENSIONS.filter((d) => !d.advanced);
   const advanced = STACK_DIMENSIONS.filter((d) => d.advanced);
   const branch = branchProblem(state.defaultBranch);
-  // Open on arrival when something inside needs attention; the person toggles it after that.
   const [advancedOpen, setAdvancedOpen] = useState(
     () => Boolean(branch) || state.dirty.some((id) => advanced.some((d) => d.id === id)),
   );
@@ -144,7 +142,7 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
 
   return (
     <div className="wizard-step">
-      {imported ? (
+      {imported && (
         <div className="field">
           <label htmlFor="wizard-import-type">Project type</label>
           <select
@@ -160,12 +158,7 @@ export function StepStack({ state, dispatch }: { state: WizardState; dispatch: D
               </option>
             ))}
           </select>
-          <p className="muted small">Detected from the repository; the options below are scoped to it.</p>
         </div>
-      ) : (
-        <p className="muted small">
-          Filled from the preset. What you change here stays when you pick another type or preset.
-        </p>
       )}
 
       <div className="wizard-dims">{basic.map((d, i) => row(d, !imported && i === 0))}</div>

@@ -44,14 +44,15 @@ describe('static render', () => {
       '/api/projects/p1/repository': status,
       '/api/forge/accounts': accounts,
     });
-    expect(html).toContain('Push main to origin');
-    // Commit identity, Connect and Create are there (only with the cached status) and start closed.
-    expect(html.match(/<details class="repo-form">/g)).toHaveLength(3);
-    expect(html).toContain('Keep pushed pushes to');
-    expect(html).toContain('Keep pushed pushes main to emberline/integration after each merge');
-    expect(html).toContain('Push main to origin');
+    expect(html).toContain('Push main');
+    // Remote, Working branch, Push target and Commit identity render as rows with Edit; forms start closed.
+    expect(html).toContain('Remote');
+    expect(html).toContain('Working branch');
+    expect(html).toContain('Push target');
+    expect(html).toContain('Commit identity');
+    expect(html).toContain('emberline/integration');
+    expect(html).not.toContain('Keep pushed pushes to');
     expect(html).toContain('href="/projects/p1/git"');
-    expect(html).toContain('Open the Git page');
   });
 
   it('follows the working branch: no push target, no Push main, a line pointing to the Git page', () => {
@@ -64,9 +65,10 @@ describe('static render', () => {
     );
     // Said once, not a second time under the actions.
     expect(html.split('is pushed by Promote and Release').length).toBe(2);
+    expect(html).not.toContain('Push target');
     expect(html).not.toContain('Keep pushed pushes to');
     expect(html).not.toContain('An integration branch');
-    expect(html).not.toContain('Push main to origin');
+    expect(html).not.toContain('Push main');
     expect(html).toContain('Keep pushed');
   });
 

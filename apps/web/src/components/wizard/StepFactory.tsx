@@ -8,8 +8,9 @@ import {
 } from '@emberline/protocol';
 import type { Dispatch, MouseEvent } from 'react';
 import { Link } from 'wouter';
-import { gateChoice, GATE_LABELS } from '../../projectSettings';
+import { GATE_LABELS, gateChoice } from '../../projectSettings';
 import { GateRadios } from '../ProjectSettingsPanel';
+import { Disclosure } from '../ui/Disclosure';
 import { choiceLabel, gateOptions, isImport, type WizardAction, type WizardState } from './wizardLogic';
 
 /** The personas the created tickets start with. */
@@ -45,14 +46,12 @@ export function StepFactory({
     {
       value: true,
       label: `${verb} and start factory`,
-      hint: imported
-        ? 'Adds a [Factory] ticket from the vision and starts it.'
-        : 'Starts the Bootstrap ticket now; the product owner takes the vision once it is merged.',
+      hint: imported ? 'Starts a [Factory] ticket from the vision.' : 'Starts the Bootstrap ticket now.',
     },
     {
       value: false,
       label: `${verb} only`,
-      hint: imported ? 'Adopts the project and starts nothing.' : 'Creates the tickets and starts nothing.',
+      hint: imported ? 'Adopts the project without starting a run.' : 'Creates tickets without starting.',
     },
   ];
 
@@ -62,10 +61,6 @@ export function StepFactory({
         <h4 id="wizard-gates-title" className="wizard-legend">
           Gates
         </h4>
-        <p className="muted small">
-          Inherit follows the global setting, including later changes to it. Gates are stored in Emberline,
-          never in the repository.
-        </p>
         {factoryError && (
           <p className="muted small" role="alert">
             Couldn&apos;t load the global gate values ({factoryError}).
@@ -91,6 +86,12 @@ export function StepFactory({
             </li>
           ))}
         </ul>
+        <Disclosure label="Details">
+          <p>
+            Inherit follows the global setting in Settings, including later changes to it. Gates are stored in
+            Emberline, never in the repository.
+          </p>
+        </Disclosure>
       </section>
 
       <section className="wizard-section" aria-labelledby="wizard-deploy-title">
@@ -108,13 +109,15 @@ export function StepFactory({
             Edit
           </button>
         </div>
-        <p className="muted small">
-          {state.choices.deploy === 'none'
-            ? 'No deploy ticket.'
-            : imported
-              ? 'Recorded in the project files; the agent prepares it when you ask.'
-              : 'A Deploy ticket after Bootstrap prepares config and docs for it, with no credentials in the repository.'}
-        </p>
+        <Disclosure label="Details">
+          <p>
+            {state.choices.deploy === 'none'
+              ? 'No deploy ticket.'
+              : imported
+                ? 'Recorded in the project files; the agent prepares it when you ask.'
+                : 'A Deploy ticket after Bootstrap prepares config and docs for it, with no credentials in the repository.'}
+          </p>
+        </Disclosure>
       </section>
 
       <fieldset className="wizard-fieldset">
@@ -148,7 +151,7 @@ export function StepFactory({
             onChange={(e) => dispatch({ type: 'field', field: 'vision', value: e.target.value })}
           />
           <p id="wizard-import-vision-hint" className="muted small">
-            What to build next in this repository. Starting the factory needs it.
+            What to build next in this repository (required to start the factory).
           </p>
         </div>
       ) : (
@@ -165,29 +168,30 @@ export function StepFactory({
         <h4 id="wizard-routes-title" className="wizard-legend">
           Routes
         </h4>
-        {factory ? (
-          <dl className="wizard-routes">
-            {CHAIN_PERSONAS.filter((p) => !imported || p.id !== 'architect').map((p) => (
-              <div key={p.id}>
-                <dt>
-                  {p.label} <span className="muted">· {p.runs}</span>
-                </dt>
-                <dd className="mono">
-                  {(factory.personaRoutes[p.id] ?? []).map(routeLabel).join(' → ') || 'Not set'}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        ) : (
-          !factoryError && <p className="muted small">Loading the routes…</p>
-        )}
         <p className="muted small">
-          Routes are global.{' '}
+          Global persona routing ·{' '}
           <Link href="/settings" onClick={onSettings}>
             Change them in Settings
-          </Link>{' '}
-          (closes the wizard; you can restore it later).
+          </Link>
         </p>
+        <Disclosure label="Details">
+          {factory ? (
+            <dl className="wizard-routes">
+              {CHAIN_PERSONAS.filter((p) => !imported || p.id !== 'architect').map((p) => (
+                <div key={p.id}>
+                  <dt>
+                    {p.label} <span className="muted">· {p.runs}</span>
+                  </dt>
+                  <dd className="mono">
+                    {(factory.personaRoutes[p.id] ?? []).map(routeLabel).join(' → ') || 'Not set'}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            !factoryError && <p className="muted small">Loading the routes…</p>
+          )}
+        </Disclosure>
       </section>
     </div>
   );

@@ -5,6 +5,7 @@ import { api, errorMessage } from '../../api';
 import { useApi } from '../../hooks/useApi';
 import { OWN_KEY_BUTTON, OWN_KEY_LABEL, SHARED_KEY_HINT, SHARED_KEY_LABEL } from '../../sshKeys';
 import { SshKeyLine } from '../SshKeyLine';
+import { Disclosure } from '../ui/Disclosure';
 import { repoIsSsh, type WizardAction, type WizardState } from './wizardLogic';
 
 const SSH_KEY_URL = '/api/ssh-key';
@@ -50,8 +51,7 @@ function SshKeyChoiceBox({ state, dispatch }: { state: WizardState; dispatch: Di
             <strong>{OWN_KEY_LABEL}</strong>
           </p>
           <p className="muted small">
-            Emberline makes the key when you press Create the key, and shows its public key to add to the
-            repository as a deploy key. The clone starts when you say so.
+            Creates a deploy key for this repository; the clone starts after you add it.
           </p>
           <div className="actions">
             <button type="button" className="btn btn-sm" onClick={() => choose('shared')}>
@@ -79,15 +79,14 @@ function SshKeyChoiceBox({ state, dispatch }: { state: WizardState; dispatch: Di
               {OWN_KEY_BUTTON}
             </button>
           </SshKeyLine>
-          <p className="muted small">{SHARED_KEY_HINT}</p>
+          <Disclosure label="Details">
+            <p>{SHARED_KEY_HINT}</p>
+          </Disclosure>
         </>
       ) : (
         <>
           <p>Emberline has no SSH key yet.</p>
-          <p className="muted small">
-            Create the shared key (every project that uses it reaches its ssh repository with it), or a key
-            for this project only (a deploy key for this one repository).
-          </p>
+          <p className="muted small">Create the shared key or a deploy key for this project only.</p>
           <div className="actions">
             <button
               type="button"

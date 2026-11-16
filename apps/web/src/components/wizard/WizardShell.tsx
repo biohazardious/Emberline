@@ -10,32 +10,30 @@ import type {
   WorkspaceFoldersResponse,
 } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, X } from 'lucide-react';
 import { type MouseEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../../api';
 import { trapTab } from '../../focusTrap';
 import { useApi } from '../../hooks/useApi';
 import { ImportProgress } from './ImportProgress';
+import { materialsErrorField, materialsErrorMessage } from './materials';
 import { StepFactory } from './StepFactory';
 import { StepStack } from './StepStack';
 import { StepRepo, StepStart } from './StepStart';
 import { StepSummary, useSummaryPreview } from './StepSummary';
 import { StepType } from './StepType';
-import { materialsErrorField, materialsErrorMessage } from './materials';
 import { useWizardState } from './useWizardState';
+import { stepGuidance, WizardDoneView, WizardFooter, WizardRail, WizardTopBar } from './WizardChrome';
 import {
   buildAdoptBody,
   buildCreateBody,
   buildCreateBodyWithFiles,
-  canVisit,
   hasImportableFolders,
+  importWaitHint,
   isDirty,
   isImport,
   isNameConflict,
-  isStepValid,
   nextStep,
-  importWaitHint,
   previousStep,
   repoIsSsh,
   repoNextLabel,
@@ -45,6 +43,7 @@ import {
   stepProblem,
   stepsFor,
 } from './wizardLogic';
+import './wizard-ux.css';
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -62,7 +61,6 @@ interface Props {
 
 /** The one project wizard: new from a preset, blank, import from a Git URL or a workspace folder. */
 export function ProjectWizard(props: Props) {
-  // Unmounting on close resets every piece of state.
   return props.open ? <WizardShell {...props} /> : null;
 }
 
@@ -72,7 +70,7 @@ function useWorkspaceFolders(): WorkspaceFolder[] {
     let cancelled = false;
     api<WorkspaceFoldersResponse>('/api/workspaces/folders').then(
       (res) => !cancelled && setFolders(res.folders),
-      () => undefined, // No list, no folder option.
+      () => undefined,
     );
     return () => {
       cancelled = true;
@@ -90,11 +88,8 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const [done, setDone] = useState<{ name: string; warning: string } | null>(null);
-  /** The own key the create made (`awaiting_key`): the import step starts by showing it. */
   const [importSshKey, setImportSshKey] = useState<ImportSshKey | null | undefined>(undefined);
-  /** The import step waits for the project's key (Clone now), not for an inspection. */
   const [waitingForKey, setWaitingForKey] = useState(false);
-  // The shared key, for an ssh address only (the Repository step shows it; same cache as there).
   const queryClient = useQueryClient();
   const sharedKey = useQuery({
     queryKey: ['api', '/api/ssh-key'],
@@ -105,13 +100,11 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const bodyRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const focusNext = useRef<string | null>(null);
-  /** Bumped to re-run the initial-focus pass when the step stays but its controls change. */
   const [focusTick, setFocusTick] = useState(0);
   const refocus = (id?: string) => {
     focusNext.current = id ?? null;
     setFocusTick((t) => t + 1);
   };
-  /** Where to go after a confirmed close (the Settings link). */
   const leaveTo = useRef<string | null>(null);
   const [, navigate] = useLocation();
 
@@ -119,13 +112,11 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
   const index = steps.indexOf(state.step);
   const imported = isImport(state.source);
 
-  // Focus goes back to the opener when the wizard closes.
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => opener?.focus();
   }, []);
 
-  // Initial focus per step: a requested field, else the step's [data-autofocus] control, else its heading.
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
@@ -137,7 +128,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     (requested ?? marked ?? headingRef.current)?.focus();
   }, [state.step, done, state.importProjectId, focusTick]);
 
-  // Focus never rests outside the dialog: a removed or disabled control drops it to the body.
   useEffect(() => {
     const dialog = dialogRef.current;
     const active = document.activeElement;
@@ -163,7 +153,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     if (to) navigate(to);
   };
 
-  /** Escape, the backdrop, the close button and the Settings link: a dirty wizard asks first. */
   const requestClose = () => {
     if (busy) {
       leaveTo.current = null;
@@ -185,7 +174,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     requestClose();
   };
 
-  // Escape and the Tab trap listen on the document, so they work even when focus has slipped out.
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandler.current = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -217,7 +205,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
       setImportSshKey(res.importStatus === 'awaiting_key' ? (res.sshKey ?? null) : undefined);
       dispatch({ type: 'importCreated', projectId: res.project.id });
     } catch (err) {
-      // The shared key went away meanwhile: the step shows its two ways to get one again.
       if (err instanceof ApiRequestError && err.code === 'ssh_key_missing')
         void queryClient.invalidateQueries({ queryKey: ['api', '/api/ssh-key'] });
       if (isNameConflict(err)) {
@@ -242,9 +229,7 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
           )
         : await api<CreateProjectResponse>('/api/projects', 'POST', await buildCreateBodyWithFiles(state));
       const name = state.name.trim();
-      // The project exists now: a failing refresh must not look like a failed create.
       await Promise.resolve(onCreated(res.project)).catch(() => undefined);
-      // Reset only now, together with the close or the warning view: no flash of the Start step.
       finish();
       if (res.warning) setDone({ name, warning: res.warning });
       else onClose();
@@ -299,7 +284,6 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
     [dispatch, onProjectsChanged],
   );
 
-  // A shared key that could not be read does not block: the step shows the error, and core refuses a missing key.
   const problem =
     importWaitHint(state, waitingForKey) ??
     stepProblem(state, state.step) ??
@@ -340,74 +324,29 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
       }}
     >
       <div ref={dialogRef} className="wizard" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
-        <header className="wizard-top">
-          <div className="wizard-top-title">
-            <h2 id="wizard-title">New project</h2>
-            {!done && (
-              <span className="wizard-top-step muted small">
-                Step {index + 1} of {steps.length} · {stepLabel(state.step, state.source)}
-              </span>
-            )}
-          </div>
-          <button
-            id="wizard-close"
-            type="button"
-            className="icon-btn"
-            aria-label="Close"
-            onClick={requestClose}
-          >
-            <X className="icon" aria-hidden />
-          </button>
-        </header>
-
-        {!done && (
-          <nav className="wizard-rail" aria-label="Wizard steps">
-            <ol>
-              {steps.map((step, i) => {
-                const current = step === state.step;
-                const complete = i < state.furthest && isStepValid(state, step) && !current;
-                return (
-                  <li key={step}>
-                    <button
-                      type="button"
-                      className={`wizard-rail-step${current ? ' current' : ''}${complete ? ' complete' : ''}`}
-                      aria-current={current ? 'step' : undefined}
-                      disabled={busy !== null || (!current && !canVisit(state, step))}
-                      onClick={() => go(step)}
-                    >
-                      <span className="wizard-rail-index" aria-hidden>
-                        {complete ? <Check className="icon" /> : i + 1}
-                      </span>
-                      <span>{stepLabel(step, state.source)}</span>
-                      {complete && <span className="sr-only"> (done)</span>}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
-        )}
-
+        <WizardTopBar
+          done={done !== null}
+          index={index}
+          total={steps.length}
+          step={state.step}
+          source={state.source}
+          onClose={requestClose}
+        />
+        {!done && <WizardRail steps={steps} state={state} busy={busy} onSelectStep={go} />}
         <div className="wizard-body" ref={bodyRef}>
           {done ? (
-            <div className="wizard-step">
-              <h3 className="wizard-step-title" tabIndex={-1} ref={headingRef}>
-                {done.name} was created
-              </h3>
-              <p className="banner banner-warn" role="alert">
-                {done.warning}
-              </p>
-              <div className="actions">
-                <button type="button" className="btn btn-primary" data-autofocus="" onClick={onClose}>
-                  Close
-                </button>
-              </div>
-            </div>
+            <WizardDoneView
+              name={done.name}
+              warning={done.warning}
+              headingRef={headingRef}
+              onClose={onClose}
+            />
           ) : (
             <>
               <h3 className="wizard-step-title" tabIndex={-1} ref={headingRef}>
                 {stepLabel(state.step, state.source)}
               </h3>
+              <p className="wizard-step-lead">{stepGuidance(state.step, state.source)}</p>
               {state.step === 'start' && (
                 <StepStart
                   state={state}
@@ -460,57 +399,21 @@ function WizardShell({ runnerDown, onClose, onCreated, onProjectsChanged }: Prop
             </>
           )}
         </div>
-
         {!done && (
-          <footer className="wizard-foot">
-            {confirmClose ? (
-              <div className="wizard-confirm" role="alert">
-                <span className="small">
-                  {state.importProjectId !== null
-                    ? 'Close the wizard? The imported project stays in your list, without Emberline files.'
-                    : 'Discard this project setup? You can restore it the next time you open the wizard.'}
-                </span>
-                <div className="actions">
-                  <button type="button" className="btn btn-sm" onClick={close}>
-                    {state.importProjectId !== null ? 'Close' : 'Discard'}
-                  </button>
-                  <button type="button" className="btn btn-sm btn-primary" autoFocus onClick={keepEditing}>
-                    Keep editing
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                {actionError && (
-                  <p className="form-error wizard-foot-error" role="alert">
-                    {actionError}
-                  </p>
-                )}
-                <p id="wizard-next-hint" className="wizard-hint muted small" aria-live="polite">
-                  {hint}
-                </p>
-                <div className="wizard-foot-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={busy !== null || back === null}
-                    onClick={() => back && go(back)}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={nextDisabled}
-                    aria-describedby={hint ? 'wizard-next-hint' : undefined}
-                    onClick={onNext}
-                  >
-                    {nextLabel}
-                  </button>
-                </div>
-              </>
-            )}
-          </footer>
+          <WizardFooter
+            confirmClose={confirmClose}
+            importProjectId={state.importProjectId}
+            actionError={actionError}
+            hint={hint}
+            busy={busy}
+            back={back}
+            nextDisabled={nextDisabled}
+            nextLabel={nextLabel}
+            onConfirmClose={close}
+            onKeepEditing={keepEditing}
+            onBack={() => back && go(back)}
+            onNext={onNext}
+          />
         )}
       </div>
     </div>

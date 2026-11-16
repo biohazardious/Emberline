@@ -1,5 +1,6 @@
 import { Upload } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, type DragEvent, useState } from 'react';
+import { Disclosure } from '../ui/Disclosure';
 import { MaterialList } from './MaterialList';
 import {
   addMaterials,
@@ -80,10 +81,9 @@ export function ReferenceMaterial({
           </label>
         </div>
         <p id="wizard-materials-hint" className="muted small">
-          Images (PNG, JPEG, WebP, GIF), PDFs and other files such as design exports, up to 10 MB each. They
-          are committed to docs/reference/ in the new project.
+          Images, PDFs and design exports up to 10 MB each (committed to docs/reference/).
         </p>
-        <p id="wizard-materials-cap" className="muted small" aria-live="polite">
+        <p id="wizard-materials-cap" className="muted small wizard-char-count" aria-live="polite">
           {capLine(state.materials)}
         </p>
         {toAddAgain.length > 0 && (
@@ -127,9 +127,11 @@ export function ReferenceMaterial({
           onChange={(e) => dispatch({ type: 'field', field: 'referenceUrlsText', value: e.target.value })}
         />
         <p id="wizard-links-hint" className="muted small">
-          One link per line, starting with http:// or https://, with a short note after it if it helps, for
-          example: https://example.com like this one. Emberline never opens these links.
+          One http(s):// link per line, with an optional note after a space.
         </p>
+        <Disclosure label="Details">
+          <p>Example: https://example.com like this one. Emberline never opens these links.</p>
+        </Disclosure>
         {showLinkErrors && (
           <ul id="wizard-links-errors" className="form-error" role="alert">
             {linkProblems.map((p, i) => (

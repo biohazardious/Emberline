@@ -1,113 +1,48 @@
-import type {
-  ForgeAccountsResponse,
-  ForgeOwner,
-  HostKeyDetails,
-  ForgeOwnersResponse,
-  Project,
-  RepositoryStatus,
-  UpdateRepositoryBody,
-} from '@emberline/protocol';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import type { Project, RepositoryStatus, UpdateRepositoryBody } from '@emberline/protocol';
+import { useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { FORGE_ACCOUNTS_HREF, PROVIDER_LABEL, accountHost } from '../forgeAccounts';
+import { FORGE_ACCOUNTS_HREF } from '../forgeAccounts';
 import { useApi } from '../hooks/useApi';
 import {
   accountText,
-  connectPrefill,
-  createRepoEnabled,
   hasWorkingBranch,
+  keepPushedText,
   lastPushText,
   mainStateText,
   mainTipText,
-  ownerAfterLoad,
   originCredentialsText,
   pushMainBlocked,
-  repoErrorForm,
   replaceOriginQuestion,
+  repoErrorForm,
 } from '../repository';
-import { hostKeyOf, SSH_KEY_HREF } from '../sshKeys';
-import { HostKeyChangedNote, HostKeyTrust } from './HostKeyTrust';
+import { hostKeyOf } from '../sshKeys';
 import { ImportRecovery } from './ImportRecovery';
 import { ProjectSshKey } from './ProjectSshKey';
+import './project-settings-ux.css';
+import {
+  type RepoError,
+  type RepoForm,
+  RepositoryRemoteForms,
+  SshProblemHelp,
+} from './projectSettings/RepositoryRemoteForms';
 import { CommitIdentityFields } from './RepositoryCommitIdentity';
 import { PushTargetFields } from './RepositoryPushTarget';
+import { SettingRow } from './ui/SettingRow';
+import { Switch } from './ui/Switch';
 
-type RepoForm = 'connect' | 'create' | 'actions';
-interface RepoError {
-  form: RepoForm;
-  text: string;
-  /** The API's code: an ssh problem gets its own help below the message. */
-  code?: string;
-  hostKey?: HostKeyDetails | null;
-}
-
-/** Help for an ssh problem a remote operation hit: trust an unknown host key (then run it again), a changed one, no key. */
-function SshProblemHelp({ error, onTrusted }: { error: RepoError; onTrusted: () => void }) {
-  if (error.code === 'host_key_unknown' && error.hostKey)
-    return <HostKeyTrust hostKey={error.hostKey} trustLabel="Trust and try again" onTrusted={onTrusted} />;
-  if (error.code === 'host_key_changed') return <HostKeyChangedNote hostKey={error.hostKey} />;
-  if (error.code === 'ssh_key_missing')
-    return (
-      <p className="muted small">
-        Choose or create this project&apos;s key under SSH key above, or create the shared key in{' '}
-        <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>.
-      </p>
-    );
-  return null;
-}
-
-/** Project settings → Repository: origin, the account used, main against origin, and the person's push. */
+/** Project settings → Repository: remote, working branch, push target, commit identity and SSH key. */
 export function RepositoryPanel({ project }: { project: Project }) {
   const base = `/api/projects/${project.id}/repository`;
   const status = useApi<RepositoryStatus>(base, 120_000);
-  const accounts = useApi<ForgeAccountsResponse>('/api/forge/accounts', 120_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<RepoError | null>(null);
+  const [editingRemote, setEditingRemote] = useState(false);
   /** The last operation, to run again once its server's host key is trusted. */
   const lastAction = useRef<{ key: string; send: (replace: boolean) => Promise<RepositoryStatus> } | null>(
     null,
   );
-  const [url, setUrl] = useState('');
-  const [accountId, setAccountId] = useState('');
-  // The owners belong to the account they were read for; a changed account never shows another's.
-  const [ownersOf, setOwnersOf] = useState<{ accountId: string; owners: ForgeOwner[] } | null>(null);
-  const [ownersError, setOwnersError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [owner, setOwner] = useState('');
-  const [name, setName] = useState(project.slug);
-  const [isPrivate, setIsPrivate] = useState(true);
-  const [description, setDescription] = useState('');
   const s = status.data;
-  const owners = ownersOf?.accountId === accountId ? ownersOf.owners : [];
-
-  useEffect(() => {
-    if (!accountId && accounts.data?.accounts[0]) setAccountId(accounts.data.accounts[0].id);
-  }, [accountId, accounts.data]);
-  const offeredOrigin = s ? connectPrefill(s) : null;
-  useEffect(() => {
-    // An origin set outside Emberline (or its clean URL, when it holds a token): offer it in
-    // Connect, which is what lets Emberline use it with the forge account.
-    if (offeredOrigin) setUrl((current) => current || offeredOrigin);
-  }, [offeredOrigin]);
-  useEffect(() => {
-    // Owners are read from the forge, so only once the person opens Create.
-    if (!createOpen || !accountId) return;
-    let live = true;
-    setOwnersError(null);
-    void api<ForgeOwnersResponse>(`/api/forge/accounts/${accountId}/owners`)
-      .then((res) => {
-        if (!live) return;
-        setOwnersOf({ accountId, owners: res.owners });
-        setOwner((current) => ownerAfterLoad(current, res.owners));
-      })
-      .catch((err: unknown) => {
-        if (live) setOwnersError(errorMessage(err));
-      });
-    return () => {
-      live = false;
-    };
-  }, [accountId, createOpen]);
 
   /** Runs a mutation; on origin_exists asks once and resends with replace. */
   const act = async (key: string, send: (replace: boolean) => Promise<RepositoryStatus>) => {
@@ -120,7 +55,7 @@ export function RepositoryPanel({ project }: { project: Project }) {
       } catch (err) {
         const question = replaceOriginQuestion(err);
         if (!question) throw err;
-        if (!window.confirm(question)) return; // cancelled: nothing changed, nothing to report
+        if (!window.confirm(question)) return;
         await send(true);
       }
     } catch (err) {
@@ -132,30 +67,9 @@ export function RepositoryPanel({ project }: { project: Project }) {
         hostKey: hostKeyOf(failure?.data),
       });
     } finally {
-      // The status shows what happened (also after a failed push), so always re-read it.
       await status.refresh();
       setBusy(null);
     }
-  };
-
-  const connect = (e: FormEvent) => {
-    e.preventDefault();
-    void act('connect', (replace) =>
-      api<RepositoryStatus>(`${base}/connect`, 'POST', { url: url.trim(), replace }),
-    );
-  };
-  const create = (e: FormEvent) => {
-    e.preventDefault();
-    void act('create', (replace) =>
-      api<RepositoryStatus>(`${base}/create`, 'POST', {
-        accountId,
-        owner,
-        name: name.trim(),
-        private: isPrivate,
-        description: description.trim() || undefined,
-        replace,
-      }),
-    );
   };
 
   const again = () => {
@@ -175,8 +89,12 @@ export function RepositoryPanel({ project }: { project: Project }) {
   const separate = s ? hasWorkingBranch(s) : false;
 
   return (
-    <section className="repo-block" aria-labelledby="repository-title">
-      <h3 id="repository-title">Repository</h3>
+    <section className="project-settings-section repo-block" aria-labelledby="repository-title">
+      <div className="project-settings-section-head">
+        <h3 id="repository-title" className="project-settings-section-title">
+          Repository
+        </h3>
+      </div>
       <ImportRecovery project={project} />
       {status.error !== undefined && !s && (
         <p className="banner banner-error" role="alert">
@@ -187,227 +105,158 @@ export function RepositoryPanel({ project }: { project: Project }) {
         </p>
       )}
       {s && (
-        <dl className="repo-status">
-          <dt>Origin</dt>
-          <dd className="mono">{s.originUrl ?? 'No remote yet'}</dd>
-          {account && (
-            <>
-              <dt>Account</dt>
-              <dd>
-                {account.text}
-                {account.addAccount && (
-                  <>
-                    {' · '}
-                    <Link href={FORGE_ACCOUNTS_HREF}>Add one in Settings</Link>
-                  </>
-                )}
-              </dd>
-            </>
-          )}
-          <dt>Main</dt>
-          <dd>
-            {s.isGitRepo && <span className="mono">{s.defaultBranch}</span>} {mainStateText(s)}
-          </dd>
-          {s.isGitRepo && tip && (
-            <>
-              <dt>Latest commit</dt>
-              <dd className="mono">{tip}</dd>
-            </>
-          )}
-        </dl>
-      )}
-      {s && <ProjectSshKey project={project} originUrl={s.originUrl ?? project.repoUrl} />}
-      {credentials && (
-        <p className="banner banner-warn" role="alert">
-          {credentials}
-        </p>
-      )}
-      {lastPush && (
-        <p className="banner banner-warn" role="alert">
-          {lastPush}
-        </p>
-      )}
-      {error?.form === 'actions' && (
-        <p className="banner banner-error" role="alert" id="repo-actions-error">
-          {error.text}
-        </p>
-      )}
-      {help('actions')}
-      {s?.isGitRepo && (
         <>
-          <div className="repo-actions">
-            {/* With a working branch the main workspace is on it, which Push main refuses: main is pushed by Promote and Release. */}
-            {!separate && (
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy !== null || blocked !== null}
-                aria-describedby={error?.form === 'actions' ? 'repo-actions-error' : undefined}
-                title={blocked ?? undefined}
-                onClick={() => void act('push', () => api<RepositoryStatus>(`${base}/push-main`, 'POST'))}
-              >
-                {busy === 'push' ? 'Pushing…' : 'Push main to origin'}
-              </button>
-            )}
-            <label className="review-checkbox-label">
-              <input
-                type="checkbox"
-                checked={s.keepMainPushed}
-                disabled={busy !== null}
-                onChange={(e) =>
-                  void act('keep', () =>
-                    api<RepositoryStatus>(base, 'PATCH', { keepMainPushed: e.target.checked }),
+          <div className="project-settings-rows">
+            <SettingRow
+              label="Remote"
+              summary={
+                <>
+                  <span className="mono">{s.originUrl ?? 'No remote yet'}</span>
+                  {account && (
+                    <>
+                      {' · '}
+                      {account.text}
+                      {account.addAccount && (
+                        <>
+                          {' · '}
+                          <Link href={FORGE_ACCOUNTS_HREF}>Add account</Link>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {s.isGitRepo ? (
+                    <>
+                      {' · '}
+                      <span className="mono">{s.defaultBranch}</span> ({mainStateText(s)})
+                    </>
+                  ) : (
+                    <> · {mainStateText(s)}</>
+                  )}
+                  {s.isGitRepo && !separate && blocked !== null ? <> · {blocked}</> : null}
+                </>
+              }
+              control={
+                <>
+                  {s.isGitRepo && !separate && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      disabled={busy !== null || blocked !== null}
+                      aria-describedby={error?.form === 'actions' ? 'repo-actions-error' : undefined}
+                      onClick={() =>
+                        void act('push', () => api<RepositoryStatus>(`${base}/push-main`, 'POST'))
+                      }
+                    >
+                      {busy === 'push' ? 'Pushing…' : 'Push main'}
+                    </button>
+                  )}
+                  {s.isGitRepo && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      disabled={busy !== null || !s.originUrl}
+                      onClick={() =>
+                        void act('refresh', () => api<RepositoryStatus>(`${base}/refresh`, 'POST'))
+                      }
+                    >
+                      {busy === 'refresh' ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                  )}
+                  {s.isGitRepo && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      aria-expanded={editingRemote}
+                      aria-label="Edit remote"
+                      onClick={() => setEditingRemote((v) => !v)}
+                    >
+                      {editingRemote ? 'Close' : 'Edit'}
+                    </button>
+                  )}
+                </>
+              }
+            />
+            {s.isGitRepo && editingRemote && (
+              <RepositoryRemoteForms
+                project={project}
+                status={s}
+                busy={busy}
+                error={error}
+                help={help}
+                onConnect={(url) =>
+                  void act('connect', (replace) =>
+                    api<RepositoryStatus>(`${base}/connect`, 'POST', { url, replace }),
+                  )
+                }
+                onCreate={(payload) =>
+                  void act('create', (replace) =>
+                    api<RepositoryStatus>(`${base}/create`, 'POST', { ...payload, replace }),
                   )
                 }
               />
-              Keep pushed
-            </label>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              disabled={busy !== null || !s.originUrl}
-              onClick={() => void act('refresh', () => api<RepositoryStatus>(`${base}/refresh`, 'POST'))}
-            >
-              {busy === 'refresh' ? 'Refreshing…' : 'Refresh'}
-            </button>
-          </div>
-          {/* With a working branch, PushTargetFields says where main is pushed from. */}
-          {!separate && (
-            <>
-              {blocked !== null && <p className="muted small">{blocked}</p>}
-              {blocked === null && tip && <p className="muted small">Pushes {tip}.</p>}
-            </>
-          )}
-          <p className="small">
-            <Link href={`/projects/${project.id}/git`}>Open the Git page</Link>
-          </p>
-          <PushTargetFields s={s} busy={busy !== null} onSave={saveSettings} />
-          <p className="muted small">Origin is read when you press Refresh, connect, create or push.</p>
-          <CommitIdentityFields s={s} busy={busy !== null} onSave={saveSettings} />
-          <details className="repo-form">
-            <summary>Connect an existing repository</summary>
-            <form className="form" onSubmit={connect}>
-              <input
-                className="input mono"
-                aria-label="Repository URL"
-                aria-invalid={error?.form === 'connect' || undefined}
-                aria-describedby={error?.form === 'connect' ? 'repo-connect-error' : undefined}
-                placeholder="https://github.com/you/app.git"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-              />
-              <button type="submit" className="btn btn-sm" disabled={busy !== null || !url.trim()}>
-                {busy === 'connect' ? 'Connecting…' : 'Connect'}
-              </button>
-              {error?.form === 'connect' && (
-                <p className="form-error" role="alert" id="repo-connect-error">
-                  {error.text}
-                </p>
-              )}
-              {help('connect')}
-            </form>
-          </details>
-          <details className="repo-form" onToggle={(e) => setCreateOpen(e.currentTarget.open)}>
-            <summary>Create a repository</summary>
-            {accounts.data && accounts.data.accounts.length === 0 ? (
-              <p className="muted">
-                Add a forge account in <Link href={FORGE_ACCOUNTS_HREF}>Settings → Forge accounts</Link>{' '}
-                first.
-              </p>
-            ) : (
-              <form className="form" onSubmit={create}>
-                {accounts.error !== undefined && !accounts.data && (
-                  <p className="form-error" role="alert">
-                    Could not load the forge accounts: {errorMessage(accounts.error)}{' '}
-                    <button type="button" className="btn btn-sm" onClick={() => void accounts.refresh()}>
-                      Retry
-                    </button>
-                  </p>
-                )}
-                {ownersError !== null && (
-                  <p className="form-error" role="alert">
-                    Could not load the owners: {ownersError}
-                  </p>
-                )}
-                <label>
-                  Account
-                  <select
-                    className="input"
-                    value={accountId}
-                    aria-invalid={error?.form === 'create' || undefined}
-                    aria-describedby={error?.form === 'create' ? 'repo-create-error' : undefined}
-                    onChange={(e) => setAccountId(e.target.value)}
-                  >
-                    {accounts.data?.accounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {PROVIDER_LABEL[a.provider]} · {accountHost(a)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Owner
-                  <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)}>
-                    {owners.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.name}
-                        {o.kind === 'organization' ? ' (organisation)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Name
-                  <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} />
-                </label>
-                <div className="segmented segmented-radios" role="radiogroup" aria-label="Visibility">
-                  {[
-                    { value: true, label: 'Private' },
-                    { value: false, label: 'Public' },
-                  ].map((o) => (
-                    <label key={o.label} className={isPrivate === o.value ? 'active' : ''}>
-                      <input
-                        type="radio"
-                        name="repo-visibility"
-                        checked={isPrivate === o.value}
-                        onChange={() => setIsPrivate(o.value)}
-                      />
-                      <span>{o.label}</span>
-                    </label>
-                  ))}
-                </div>
-                <label>
-                  Description (optional)
-                  <input
-                    className="input"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className="btn btn-sm"
-                  disabled={
-                    !createRepoEnabled({
-                      busy: busy !== null,
-                      accountId,
-                      owner,
-                      ownersAccountId: ownersOf?.accountId ?? null,
-                      name,
-                    })
-                  }
-                >
-                  {busy === 'create' ? 'Creating…' : 'Create and connect'}
-                </button>
-                {error?.form === 'create' && (
-                  <p className="form-error" role="alert" id="repo-create-error">
-                    {error.text}
-                  </p>
-                )}
-                {help('create')}
-              </form>
             )}
-          </details>
+            {s.isGitRepo && (
+              <SettingRow
+                label="Working branch"
+                summary={
+                  <>
+                    <span className="mono">{s.workingBranch}</span>
+                    {!separate && tip ? (
+                      <>
+                        {' · '}
+                        <span className="mono">{tip}</span>
+                      </>
+                    ) : null}
+                    {separate ? <> · {keepPushedText(s)}</> : null}
+                  </>
+                }
+                control={
+                  <>
+                    {separate && (
+                      <Switch
+                        checked={s.keepMainPushed}
+                        disabled={busy !== null}
+                        label="Keep pushed"
+                        onChange={(checked) =>
+                          void act('keep', () =>
+                            api<RepositoryStatus>(base, 'PATCH', { keepMainPushed: checked }),
+                          )
+                        }
+                      />
+                    )}
+                    <Link
+                      href={`/projects/${project.id}/git`}
+                      className="btn btn-sm btn-ghost"
+                      aria-label="Edit working branch"
+                    >
+                      Edit
+                    </Link>
+                  </>
+                }
+              />
+            )}
+            {s.isGitRepo && <PushTargetFields s={s} busy={busy !== null} onSave={saveSettings} />}
+            {s.isGitRepo && <CommitIdentityFields s={s} busy={busy !== null} onSave={saveSettings} />}
+          </div>
+          {credentials && (
+            <p className="banner banner-warn" role="alert">
+              {credentials}
+            </p>
+          )}
+          {lastPush && (
+            <p className="banner banner-warn" role="alert">
+              {lastPush}
+            </p>
+          )}
+          {error?.form === 'actions' && (
+            <p className="banner banner-error" role="alert" id="repo-actions-error">
+              {error.text}
+            </p>
+          )}
+          {help('actions')}
+          <div className="repo-ssh-wrap">
+            <ProjectSshKey project={project} originUrl={s.originUrl ?? project.repoUrl} />
+          </div>
         </>
       )}
     </section>

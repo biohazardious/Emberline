@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { type ChangeEvent, type Dispatch, useState } from 'react';
 import { errorMessage } from '../../api';
+import { Disclosure } from '../ui/Disclosure';
 import { ReferenceMaterial } from './ReferenceMaterial';
 import { nameProblem, type WizardAction, type WizardState } from './wizardLogic';
 
@@ -132,45 +133,52 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
                   <Icon className="icon" aria-hidden />
                   {t.label}
                 </span>
-                <span className="wizard-card-hint">{t.description}</span>
               </label>
             );
           })}
         </div>
+        <Disclosure label="Details">
+          <dl className="wizard-preset-details">
+            {PROJECT_TYPES.map((t) => (
+              <div key={t.id}>
+                <dt>{t.label}</dt>
+                <dd>{t.description}</dd>
+              </div>
+            ))}
+          </dl>
+        </Disclosure>
       </fieldset>
 
       {state.appType && (
         <fieldset className="wizard-fieldset">
           <legend className="wizard-legend">Preset</legend>
           <div className="wizard-cards wizard-cards-2">
-            {presets.map((p) => {
-              const guide = `wizard-preset-${p.id}`;
-              // The label names the preset; the guidance lines describe the radio. The radio still
-              // covers the whole card, so clicking the guidance selects it too.
-              return (
-                <div key={p.id} className="wizard-card">
-                  <label className="wizard-card-label">
-                    <input
-                      type="radio"
-                      name="wizard-preset"
-                      value={p.id}
-                      checked={state.presetId === p.id}
-                      aria-describedby={`${guide}-best ${guide}-tradeoff`}
-                      onChange={() => dispatch({ type: 'preset', presetId: p.id })}
-                    />
-                    <span className="wizard-card-title">{p.label}</span>
-                    <span className="wizard-card-hint">{p.description}</span>
-                  </label>
-                  <span id={`${guide}-best`} className="wizard-card-best">
-                    {p.bestFor}
-                  </span>
-                  <span id={`${guide}-tradeoff`} className="wizard-card-tradeoff">
-                    Trade-off: {p.tradeoff}
-                  </span>
-                </div>
-              );
-            })}
+            {presets.map((p) => (
+              <label key={p.id} className="wizard-card">
+                <input
+                  type="radio"
+                  name="wizard-preset"
+                  value={p.id}
+                  checked={state.presetId === p.id}
+                  onChange={() => dispatch({ type: 'preset', presetId: p.id })}
+                />
+                <span className="wizard-card-title">{p.label}</span>
+                <span className="wizard-card-hint">{p.description}</span>
+              </label>
+            ))}
           </div>
+          <Disclosure label="Details">
+            <dl className="wizard-preset-details">
+              {presets.map((p) => (
+                <div key={p.id}>
+                  <dt>{p.label}</dt>
+                  <dd>
+                    {p.bestFor} · Trade-off: {p.tradeoff}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </Disclosure>
         </fieldset>
       )}
 
@@ -189,12 +197,16 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
         <div id="wizard-vision-hint" className="wizard-vision-hint muted small">
           <p>
             {required
-              ? `The agent picks the stack from it, so say what the product does and for whom (at least ${VISION_MIN_LENGTH} characters${
+              ? `Describe what the product does and for whom (at least ${VISION_MIN_LENGTH} characters${
                   visionLength < VISION_MIN_LENGTH ? `, ${visionLength} so far` : ''
                 }).`
-              : 'What the product does and for whom. The product owner turns it into the first tickets.'}
+              : 'What the product does and for whom.'}
           </p>
-          {required && <p>Example: {VISION_EXAMPLE}</p>}
+          {required && (
+            <Disclosure label="Details">
+              <p>Example: {VISION_EXAMPLE}</p>
+            </Disclosure>
+          )}
         </div>
       </div>
 
@@ -226,7 +238,7 @@ export function StepType({ state, dispatch }: { state: WizardState; dispatch: Di
                 onChange={(e) => void attach(e)}
               />
             </label>
-            <span className="muted small">
+            <span className="muted small wizard-char-count">
               {state.referenceDocs.length.toLocaleString()} / {REFERENCE_DOCS_MAX.toLocaleString()}
             </span>
           </div>

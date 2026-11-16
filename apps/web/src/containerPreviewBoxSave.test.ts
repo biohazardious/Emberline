@@ -54,7 +54,9 @@ const box = () => document.body.querySelector('#container-preview');
 describe('ContainerPreviewBox save (C-12)', () => {
   it('goes away once the save worked, even when the refetch after it fails', async () => {
     await renderDom(createElement(ContainerPreviewBox, { project }), { path: '/projects/p1/settings' });
-    await waitFor(() => expect(document.body.textContent).toContain('+preview: {}'));
+    await waitFor(() => expect(getButton(USE_CONTAINER_PREVIEW_LABEL).disabled).toBe(false));
+    await click(getButton('Setup details'));
+    expect(document.body.textContent).toContain('+preview: {}');
     await click(getButton(USE_CONTAINER_PREVIEW_LABEL));
     await waitFor(() => expect(optionReads).toBeGreaterThan(1));
     expect(saves).toEqual([{ file: 'compose.yaml', service: 'web', port: 3000, baseSha256: null }]);
