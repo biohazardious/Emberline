@@ -1,4 +1,4 @@
-import type { AgentId } from '@emberline/protocol';
+import { type AgentId, PROVIDER_REGISTRY } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { LoaderCircle, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -7,12 +7,19 @@ import {
   invalidateModelCatalog,
   type ProviderRead,
   type StoredCatalog,
+  type StoredModel,
   useModelCatalog,
 } from '../../modelCatalog';
 import { timeAgo } from '../../time';
 import { ico } from '../SectionState';
+import './providers/providers.css';
 
-const SOURCE_LABEL: Record<string, string> = { cli: 'CLI', picker: 'Model picker', manual: 'Added by you' };
+const SOURCE_LABEL: Record<string, string> = {
+  builtin: 'Built-in',
+  cli: 'CLI',
+  picker: 'Model picker',
+  manual: 'Added by you',
+};
 
 /** What `POST /api/models/refresh` answers: the reads made, and why the others were skipped. */
 type RefreshAnswer = {
@@ -42,7 +49,63 @@ function refreshOutcome(agent: AgentId, answer: RefreshAnswer): { text: string; 
   return { text: (why && SKIPPED[why]) || 'Not read.', bad: false };
 }
 
-/** One provider's models as stored: where each came from, when, and the last read of the CLI. */
+type MergedModelRow = {
+  id: string;
+  label: string;
+  shortLabel: string;
+  rank: number;
+  tier: 'low' | 'medium' | 'high';
+  source: string;
+  firstSeen: string | null;
+  missingSince: string | null;
+};
+
+function mergeProviderModels(providerId: AgentId, stored: StoredModel[]): MergedModelRow[] {
+  const builtins = PROVIDER_REGISTRY[providerId].models;
+  const byId = new Map(stored.map((m) => [m.id, m]));
+  const rows: MergedModelRow[] = builtins.map((b) => {
+    const c = byId.get(b.id);
+    if (c) {
+      return {
+        id: c.id,
+        label: c.label,
+        shortLabel: b.shortLabel || c.shortLabel,
+        rank: b.rank,
+        tier: b.tier,
+        source: c.source,
+        firstSeen: c.firstSeen ?? null,
+        missingSince: c.missingSince ?? null,
+      };
+    }
+    return {
+      id: b.id,
+      label: b.label,
+      shortLabel: b.shortLabel,
+      rank: b.rank,
+      tier: b.tier,
+      source: 'builtin',
+      firstSeen: null,
+      missingSince: null,
+    };
+  });
+  const builtinIds = new Set(builtins.map((b) => b.id));
+  for (const m of stored) {
+    if (builtinIds.has(m.id)) continue;
+    rows.push({
+      id: m.id,
+      label: m.label,
+      shortLabel: m.shortLabel,
+      rank: m.rank,
+      tier: m.tier,
+      source: m.source,
+      firstSeen: m.firstSeen ?? null,
+      missingSince: m.missingSince ?? null,
+    });
+  }
+  return rows;
+}
+
+/** One provider's models (built-in rank chips merged with discovered/manual models) and last CLI read. */
 export function ProviderModels({ providerId }: { providerId: AgentId }) {
   const client = useQueryClient();
   const query = useModelCatalog();
@@ -66,6 +129,7 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
       setBusy(false);
     }
   };
+
   // A read can take up to a minute (and waits for any read before it).
   const refresh = () =>
     run(async () => {
@@ -77,6 +141,7 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
         setRefreshing(false);
       }
     });
+
   const add = () =>
     run(async () => {
       const id = draft.trim();
@@ -84,16 +149,16 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
       await api<{ catalog: StoredCatalog }>(`/api/models/${providerId}/manual`, 'POST', { id });
       setDraft('');
     });
+
   const remove = (id: string) =>
     run(() => api(`/api/models/${providerId}/manual/${encodeURIComponent(id)}`, 'DELETE'));
 
-  if (!entry) return null;
-  const read = entry.read;
-  const small = { fontSize: '0.68rem' } as const;
+  const read = entry?.read ?? null;
+  const rows = mergeProviderModels(providerId, entry?.models ?? []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-provider-models={providerId}>
-      <div className="small" style={small}>
+    <div className="provider-models" data-provider-models={providerId}>
+      <div className="small provider-models-read">
         <span className="muted">Last read: </span>
         {read ? (
           <>
@@ -102,47 +167,37 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
               {timeAgo(read.at)}
               {read.cliVersion ? ` · CLI ${read.cliVersion}` : ''}
             </span>
-            {read.error && <div style={{ color: 'var(--bad)' }}>{read.error}</div>}
+            {read.error && <div className="provider-models-error">{read.error}</div>}
           </>
         ) : (
           <span className="muted">never</span>
         )}
       </div>
 
-      {entry.models.length > 0 && (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 3,
-          }}
-        >
-          {entry.models.map((m) => (
-            <li
-              key={m.id}
-              className="small"
-              style={{ ...small, display: 'flex', gap: 6, alignItems: 'baseline' }}
-            >
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <strong>{m.label}</strong> <code className="mono">{m.id}</code>
+      {rows.length > 0 && (
+        <ul className="provider-models-list">
+          {rows.map((m) => (
+            <li key={m.id} className="small provider-models-item">
+              <span className="provider-models-item-main">
+                <span className={`mono provider-model-rank provider-model-rank-${m.tier}`}>
+                  ★{m.rank} {m.shortLabel}
+                </span>
+                <strong>{m.label}</strong>
+                <code className="mono">{m.id}</code>
                 <span className="muted">
-                  {' '}
-                  · {SOURCE_LABEL[m.source] ?? m.source} · first seen {timeAgo(m.firstSeen)}
+                  · {SOURCE_LABEL[m.source] ?? m.source}
+                  {m.firstSeen ? ` · first seen ${timeAgo(m.firstSeen)}` : ''}
                 </span>
                 {m.missingSince && (
-                  <span style={{ color: 'var(--warn)' }}> · missing since {timeAgo(m.missingSince)}</span>
+                  <span className="provider-models-missing"> · missing since {timeAgo(m.missingSince)}</span>
                 )}
               </span>
               {m.source === 'manual' && (
                 <button
                   type="button"
-                  className="btn btn-xs btn-ghost"
+                  className="btn btn-sm btn-ghost"
                   disabled={busy}
                   aria-label={`Remove ${m.id}`}
-                  title="Remove this model id"
                   onClick={() => void remove(m.id)}
                 >
                   {ico(Trash2)}
@@ -153,20 +208,13 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
         </ul>
       )}
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button
-          type="button"
-          className="btn btn-xs btn-ghost"
-          disabled={busy}
-          onClick={() => void refresh()}
-          title="Ask the CLI which models it offers now"
-        >
+      <div className="provider-models-controls">
+        <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => void refresh()}>
           {refreshing ? ico(LoaderCircle, true) : ico(RefreshCw)}{' '}
           {refreshing ? 'Reading models…' : 'Refresh models'}
         </button>
         <input
-          className="input mono"
-          style={{ padding: '4px 8px', fontSize: '0.72rem', flex: 1, minWidth: 120 }}
+          className="input mono provider-models-input"
           aria-label="Model id"
           placeholder="model id the CLI accepts"
           value={draft}
@@ -180,28 +228,31 @@ export function ProviderModels({ providerId }: { providerId: AgentId }) {
         />
         <button
           type="button"
-          className="btn btn-xs btn-ghost"
+          className="btn btn-sm btn-ghost"
           disabled={busy || !draft.trim()}
           onClick={() => void add()}
         >
-          Add a model id
+          Add model
         </button>
       </div>
       {refreshing && (
-        <div className="small muted" style={small} role="status">
+        <div className="small muted provider-models-status" role="status">
           Asking the CLI for its models; this can take up to a minute.
         </div>
       )}
       {outcome && (
         <div
-          className={outcome.bad ? 'small' : 'small muted'}
-          style={{ ...small, ...(outcome.bad ? { color: 'var(--bad)' } : {}) }}
+          className={
+            outcome.bad
+              ? 'small provider-models-status provider-models-error'
+              : 'small muted provider-models-status'
+          }
           role="status"
         >
           {outcome.text}
         </div>
       )}
-      {error && <div style={{ ...small, color: 'var(--bad)' }}>{error}</div>}
+      {error && <div className="provider-models-error">{error}</div>}
     </div>
   );
 }

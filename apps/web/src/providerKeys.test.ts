@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
-import { ProviderCard } from './components/settings/ProviderCard';
+import { ProviderRow } from './components/settings/providers/ProviderRow';
 import type { ProviderSectionForm } from './components/settings/settingsMeta';
 import { apiRoutes, cleanup, click, getButton, renderDom, waitFor } from './domRender';
 
@@ -40,8 +40,8 @@ const settings = (stored: boolean) =>
     providerAuth: {},
   }) as unknown as FactorySettings;
 
-const card = (enabled: AgentId[], stored: boolean) =>
-  createElement(ProviderCard, {
+const row = (enabled: AgentId[], stored: boolean) =>
+  createElement(ProviderRow, {
     providerId: 'aider',
     form: {
       settings: settings(stored),
@@ -64,23 +64,35 @@ const card = (enabled: AgentId[], stored: boolean) =>
     onStartLogin: () => undefined,
   });
 
-describe('the Gemini API key on the Aider card', () => {
-  it('shows a stored key even with Aider off, and Remove key clears it', async () => {
-    const { container } = await renderDom(card(['claude'], true));
+describe('the Gemini API key on the Aider row', () => {
+  it('shows Key stored on the collapsed row even with Aider off, and Remove key in details clears it', async () => {
+    const { container } = await renderDom(row(['claude'], true));
+    expect(container.textContent).toContain('Key stored');
+    expect(container.textContent).not.toContain('Google Gemini API Key');
+
+    const expandBtn = container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    await click(expandBtn);
     expect(container.textContent).toContain('Google Gemini API Key');
+
     await click(getButton(/Remove key/, container));
     await waitFor(() => expect(patches).toEqual([{ geminiApiKey: null }]));
     expect(shown?.geminiKeyStored).toBe(false);
     expect(notice).toBe('Gemini API key removed.');
   });
 
-  it('with Aider off and no key stored, shows no key field', async () => {
-    const { container } = await renderDom(card(['claude'], false));
+  it('with Aider off and no key stored, shows neither Key stored nor the key field', async () => {
+    const { container } = await renderDom(row(['claude'], false));
+    expect(container.textContent).not.toContain('Key stored');
+    const expandBtn = container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    await click(expandBtn);
     expect(container.textContent).not.toContain('Google Gemini API Key');
   });
 
-  it('with Aider on and no key stored, shows the field without Remove key', async () => {
-    const { container } = await renderDom(card(['claude', 'aider'], false));
+  it('with Aider on and no key stored, shows the field when expanded without Remove key', async () => {
+    const { container } = await renderDom(row(['claude', 'aider'], false));
+    expect(container.textContent).not.toContain('Key stored');
+    const expandBtn = container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    await click(expandBtn);
     expect(container.textContent).toContain('Google Gemini API Key');
     expect(container.textContent).not.toContain('Remove key');
   });

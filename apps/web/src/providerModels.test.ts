@@ -1,16 +1,15 @@
 // @vitest-environment happy-dom
+import { type ServerEvent, setModelCatalog } from '@emberline/protocol';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setModelCatalog } from '@emberline/protocol';
 import { api } from './api';
 import type * as ApiModule from './api';
-import { apiRoutes, cleanup, click, getButton, renderDom, typeInto, waitFor } from './domRender';
-import { ProviderModels } from './components/settings/ProviderModels';
 import { RouteChainEditor } from './components/RouteChainEditor';
-import { useModelCatalog, type StoredCatalog, type StoredModel } from './modelCatalog';
-import { LiveEvents } from './hooks/liveData';
+import { ProviderModels } from './components/settings/ProviderModels';
+import { apiRoutes, cleanup, click, getButton, renderDom, typeInto, waitFor } from './domRender';
 import type * as EventHubModule from './hooks/eventHub';
-import type { ServerEvent } from '@emberline/protocol';
+import { LiveEvents } from './hooks/liveData';
+import { type StoredCatalog, type StoredModel, useModelCatalog } from './modelCatalog';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -110,10 +109,11 @@ function Harness() {
   ]);
 }
 
-describe('a provider card lists its models', () => {
-  it('shows a discovered model, when it went missing and the last read error', async () => {
+describe('a provider row lists its models', () => {
+  it('merges built-in ★rank chips with discovered models, missing status and the last read error', async () => {
     const { container } = await renderDom(createElement(Harness));
     await waitFor(() => expect(container.textContent).toContain('GPT 9 Preview'));
+    expect(container.textContent).toContain('★4 opus');
     expect(container.textContent).toContain('gpt-9-preview');
     expect(container.textContent).toContain('missing since');
     expect(container.textContent).toContain('1.2.3');
@@ -161,7 +161,7 @@ describe('a provider card lists its models', () => {
     );
   });
 
-  it('Add a model id posts the typed id, and the id shows up in a route picker', async () => {
+  it('Add model posts the typed id, and the id shows up in a route picker', async () => {
     const { container } = await renderDom(createElement(Harness));
     await waitFor(() => expect(container.textContent).toContain('GPT 9 Preview'));
     const picker = () => container.querySelector('select[aria-label="Model"]')!.textContent ?? '';
@@ -169,7 +169,7 @@ describe('a provider card lists its models', () => {
 
     const input = container.querySelector('input[aria-label="Model id"]') as HTMLInputElement;
     await typeInto(input, 'mine-1');
-    await click(getButton('Add a model id', container));
+    await click(getButton('Add model', container));
     await waitFor(() => expect(posts).toEqual([{ path: 'manual', body: { id: 'mine-1' } }]));
     await waitFor(() => expect(picker()).toContain('mine-1'));
 

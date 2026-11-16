@@ -105,26 +105,10 @@ export function RouteChainEditor({
                 </option>
               ))}
             </select>
-            {route.credential === 'api_key' && (
-              <span className="badge badge-warn" title="Billed to your API key">
-                paid
-              </span>
-            )}
-            {route.credential === 'credits' && (
-              <span
-                className="badge badge-warn"
-                title="Uses your Antigravity AI credits once the subscription quota is used up"
-              >
-                paid
-              </span>
-            )}
+            {route.credential === 'api_key' && <span className="badge badge-warn">paid</span>}
+            {route.credential === 'credits' && <span className="badge badge-warn">paid</span>}
             {route.agent === 'antigravity' && route.credential !== 'api_key' && (
-              <span
-                className="badge badge-warn"
-                title="Google does not support Antigravity consumer logins in third-party tools and may suspend the account"
-              >
-                account risk
-              </span>
+              <span className="badge badge-warn">account risk</span>
             )}
             <span className="route-step-actions">
               <button
@@ -134,7 +118,7 @@ export function RouteChainEditor({
                 disabled={index === 0}
                 aria-label="Move up"
               >
-                <ArrowUp size={14} />
+                <ArrowUp size={14} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -143,7 +127,7 @@ export function RouteChainEditor({
                 disabled={index === value.length - 1}
                 aria-label="Move down"
               >
-                <ArrowDown size={14} />
+                <ArrowDown size={14} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -152,7 +136,7 @@ export function RouteChainEditor({
                 disabled={value.length === 1}
                 aria-label="Remove"
               >
-                <X size={14} />
+                <X size={14} aria-hidden="true" />
               </button>
             </span>
           </li>
@@ -175,7 +159,7 @@ export function RouteChainEditor({
               ]);
             }}
           >
-            <Plus size={14} /> Add fallback
+            <Plus size={14} aria-hidden="true" /> Add fallback
           </button>
         </li>
       )}

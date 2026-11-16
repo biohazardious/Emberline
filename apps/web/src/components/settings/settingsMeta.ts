@@ -1,10 +1,12 @@
 import {
   type AgentId,
+  type CliToolStatus,
   type FactorySettings,
   type ModelCapabilityTier,
   PERSONA_CAPABILITY_TARGETS,
   type PersonaRouteMap,
   PROVIDER_RUNTIME,
+  type ProviderAuthStatus,
   type QuotaPolicy,
   type Route,
   selectProviderModelByRank,
@@ -16,6 +18,66 @@ import { PERSONA_BY_ID, PERSONA_LIST } from '../PersonaBadge';
 
 export const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot', 'aider'];
 export const OAUTH_LOGIN_PROVIDERS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot'];
+
+export const PROVIDER_VIEWS = ['agents', 'routing', 'sdks'] as const;
+export type ProviderView = (typeof PROVIDER_VIEWS)[number];
+
+export type ProviderStatusKind = 'installing' | 'error' | 'off' | 'not_installed' | 'not_signed_in' | 'ready';
+
+export interface ProviderStatusResult {
+  kind: ProviderStatusKind;
+  state: ProviderStatusKind;
+  label: string;
+}
+
+export interface ProviderStatusInput {
+  enabled: boolean;
+  installing?: boolean;
+  toolStatus?: Pick<CliToolStatus, 'installed' | 'installing' | 'lastError'> | null;
+  authStatus?: Partial<Pick<ProviderAuthStatus, 'authenticated' | 'label' | 'cliInstalled'>> | null;
+  keyConfigured?: boolean;
+  installed?: boolean;
+  signedIn?: boolean;
+  lastError?: string | null;
+  authLabel?: string | null;
+}
+
+/**
+ * Composite status for a provider row in Settings → Providers → Agents.
+ * Precedence: installing → error → off → not_installed → not_signed_in → ready.
+ */
+export function providerStatus(input: ProviderStatusInput): ProviderStatusResult {
+  const isInstalling = Boolean(input.installing || input.toolStatus?.installing);
+  if (isInstalling) {
+    return { kind: 'installing', state: 'installing', label: 'Installing…' };
+  }
+
+  const lastError = input.lastError !== undefined ? input.lastError : input.toolStatus?.lastError;
+  if (lastError && lastError.trim().length > 0) {
+    return { kind: 'error', state: 'error', label: 'Install failed' };
+  }
+
+  if (!input.enabled) {
+    return { kind: 'off', state: 'off', label: 'Off' };
+  }
+
+  const isInstalled =
+    input.installed ?? input.toolStatus?.installed ?? input.authStatus?.cliInstalled ?? false;
+  if (!isInstalled) {
+    return { kind: 'not_installed', state: 'not_installed', label: 'CLI not installed' };
+  }
+
+  const isSignedIn =
+    input.signedIn ?? (Boolean(input.authStatus?.authenticated) || Boolean(input.keyConfigured));
+  if (!isSignedIn) {
+    return { kind: 'not_signed_in', state: 'not_signed_in', label: 'Not signed in' };
+  }
+
+  const customLabel =
+    input.authLabel ?? (input.authStatus?.authenticated !== false ? input.authStatus?.label : undefined);
+  const label = customLabel?.trim() || 'Ready';
+  return { kind: 'ready', state: 'ready', label };
+}
 
 export const ST_PANEL_PAD: CSSProperties = { padding: '20px' };
 export const ST_PANEL_FORM: CSSProperties = {
@@ -62,9 +124,9 @@ export const ST_CARD_GRID_310: CSSProperties = {
   gap: '10px',
 };
 export const ST_FIELD_4: CSSProperties = { gap: 4 };
-export const ST_LABEL_68: CSSProperties = { fontSize: '0.68rem' };
-export const ST_BADGE_64: CSSProperties = { fontSize: '0.64rem' };
-export const ST_DESC_73: CSSProperties = { fontSize: '0.73rem', lineHeight: 1.35 };
+export const ST_LABEL_68: CSSProperties = { fontSize: '0.8rem' };
+export const ST_BADGE_64: CSSProperties = { fontSize: '0.8rem' };
+export const ST_DESC_73: CSSProperties = { fontSize: '0.8rem', lineHeight: 1.35 };
 
 export const TIER_COLORS: Record<
   ModelCapabilityTier,
@@ -201,7 +263,7 @@ export function buildPresetRoutes(
           defaultRoute(core, selectProviderModelByRank(core, 4), personaRoutes.security[0]?.credential),
         ],
       },
-      notice: `Applied "Multi-Provider Specialist Split" across your active providers with automatic capability rank matching. ${fallbacks} Click Save to persist.`,
+      notice: `Multi-provider split applied. ${fallbacks} Click Save to persist.`,
     };
   }
 
@@ -220,13 +282,13 @@ export function buildPresetRoutes(
     next[p] = [defaultRoute(agent, model, personaRoutes[p][0]?.credential)];
   }
   const labelMap = {
-    'auto-rank': 'Recommended Persona Capability Ranks (★5 PO/Arch, ★4 Core/UI/Sec, ★3 QA)',
-    'all-high': 'Maximum Capability / High Tier (★4–5)',
-    'all-medium': 'Balanced Medium Tier (★3)',
-    'all-low': 'Fast / Token-Saver Low Tier (★1–2)',
+    'auto-rank': 'Auto-match by rank',
+    'all-high': 'All high (★4–5)',
+    'all-medium': 'All medium (★3)',
+    'all-low': 'All low (★1–2)',
   };
   return {
     routes: next,
-    notice: `Applied "${labelMap[preset]}" across active providers. Fallbacks were reset. Click Save to persist.`,
+    notice: `${labelMap[preset]} applied. Fallbacks were reset. Click Save to persist.`,
   };
 }
