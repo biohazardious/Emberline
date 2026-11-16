@@ -1,11 +1,10 @@
-import type { Run, RunRecovery, RecoverySuggestion } from '@emberline/protocol';
+import type { RecoverySuggestion, Run, RunRecovery } from '@emberline/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { Link } from 'wouter';
-import { api, errorMessage } from '../api';
 import { refreshAfterAnswer } from '../answerDialog';
+import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
-import { AnswerDialog } from './AnswerDialog';
 import {
   buildManualConflictRecovery,
   type ConflictHoldFallback,
@@ -18,6 +17,9 @@ import {
   waitSuggestionHref,
 } from '../holdRecovery';
 import type { SyncResolvingNotice } from '../syncResolution';
+import { AnswerDialog } from './AnswerDialog';
+import { Disclosure } from './ui/Disclosure';
+import './runInspector/run-inspector.css';
 
 interface Props {
   run: Run;
@@ -102,7 +104,14 @@ export function HoldRecovery({ onAnswer, conflictFallback, ...props }: Props) {
 
   return (
     <>
-      {rec && <HoldRecoveryBlock {...props} rec={rec} onAnswer={onAnswer ?? answer.open} />}
+      {rec && (
+        <HoldRecoveryBlock
+          {...props}
+          rec={rec}
+          hostHasPrimary={Boolean(onAnswer || props.hideLabel)}
+          onAnswer={onAnswer ?? answer.open}
+        />
+      )}
       {answer.dialog}
     </>
   );
@@ -111,12 +120,14 @@ export function HoldRecovery({ onAnswer, conflictFallback, ...props }: Props) {
 function HoldRecoveryBlock({
   run,
   rec,
+  hostHasPrimary,
   onAnswer,
   hideLabel = false,
   onDiscard,
   onMerge,
 }: Omit<Props, 'onAnswer' | 'conflictFallback'> & {
   rec: RunRecovery;
+  hostHasPrimary: boolean;
   onAnswer: (initialText: string) => void;
 }) {
   const client = useQueryClient();
@@ -154,7 +165,7 @@ function HoldRecoveryBlock({
     }
   };
 
-  const primary = suggestions[0]?.id;
+  const primary = !hostHasPrimary ? suggestions[0]?.id : undefined;
   const btn = (s: RecoverySuggestion) => `btn btn-sm${s.id === primary ? ' btn-primary' : ''}`;
 
   const promptButton = (s: RecoverySuggestion) => {
@@ -183,59 +194,16 @@ function HoldRecoveryBlock({
       </div>
       {!canDeliver && <p className="muted small hold-recovery-none">{recoverErrorText('no_session', '')}</p>}
       <ul className="hold-recovery-list">
-        {suggestions.map((s) => (
-          <li key={s.id} className="hold-recovery-item">
-            {s.kind === 'prompt' && promptButton(s)}
-            {s.onTicket && (
-              <Link href={ticketHref!} className={btn(s)}>
-                {s.label}
-              </Link>
-            )}
-            {s.kind === 'discard' &&
-              !s.onTicket &&
-              (confirming ? (
-                <span className="hold-recovery-confirm">
-                  <span className="small">{discardConfirm(s).question}</span>
-                  <button
-                    type="button"
-                    className="btn btn-sm danger"
-                    disabled={busy}
-                    onClick={() => void guarded(onDiscard!)}
-                  >
-                    {discardConfirm(s).confirm}
-                  </button>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirming(false)}>
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <button type="button" className={btn(s)} disabled={busy} onClick={() => setConfirming(true)}>
-                  {s.label}
-                </button>
-              ))}
-            {s.kind === 'merge' && !s.onTicket && (
-              <button type="button" className={btn(s)} disabled={busy} onClick={() => void guarded(onMerge!)}>
-                {s.label}
-              </button>
-            )}
-            {s.kind === 'open_review' && (
-              <Link href={`/runs/${run.id}/review`} className={btn(s)}>
-                {s.label}
-              </Link>
-            )}
-            {s.kind === 'manual' &&
-              (() => {
-                const waitHref = waitSuggestionHref(s, run, resolverRunId);
-                if (waitHref) {
-                  return (
-                    <Link href={waitHref} className={btn(s)}>
-                      {s.label}
-                    </Link>
-                  );
-                }
-                return (
+        {suggestions.map((s) => {
+          const waitHref = s.kind === 'manual' ? waitSuggestionHref(s, run, resolverRunId) : null;
+          const isManualSteps = s.kind === 'manual' && !waitHref;
+
+          if (isManualSteps) {
+            return (
+              <li key={s.id} className="hold-recovery-item">
+                {s.detail && <span className="muted small hold-recovery-detail">{s.detail}</span>}
+                <Disclosure label={s.label}>
                   <div className="hold-recovery-manual">
-                    <span className="small">{s.label}</span>
                     {s.files.length > 0 && (
                       <ul className="hold-recovery-files mono small">
                         {s.files.map((f) => (
@@ -256,11 +224,74 @@ function HoldRecoveryBlock({
                       </div>
                     ))}
                   </div>
-                );
-              })()}
-            {s.detail && <span className="muted small hold-recovery-detail">{s.detail}</span>}
-          </li>
-        ))}
+                </Disclosure>
+              </li>
+            );
+          }
+
+          return (
+            <li key={s.id} className="hold-recovery-item">
+              {s.detail && <span className="muted small hold-recovery-detail">{s.detail}</span>}
+              {s.kind === 'prompt' && promptButton(s)}
+              {s.onTicket && (
+                <Link href={ticketHref!} className={btn(s)}>
+                  {s.label}
+                </Link>
+              )}
+              {s.kind === 'discard' &&
+                !s.onTicket &&
+                (confirming ? (
+                  <span className="hold-recovery-confirm">
+                    <span className="small">{discardConfirm(s).question}</span>
+                    <button
+                      type="button"
+                      className="btn btn-sm danger"
+                      disabled={busy}
+                      onClick={() => void guarded(onDiscard!)}
+                    >
+                      {discardConfirm(s).confirm}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setConfirming(false)}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className={btn(s)}
+                    disabled={busy}
+                    onClick={() => setConfirming(true)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              {s.kind === 'merge' && !s.onTicket && (
+                <button
+                  type="button"
+                  className={btn(s)}
+                  disabled={busy}
+                  onClick={() => void guarded(onMerge!)}
+                >
+                  {s.label}
+                </button>
+              )}
+              {s.kind === 'open_review' && (
+                <Link href={`/runs/${run.id}/review`} className={btn(s)}>
+                  {s.label}
+                </Link>
+              )}
+              {waitHref && (
+                <Link href={waitHref} className={btn(s)}>
+                  {s.label}
+                </Link>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {linkOnly && (
         <Link href={ticketHref} className="btn btn-sm btn-ghost">

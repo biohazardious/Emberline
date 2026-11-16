@@ -1,8 +1,11 @@
 import { type Project, type Run, type Ticket } from '@emberline/protocol';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
+import { Inbox } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'wouter';
 import { formatAgentDisplayName } from '../agentLabel';
 import { answerOffered, answerTarget, refreshAfterAnswer } from '../answerDialog';
+import { api, errorMessage } from '../api';
 import {
   ATTENTION_LABELS,
   ATTENTION_ORDER,
@@ -19,12 +22,14 @@ import { AllProjectsToggle, MoreInOtherProjects } from '../components/AllProject
 import { AnswerDialog } from '../components/AnswerDialog';
 import { SearchInput } from '../components/BoardFilterBar';
 import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
-import { InboxNotices } from '../components/InboxNotices';
 import { HoldRecovery, useRunRecovery } from '../components/HoldRecovery';
-import { PersonaBadge } from '../components/PersonaBadge';
+import { InboxNotices } from '../components/InboxNotices';
+import { HelpHint } from '../components/ui/HelpHint';
+import { MoreMenu, type MoreMenuItem } from '../components/ui/MoreMenu';
+import { PageHeader } from '../components/ui/PageHeader';
 import { recoveryApplies } from '../holdRecovery';
 import { clearPresenceRun, setPresenceRun } from '../hooks/eventHub';
-import { ticketsQuery } from '../hooks/liveData';
+import { liveKeys, ticketsQuery } from '../hooks/liveData';
 import { useAllProjects } from '../hooks/useAllProjects';
 import { useApi } from '../hooks/useApi';
 import { notificationsSupported } from '../hooks/useAttention';
@@ -37,19 +42,21 @@ import {
   type InboxFilter,
   isInboxFilterActive,
 } from '../runFilter';
-import { timeAgo, useNow } from '../time';
+import { toastError } from '../toast';
+import './inbox-ux.css';
 
 /** Ticket key and title by id, from the projects' ticket lists (stable reference: re-run only on new data). */
 const ticketNames = (lists: { data?: Ticket[] }[]): Map<string, TicketName> =>
   new Map(lists.flatMap((q) => (q.data ?? []).map((t) => [t.id, { key: t.key, title: t.title }] as const)));
 
-/** A long detail is clamped to this many lines until expanded (set in CSS as .inbox-detail-clamped). */
+/** A long non-question detail is clamped to this many lines until expanded. */
 const CLAMP_CHARS = 280;
 
 function InboxItem({
   run,
   project,
   heading,
+  isPrimary,
   onOpen,
   onDismiss,
   onAnswer,
@@ -57,20 +64,89 @@ function InboxItem({
   run: Run;
   project: Project | undefined;
   heading: { key: string | null; title: string };
+  isPrimary: boolean;
   onOpen: () => void;
   onDismiss: () => void;
   /** Opens the Answer dialog with this start text. */
   onAnswer: (text: string) => void;
 }) {
+  const client = useQueryClient();
   const attention = run.attention!;
   const [expanded, setExpanded] = useState(false);
-  useNow(30_000);
+  const [resuming, setResuming] = useState(false);
 
   const detail = attentionDetail(attention);
-  const long = (detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6;
+  const keepFull = attention.reason === 'question' || attention.reason === 'permission';
+  const long = !keepFull && ((detail?.length ?? 0) > CLAMP_CHARS || (detail?.split('\n').length ?? 0) > 6);
 
   const recovering = recoveryApplies(run);
   const recovery = useRunRecovery(run);
+
+  const canAnswer = answerOffered(run, recovery.data);
+  const canReview = Boolean(run.reviewReady || run.worktreePath);
+  const canResume = run.state === 'rate_limited' || run.resumable;
+
+  const primaryKind: 'answer' | 'review' | 'resume' | 'open' = canAnswer
+    ? 'answer'
+    : canReview && (run.reviewReady || run.state === 'done' || attention.reason === 'held')
+      ? 'review'
+      : canResume
+        ? 'resume'
+        : canReview
+          ? 'review'
+          : 'open';
+
+  const handleResume = async () => {
+    setResuming(true);
+    try {
+      await api(`/api/runs/${run.id}/resume`, 'POST', {});
+      await client.invalidateQueries({ queryKey: liveKeys.runs });
+    } catch (e) {
+      toastError(errorMessage(e));
+    } finally {
+      setResuming(false);
+    }
+  };
+
+  const moreItems: MoreMenuItem[] = [];
+  if (primaryKind !== 'review' && canReview) {
+    moreItems.push({
+      id: 'review',
+      label: 'Open review',
+      href: `/runs/${run.id}/review`,
+    });
+  }
+  if (run.terminalId) {
+    moreItems.push({
+      id: 'terminal',
+      label: 'Open terminal',
+      href: `/terminals/${run.terminalId}`,
+    });
+  }
+  if (primaryKind !== 'resume' && canResume) {
+    moreItems.push({
+      id: 'resume',
+      label: resuming ? 'Resuming…' : 'Resume',
+      disabled: resuming,
+      onSelect: () => void handleResume(),
+    });
+  }
+  if (primaryKind !== 'open') {
+    moreItems.push({
+      id: 'open-run',
+      label: 'Open run',
+      onSelect: onOpen,
+    });
+  }
+  if (dismissable(attention.reason)) {
+    moreItems.push({
+      id: 'dismiss',
+      label: 'Dismiss',
+      onSelect: onDismiss,
+    });
+  }
+
+  const primaryBtnClass = `btn btn-sm${isPrimary ? ' btn-primary' : ''}`;
 
   return (
     <li className="inbox-item" data-reason={attention.reason}>
@@ -79,17 +155,11 @@ function InboxItem({
           {ATTENTION_LABELS[attention.reason]}
         </span>
         {project && <span className="inbox-project mono">{project.name}</span>}
-        <span className="inbox-age muted mono" title={attention.since}>
-          {timeAgo(attention.since)}
-        </span>
+        <span className="inbox-agent muted mono">{formatAgentDisplayName(run.agent)}</span>
       </div>
       <h3 className="inbox-title">
         {heading.key && <span className="mono">{heading.key}</span>} {heading.title}
       </h3>
-      <div className="inbox-meta muted small">
-        <span className="mono">{formatAgentDisplayName(run.agent)}</span>
-        <PersonaBadge persona={run.persona} />
-      </div>
       {detail && (
         <div>
           <p className={`inbox-detail${long && !expanded ? ' inbox-detail-clamped' : ''}`}>{detail}</p>
@@ -102,18 +172,30 @@ function InboxItem({
       )}
       {recovering && <HoldRecovery key={run.id} run={run} onAnswer={onAnswer} hideLabel />}
       <div className="inbox-actions">
-        {answerOffered(run, recovery.data) && (
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => onAnswer('')}>
+        {primaryKind === 'answer' ? (
+          <button type="button" className={primaryBtnClass} onClick={() => onAnswer('')}>
             Answer
           </button>
-        )}
-        <button type="button" className="btn btn-sm" onClick={onOpen}>
-          Open run
-        </button>
-        {dismissable(attention.reason) && (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
-            Dismiss
+        ) : primaryKind === 'review' ? (
+          <Link href={`/runs/${run.id}/review`} className={primaryBtnClass}>
+            Open review
+          </Link>
+        ) : primaryKind === 'resume' ? (
+          <button
+            type="button"
+            className={primaryBtnClass}
+            disabled={resuming}
+            onClick={() => void handleResume()}
+          >
+            {resuming ? 'Resuming…' : 'Resume'}
           </button>
+        ) : (
+          <button type="button" className={primaryBtnClass} onClick={onOpen}>
+            Open run
+          </button>
+        )}
+        {moreItems.length > 0 && (
+          <MoreMenu items={moreItems} ariaLabel={`More actions for ${heading.key ?? heading.title}`} />
         )}
       </div>
     </li>
@@ -175,7 +257,10 @@ export function InboxPage({
       }),
     [scopedPending, filter, ticketsById, projectById],
   );
-  const groups = useMemo(() => groupAttention(filteredPending, seen), [filteredPending, seen]);
+  const orderedRuns = useMemo(
+    () => groupAttention(filteredPending, seen).flatMap((g) => g.runs),
+    [filteredPending, seen],
+  );
 
   const elsewhere = all ? 0 : needsElsewhere(runs ?? [], seen, activeProjectId);
   const scoped = Boolean(activeProjectId) && !all;
@@ -204,24 +289,30 @@ export function InboxPage({
 
   return (
     <div className="inbox-page">
-      <header className="workspace-bar">
-        <div className="workspace-bar-title">
-          <h1>Inbox</h1>
-          <span className="muted small">{inboxSubtitle(scoped, projectName)}</span>
-        </div>
-        <div className="workspace-bar-controls">
-          {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
-          {notificationsSupported() && permission === 'default' && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => void Notification.requestPermission().then(setPermission)}
-            >
-              Enable desktop alerts
-            </button>
-          )}
-        </div>
-      </header>
+      <PageHeader
+        title="Inbox"
+        icon={<Inbox className="icon" aria-hidden />}
+        meta={
+          <>
+            <span className="badge mono inbox-count-badge">{scopedPending.length}</span>
+            <HelpHint topic="inbox">{inboxSubtitle(scoped, projectName)}</HelpHint>
+          </>
+        }
+        actions={
+          <>
+            {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
+            {notificationsSupported() && permission === 'default' && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void Notification.requestPermission().then(setPermission)}
+              >
+                Enable alerts
+              </button>
+            )}
+          </>
+        }
+      />
 
       <MoreInOtherProjects count={elsewhere} onShow={() => setAll(true)} />
 
@@ -279,7 +370,7 @@ export function InboxPage({
 
       {runsLoading && !runs && !runsError ? (
         <ViewLoadingState label="Checking runs needing attention…" />
-      ) : groups.length === 0 ? (
+      ) : orderedRuns.length === 0 ? (
         <div className="empty">
           {filterActive && scopedPending.length > 0 ? (
             <>
@@ -293,26 +384,20 @@ export function InboxPage({
           )}
         </div>
       ) : (
-        groups.map((group) => (
-          <section key={group.reason} className="inbox-group" aria-label={ATTENTION_LABELS[group.reason]}>
-            <h2 className="inbox-group-head">
-              {ATTENTION_LABELS[group.reason]} <span className="muted mono">{group.runs.length}</span>
-            </h2>
-            <ul className="inbox-list">
-              {group.runs.map((run) => (
-                <InboxItem
-                  key={run.attention!.occurrence}
-                  run={run}
-                  project={projectById.get(run.projectId)}
-                  heading={inboxHeading(run, ticketsById)}
-                  onOpen={() => onOpenRun(run.id)}
-                  onDismiss={() => onDismiss(run)}
-                  onAnswer={(text) => setAnswering({ run, heading: inboxHeading(run, ticketsById), text })}
-                />
-              ))}
-            </ul>
-          </section>
-        ))
+        <ul className="inbox-list">
+          {orderedRuns.map((run, idx) => (
+            <InboxItem
+              key={run.attention!.occurrence}
+              run={run}
+              project={projectById.get(run.projectId)}
+              heading={inboxHeading(run, ticketsById)}
+              isPrimary={idx === 0 && (!activeProjectId || !all)}
+              onOpen={() => onOpenRun(run.id)}
+              onDismiss={() => onDismiss(run)}
+              onAnswer={(text) => setAnswering({ run, heading: inboxHeading(run, ticketsById), text })}
+            />
+          ))}
+        </ul>
       )}
       {answering && answerRun && (
         <AnswerDialog

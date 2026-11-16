@@ -1,21 +1,17 @@
 import type { GarbageCollectRunsResponse, Project, Run } from '@emberline/protocol';
-import { Circle, Eraser, Package, Square, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
-import {
-  FLEET_SECTION_LABELS,
-  FLEET_SECTION_ORDER,
-  type FleetSection,
-  fleetSection,
-  isRunCompleted,
-  needsElsewhere,
-  type SeenMap,
-} from '../attention';
-import { AllProjectsToggle } from '../components/AllProjectsToggle';
-import { SearchInput } from '../components/BoardFilterBar';
+import { fleetSection, isRunCompleted, needsElsewhere, type SeenMap } from '../attention';
 import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { FleetPane } from '../components/FleetPane';
+import { FleetEmptyState } from '../components/fleet/FleetEmptyState';
+import {
+  type FleetFilter,
+  FleetToolbar,
+  type FleetViewMode,
+  type GridLayout,
+} from '../components/fleet/FleetToolbar';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { keptWorktreesSummary } from '../gcSummary';
 import { useRuns } from '../hooks/liveData';
@@ -24,9 +20,7 @@ import { useApi } from '../hooks/useApi';
 import { fleetBulkTitles, inScope, moreInOtherProjects } from '../projectScope';
 import { runMatchesQuery } from '../runFilter';
 import { toastError, toastInfo } from '../toast';
-
-type FleetFilter = 'active' | 'queued' | 'completed' | 'all';
-type GridLayout = 'grid' | 'cols' | 'single';
+import '../components/fleet/fleet-ux.css';
 
 const DISMISSED_KEY = 'emberline.fleet.dismissed';
 
@@ -38,6 +32,13 @@ function readDismissed(): Set<string> {
     return new Set();
   }
 }
+
+type ActiveSectionKey = 'needs' | 'running';
+
+const ACTIVE_SECTION_LABELS: Record<ActiveSectionKey, string> = {
+  needs: 'Needs you',
+  running: 'Running',
+};
 
 export function FleetPage({
   activeProjectId,
@@ -54,7 +55,7 @@ export function FleetPage({
   const [filter, setFilter] = useState<FleetFilter>('active');
   const [searchQuery, setSearchQuery] = useState('');
   const [layout, setLayout] = useState<GridLayout>('grid');
-  const [view, setView] = useState<'live' | 'thumbnails'>('live');
+  const [view, setView] = useState<FleetViewMode>('live');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkPrompt, setBulkPrompt] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -128,15 +129,18 @@ export function FleetPage({
   }, [scopedRuns, filter, sectionOf, searchQuery, projectById]);
 
   const sections = useMemo(() => {
-    const bySection = new Map<FleetSection, Run[]>();
+    const needsList: Run[] = [];
+    const runningList: Run[] = [];
     for (const run of visibleRuns) {
-      const section = sectionOf(run);
-      if (section) bySection.set(section, [...(bySection.get(section) ?? []), run]);
+      const s = sectionOf(run);
+      if (!s) continue;
+      if (s === 'needs') needsList.push(run);
+      else runningList.push(run);
     }
-    return FLEET_SECTION_ORDER.flatMap((section) => {
-      const list = bySection.get(section);
-      return list ? [{ section, runs: list }] : [];
-    });
+    const out: { section: ActiveSectionKey; runs: Run[] }[] = [];
+    if (needsList.length > 0) out.push({ section: 'needs', runs: needsList });
+    if (runningList.length > 0) out.push({ section: 'running', runs: runningList });
+    return out;
   }, [visibleRuns, sectionOf]);
 
   const selectableIds = new Set(
@@ -216,208 +220,37 @@ export function FleetPage({
 
   return (
     <div className="fleet-page">
-      <header className="workspace-bar">
-        <div className="workspace-bar-title">
-          <h1>Fleet Multiplexer</h1>
-          <span className="muted small">
-            Supervise live agent sessions · Auto-GC closes finished terminals &amp; retains recent history
-          </span>
-        </div>
-        <div className="workspace-bar-controls" style={{ flexWrap: 'wrap', gap: 8 }}>
-          {(scopedRuns.length > 0 || searchQuery.trim() !== '') && (
-            <SearchInput
-              id="fleet-search"
-              className="fleet-search"
-              ariaLabel="Filter fleet panes"
-              placeholder="Filter panes by ticket, branch, provider…"
-              value={searchQuery}
-              onChange={setSearchQuery}
-            />
-          )}
-
-          {counts.active > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost danger"
-              disabled={stoppingAll}
-              onClick={() => void handleStopAllActive()}
-              title={bulkTitles.stopAll}
-            >
-              {stoppingAll ? (
-                'Stopping…'
-              ) : (
-                <>
-                  <Square className="icon" aria-hidden /> Stop All Active ({counts.active})
-                </>
-              )}
-            </button>
-          )}
-
-          {counts.completed > 0 && (
-            <button
-              id="fleet-gc-btn"
-              type="button"
-              className="btn btn-sm"
-              disabled={gcBusy}
-              onClick={() => void handleGarbageCollect(0)}
-              style={{
-                borderColor: 'color-mix(in hsl, var(--ember-1) 45%, var(--border))',
-              }}
-              title={bulkTitles.cleanUp}
-            >
-              {gcBusy ? (
-                <>
-                  <Eraser className="icon" aria-hidden /> Cleaning…
-                </>
-              ) : (
-                <>
-                  <Eraser className="icon" aria-hidden /> Clean Up Finished ({counts.completed})
-                </>
-              )}
-            </button>
-          )}
-
-          {activeProjectId && <AllProjectsToggle on={all} onChange={setAll} />}
-
-          <div className="segmented segmented-scroll" role="tablist" aria-label="Fleet filter">
-            <button
-              id="fleet-filter-active"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'active'}
-              className={filter === 'active' ? 'active' : ''}
-              onClick={() => setFilter('active')}
-              title="Only live running, waiting, or queued sessions"
-            >
-              <Circle className="icon" aria-hidden fill="currentColor" style={{ color: 'var(--ok)' }} /> Live
-              ({counts.active})
-            </button>
-            <button
-              id="fleet-filter-queued"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'queued'}
-              className={filter === 'queued' ? 'active' : ''}
-              onClick={() => setFilter('queued')}
-            >
-              Queued ({counts.queued})
-            </button>
-            <button
-              id="fleet-filter-completed"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'completed'}
-              className={filter === 'completed' ? 'active' : ''}
-              onClick={() => setFilter('completed')}
-              title="Archived completed & failed runs"
-            >
-              <Package className="icon" aria-hidden /> History ({counts.completed})
-            </button>
-            <button
-              id="fleet-filter-all"
-              type="button"
-              role="tab"
-              aria-selected={filter === 'all'}
-              className={filter === 'all' ? 'active' : ''}
-              onClick={() => setFilter('all')}
-            >
-              All ({counts.total})
-            </button>
-          </div>
-
-          <div className="segmented hide-sm" role="radiogroup" aria-label="Grid layout">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={layout === 'grid'}
-              className={layout === 'grid' ? 'active' : ''}
-              onClick={() => setLayout('grid')}
-              title="2×2 grid"
-            >
-              2×2
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={layout === 'cols'}
-              className={layout === 'cols' ? 'active' : ''}
-              onClick={() => setLayout('cols')}
-              title="Side-by-side columns"
-            >
-              2×1
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={layout === 'single'}
-              className={layout === 'single' ? 'active' : ''}
-              onClick={() => setLayout('single')}
-              title="Single stacked column"
-            >
-              1×1
-            </button>
-          </div>
-
-          <div className="segmented hide-sm" role="radiogroup" aria-label="Pane content">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={view === 'live'}
-              className={view === 'live' ? 'active' : ''}
-              onClick={() => setView('live')}
-              title="Live terminals for panes in view, text thumbnails elsewhere"
-            >
-              Live
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={view === 'thumbnails'}
-              className={view === 'thumbnails' ? 'active' : ''}
-              onClick={() => setView('thumbnails')}
-              title="Text thumbnails only: cheapest view for many agents"
-            >
-              Thumbnails
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {selectedIds.length > 0 && (
-        <form className="fleet-bulk-bar" onSubmit={(e) => void sendBulkPrompt(e)}>
-          <span className="mono">{selectedIds.length} selected</span>
-          <input
-            type="text"
-            className="input"
-            value={bulkPrompt}
-            onChange={(e) => setBulkPrompt(e.target.value)}
-            placeholder="Prompt to send to every selected agent…"
-            aria-label="Prompt for the selected agents"
-          />
-          <button type="submit" className="btn btn-sm btn-primary" disabled={bulkBusy || !bulkPrompt.trim()}>
-            {bulkBusy ? 'Sending…' : 'Send to selected'}
-          </button>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())}>
-            Clear
-          </button>
-        </form>
-      )}
+      <FleetToolbar
+        counts={counts}
+        filter={filter}
+        onChangeFilter={setFilter}
+        layout={layout}
+        onChangeLayout={setLayout}
+        view={view}
+        onChangeView={setView}
+        searchQuery={searchQuery}
+        onChangeSearchQuery={setSearchQuery}
+        showSearch={scopedRuns.length > 0 || searchQuery.trim() !== ''}
+        activeProjectId={activeProjectId}
+        all={all}
+        onChangeAll={setAll}
+        bulkTitles={bulkTitles}
+        gcBusy={gcBusy}
+        stoppingAll={stoppingAll}
+        onGarbageCollect={(keepRecent = 0) => void handleGarbageCollect(keepRecent)}
+        onStopAllActive={() => void handleStopAllActive()}
+        selectedCount={selectedIds.length}
+        bulkPrompt={bulkPrompt}
+        onChangeBulkPrompt={setBulkPrompt}
+        bulkBusy={bulkBusy}
+        onSubmitBulkPrompt={(e) => void sendBulkPrompt(e)}
+        onClearSelection={() => setSelected(new Set())}
+      />
 
       <QuotaPanel compact />
 
       {notice && (
-        <div
-          className="banner"
-          style={{
-            background: 'color-mix(in srgb, var(--ok) 12%, transparent)',
-            border: '1px solid color-mix(in srgb, var(--ok) 40%, transparent)',
-            color: 'var(--ok)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
-        >
+        <div className="banner fleet-notice-banner">
           <span>{notice}</span>
           <button
             type="button"
@@ -441,7 +274,7 @@ export function FleetPage({
 
       {filter === 'active' && elsewhere > 0 && !sections.some((s) => s.section === 'needs') && (
         <h2 className="fleet-section-head fleet-needs-elsewhere">
-          {FLEET_SECTION_LABELS.needs} ·{' '}
+          {ACTIVE_SECTION_LABELS.needs} ·{' '}
           <button type="button" className="link-btn fleet-section-more" onClick={() => setAll(true)}>
             {moreInOtherProjects(elsewhere)}
           </button>
@@ -451,57 +284,15 @@ export function FleetPage({
       {runsLoading && !runs && !runsError ? (
         <ViewLoadingState label="Loading fleet sessions…" />
       ) : visibleRuns.length === 0 ? (
-        <div className="empty fleet-empty">
-          <p>
-            {searchQuery.trim() !== ''
-              ? 'No agent sessions match your search.'
-              : filter === 'active' && counts.completed > 0
-                ? `No live agent sessions running right now (${counts.completed} finished session${counts.completed === 1 ? '' : 's'} archived in History).`
-                : 'No agent sessions match the selected filter.'}
-          </p>
-          <p
-            className="muted small"
-            style={{
-              display: 'flex',
-              gap: 10,
-              justifyContent: 'center',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-            }}
-          >
-            {searchQuery.trim() !== '' ? (
-              <button type="button" className="btn btn-sm" onClick={() => setSearchQuery('')}>
-                Clear search
-              </button>
-            ) : (
-              <>
-                <span>
-                  Start a ticket from a project board or launch a run from the{' '}
-                  <Link href="/">Factory Overview</Link>.
-                </span>
-                {filter === 'active' && counts.completed > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => setFilter('completed')}
-                    >
-                      <Package className="icon" aria-hidden /> View History ({counts.completed})
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={gcBusy}
-                      onClick={() => void handleGarbageCollect(0)}
-                    >
-                      <Eraser className="icon" aria-hidden /> Clean Up Finished ({counts.completed})
-                    </button>
-                  </>
-                )}
-              </>
-            )}
-          </p>
-        </div>
+        <FleetEmptyState
+          searchQuery={searchQuery}
+          filter={filter}
+          completedCount={counts.completed}
+          gcBusy={gcBusy}
+          onClearSearch={() => setSearchQuery('')}
+          onViewHistory={() => setFilter('completed')}
+          onGarbageCollect={() => void handleGarbageCollect(0)}
+        />
       ) : (
         <div className="fleet-sections">
           {(filter === 'active' ? sections : [{ section: null, runs: visibleRuns }]).map(
@@ -509,11 +300,11 @@ export function FleetPage({
               <section
                 key={section ?? 'all'}
                 className="fleet-section"
-                aria-label={section ? FLEET_SECTION_LABELS[section] : undefined}
+                aria-label={section ? ACTIVE_SECTION_LABELS[section] : undefined}
               >
                 {section && (
                   <h2 className="fleet-section-head">
-                    {FLEET_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
+                    {ACTIVE_SECTION_LABELS[section]} <span className="muted mono">{list.length}</span>
                     {section === 'needs' && elsewhere > 0 && (
                       <button
                         type="button"

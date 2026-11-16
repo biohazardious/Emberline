@@ -1,11 +1,14 @@
 import type { TerminalInfo } from '@emberline/protocol';
+import { ArrowLeft, GitCompareArrows, RotateCw } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'wouter';
 import { ErrorBoundary, ViewErrorBanner } from '../components/ErrorBoundary';
 import { RunStatePill } from '../components/RunStatePill';
 import { type ConnectionState, TerminalView } from '../components/TerminalView';
 import { useRuns } from '../hooks/liveData';
 import { useGoBack } from '../hooks/navigation';
 import { useApi } from '../hooks/useApi';
+import '../components/runInspector/run-inspector.css';
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connecting: 'connecting…',
@@ -26,28 +29,37 @@ export function TerminalPage({ id }: { id: string }) {
   return (
     <div className="terminal-page">
       <header className="terminal-head">
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          aria-label="Back to the previous page"
-          onClick={goBack}
-        >
-          ← Back
+        <button type="button" className="icon-btn" aria-label="Back to the previous page" onClick={goBack}>
+          <ArrowLeft className="icon" aria-hidden />
         </button>
         <h1 className="terminal-title">{info?.title ?? 'Terminal'}</h1>
-        {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
-        {run && (
+        {run ? (
           <RunStatePill
             state={run.state}
             cancelled={run.cancelled}
             autoRetry={run.autoRetry}
             handedOffTo={run.handedOffTo}
           />
-        )}
+        ) : null}
         <span className={`pill pill-${state}`}>
           <span className="dot" />
           {STATE_LABEL[state]}
         </span>
+        <div className="terminal-head-actions">
+          {run?.worktreePath && (
+            <Link href={`/runs/${run.id}/review`} className="icon-btn" aria-label="Open review">
+              <GitCompareArrows className="icon" aria-hidden />
+            </Link>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Refresh terminal metadata"
+            onClick={() => void terminals.refresh()}
+          >
+            <RotateCw className="icon" aria-hidden />
+          </button>
+        </div>
       </header>
       {Boolean(terminals.error && !terminals.data) && (
         <ViewErrorBanner

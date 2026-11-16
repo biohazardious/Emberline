@@ -1,10 +1,21 @@
+// @vitest-environment happy-dom
 import type { Project, Run, RunRecovery } from '@emberline/protocol';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api } from './api';
+import type * as ApiModule from './api';
+import { apiRoutes, cleanup, click, renderDom } from './domRender';
 import { InboxPage } from './pages/InboxPage';
 import { renderStatic } from './staticRender';
+
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof ApiModule>()),
+  api: vi.fn(),
+}));
+
+afterEach(cleanup);
 
 const run = (id: string, projectId: string): Run =>
   ({
@@ -50,11 +61,28 @@ const page = (runs: Run[], activeProjectId: string | null, cached: Record<string
   );
 
 describe('InboxPage', () => {
-  it('without an active project has no toggle and speaks of all projects', () => {
+  it('without an active project has no toggle and reveals all-projects scope in HelpHint', async () => {
+    vi.mocked(api).mockImplementation(
+      apiRoutes({
+        'GET /api/projects': () => [],
+        'GET /api/notices': () => [],
+      }),
+    );
     const html = page([], null);
     expect(html).not.toContain('aria-pressed');
-    expect(html).toContain('Runs that need you, across all projects');
     expect(html).toContain('Nothing needs you right now.');
+
+    const view = await renderDom(
+      createElement(InboxPage, {
+        runs: [],
+        seen: {},
+        activeProjectId: null,
+        onOpenRun: () => undefined,
+        onDismiss: () => undefined,
+      }),
+    );
+    await click(view.container.querySelector<HTMLButtonElement>('button[aria-label="About inbox"]')!);
+    expect(view.container.textContent).toContain('Runs that need you, across all projects');
   });
   it('scoped to a project says what it leaves out', () => {
     const html = page([run('r2', 'p2')], 'p1', { '/api/projects': [] as Project[] });

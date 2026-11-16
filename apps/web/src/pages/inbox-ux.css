@@ -1,0 +1,188 @@
+/* M6 Inbox and InboxNotices styles (token-only, >= 0.8rem, tabular numerals). */
+
+.inbox-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.inbox-page .small,
+.inbox-page .btn-sm,
+.inbox-page .btn-xs,
+.inbox-page .chip-btn,
+.inbox-page .board-filter-count,
+.inbox-page .eyebrow {
+  font-size: 0.8rem;
+}
+
+.inbox-count-badge {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.inbox-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.inbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-group-head {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.inbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 0.15s ease;
+}
+
+.inbox-item:hover {
+  border-color: var(--border-strong);
+}
+
+.inbox-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inbox-chip {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in hsl, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.inbox-chip-failed {
+  border-color: color-mix(in srgb, var(--bad) 50%, var(--border));
+  background: color-mix(in hsl, var(--bad) 12%, transparent);
+  color: var(--bad);
+}
+
+.inbox-chip-rate_limited,
+.inbox-chip-stalled {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.inbox-project {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.inbox-agent {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.inbox-age {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.inbox-item-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.inbox-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  min-width: 0;
+  flex: 1;
+}
+
+.inbox-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.inbox-detail-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.inbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+@media (max-width: 640px) {
+  .inbox-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inbox-item {
+    width: 100%;
+  }
+
+  .inbox-item-main {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .inbox-actions .btn,
+  .inbox-filter .chip-btn {
+    min-height: 44px;
+  }
+}
