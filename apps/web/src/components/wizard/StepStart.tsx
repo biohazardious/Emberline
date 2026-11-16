@@ -1,5 +1,6 @@
 import type { WorkspaceFolder } from '@emberline/protocol';
 import type { Dispatch } from 'react';
+import { Disclosure } from '../ui/Disclosure';
 import { RepoSshKey } from './RepoSshKey';
 import { NameField } from './StepType';
 import {
@@ -11,23 +12,31 @@ import {
   type WizardState,
 } from './wizardLogic';
 
-const SOURCES: { id: WizardSource; label: string; hint: string }[] = [
+const SOURCES: { id: WizardSource; label: string; hint: string; details: string }[] = [
   {
     id: 'preset',
     label: 'New from a preset',
-    hint: 'Pick a project type and a stack; the agent builds the skeleton.',
+    hint: 'Pick a project type and stack.',
+    details: 'Generates PROJECT.md, CLAUDE.md, .emberline/worktree.yml and starter tickets.',
   },
   {
     id: 'import_url',
     label: 'Import a Git URL',
-    hint: 'Clone a repository and add the Emberline project files.',
+    hint: 'Clone an existing repository.',
+    details: 'Clones over HTTPS (forge account) or SSH, inspects the stack and suggests project files.',
   },
   {
     id: 'import_folder',
     label: 'Use a folder in workspaces',
-    hint: 'Register a folder that is already in the workspaces directory.',
+    hint: 'Register an existing workspace folder.',
+    details: 'Uses the git repository in place without copying or moving files.',
   },
-  { id: 'blank', label: 'Blank', hint: 'Only the project docs; the agent proposes the stack.' },
+  {
+    id: 'blank',
+    label: 'Blank',
+    hint: 'Start from a vision only.',
+    details: 'Creates project docs and lets the agent propose the technology stack.',
+  },
 ];
 
 export function StepStart({
@@ -84,6 +93,16 @@ export function StepStart({
             </label>
           ))}
         </div>
+        <Disclosure label="Details">
+          <dl className="wizard-preset-details">
+            {sources.map((s) => (
+              <div key={s.id}>
+                <dt>{s.label}</dt>
+                <dd>{s.details}</dd>
+              </div>
+            ))}
+          </dl>
+        </Disclosure>
       </fieldset>
     </div>
   );
@@ -106,7 +125,7 @@ export function StepRepo({
       <div className="wizard-step">
         <fieldset className="wizard-fieldset">
           <legend className="wizard-legend">Folder in the workspaces directory</legend>
-          <p className="muted small">Emberline registers it where it is: nothing is copied or moved.</p>
+          <p className="muted small">Registered in place: nothing is copied or moved.</p>
           <div className="wizard-cards wizard-cards-2">
             {folders.map((f, i) => (
               <label key={f.name} className={`wizard-card${f.isGitRepo ? '' : ' wizard-card-disabled'}`}>
@@ -156,8 +175,7 @@ export function StepRepo({
           onChange={(e) => dispatch({ type: 'field', field: 'repoUrl', value: e.target.value })}
         />
         <p id="wizard-repo-url-hint" className={url ? 'form-error' : 'muted small'}>
-          {url ??
-            'An https address uses the forge account for its server (Settings → Forge accounts), if there is one; an ssh address uses an Emberline SSH key.'}
+          {url ?? 'HTTPS uses your forge account; SSH uses an Emberline key.'}
         </p>
       </div>
       <RepoSshKey state={state} dispatch={dispatch} />
@@ -176,8 +194,7 @@ export function StepRepo({
           onChange={(e) => dispatch({ type: 'field', field: 'defaultBranch', value: e.target.value })}
         />
         <p id="wizard-repo-branch-hint" className={branch ? 'form-error' : 'muted small'}>
-          {branch ??
-            'The branch to clone and merge finished runs into. Leave it empty for the repository’s default branch; Emberline records it once the clone is done.'}
+          {branch ?? 'Leave empty to use the remote default branch.'}
         </p>
       </div>
       {runnerDown && (

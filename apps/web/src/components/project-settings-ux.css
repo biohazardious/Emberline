@@ -1,0 +1,196 @@
+/* Project settings M6 layout and component styles. */
+
+.project-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.project-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.project-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.project-settings-section-danger {
+  border-color: color-mix(in hsl, var(--bad) 40%, var(--border));
+}
+
+.project-settings-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.project-settings-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-settings-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.repo-inline-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  min-width: 0;
+}
+
+.repo-form-constrained {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+  min-width: 0;
+}
+
+.repo-branch-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: 22px;
+  max-width: 420px;
+  min-width: 0;
+}
+
+.repo-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.repo-ssh-wrap {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.ssh-key-legend-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.container-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.container-preview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.container-preview-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  min-width: 120px;
+}
+
+.container-preview-port-input {
+  width: 110px;
+  font-variant-numeric: tabular-nums;
+}
+
+.container-preview-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.worktree-review-diff {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-inheritance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gate-inheritance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  font-size: 0.82rem;
+}
+
+.segmented-radios label {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 640px) {
+  .project-settings-section {
+    padding: 12px;
+  }
+
+  .container-preview-row,
+  .container-preview-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .container-preview-port-input {
+    width: 100%;
+  }
+
+  .repo-branch-form {
+    margin-left: 0;
+  }
+}

@@ -5,7 +5,9 @@ import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { deployKeyHint, isSshAddress, OWN_KEY_LABEL, SHARED_KEY_LABEL, SSH_KEY_HREF } from '../sshKeys';
+import './project-settings-ux.css';
 import { SshKeyLine } from './SshKeyLine';
+import { HelpHint } from './ui/HelpHint';
 
 const NEW_KEY_QUESTION =
   "Make a new key for this project? The current key stops working at once: replace it in the repository's Settings → Deploy keys.";
@@ -57,7 +59,15 @@ export function ProjectSshKey({ project, originUrl }: { project: Project; origin
   const sshOrigin = originUrl !== null && isSshAddress(originUrl);
   return (
     <fieldset className="ssh-key-choice" aria-busy={busy !== null || undefined}>
-      <legend>SSH key</legend>
+      <legend className="ssh-key-legend-row">
+        <span>SSH key</span>
+        {!sshOrigin && (
+          <HelpHint topic="project SSH key">
+            Used for an SSH origin (such as <span className="mono">git@github.com:you/app.git</span>). An
+            HTTPS origin uses the forge account instead.
+          </HelpHint>
+        )}
+      </legend>
       {query.error !== undefined && !s && (
         <p className="form-error" role="alert">
           Could not load the SSH key: {errorMessage(query.error)}{' '}
@@ -68,12 +78,6 @@ export function ProjectSshKey({ project, originUrl }: { project: Project; origin
       )}
       {s && (
         <>
-          {!sshOrigin && (
-            <p className="muted small">
-              Used for an ssh origin (such as <span className="mono">git@github.com:you/app.git</span>). An
-              https origin uses the forge account instead.
-            </p>
-          )}
           <label className="ssh-key-option">
             <input
               type="radio"
@@ -93,7 +97,6 @@ export function ProjectSshKey({ project, originUrl }: { project: Project; origin
           </label>
           {s.choice === 'shared' && !s.shared && (
             <p className="muted small ssh-key-detail">
-              {/* One grid item: the link stays in the sentence. */}
               <span>
                 Create it in <Link href={SSH_KEY_HREF}>Settings → SSH key</Link>, or use this project&apos;s
                 own key.

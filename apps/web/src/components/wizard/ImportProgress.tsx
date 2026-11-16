@@ -1,7 +1,6 @@
 import {
   type CreateProjectBody,
   type CreateProjectResponse,
-  type HostKeyDetails,
   type ImportCloneResponse,
   type ImportSshKey,
   type ImportStatusResponse,
@@ -9,51 +8,24 @@ import {
   type ProjectDetectResponse,
   type ProjectSshKeyResponse,
   type SshKeyResponse,
-  type SshRemoteProblem,
 } from '@emberline/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../../api';
+import { isSshAddress, sshProblemFor } from '../../sshKeys';
 import {
-  deployKeyHint,
-  isSshAddress,
-  keyInUse,
-  OWN_KEY_BUTTON,
-  SHARED_KEY_HINT,
-  sshProblemFor,
-} from '../../sshKeys';
-import { HostKeyChangedNote, HostKeyTrust } from '../HostKeyTrust';
-import { SshKeyLine } from '../SshKeyLine';
+  ImportAwaitingKeyBox,
+  type ImportPhase,
+  ImportProgressSteps,
+  ImportSshFailureBox,
+} from './ImportSshHelp';
 import { cloneFailedText, isNameConflict } from './wizardLogic';
-
-type Phase =
-  | { kind: 'cloning'; tail: string; note: string | null }
-  /** An import with its own key: nothing cloned until the key is on the forge and Clone now is pressed. */
-  | { kind: 'awaitingKey'; sshKey: ImportSshKey | null }
-  | { kind: 'detecting' }
-  | {
-      kind: 'cloneFailed';
-      exitCode: number | null;
-      tail: string;
-      reason: string | undefined;
-      code?: SshRemoteProblem;
-      hostKey?: HostKeyDetails;
-    }
-  | { kind: 'detectFailed'; message: string }
-  | { kind: 'busy'; label: string };
+import './wizard-ux.css';
 
 const POLL_MS = 1_000;
 
 /**
  * Clone progress (status polling with the clone terminal's tail), then detection. A failed clone
- * offers Try again and Cancel (remove the project). Try again clones an ssh address again into the
- * same project, keeping its key (`import-clone`, Ruling 21), after the fix the failure offers (trust
- * the host key, make a key, add the key on the forge); any other address is removed and cloned
- * afresh. An import with its own key waits for Clone now. A folder import goes straight to
- * detection; Cancel unregisters it and never deletes the folder.
- *
- * A folder a failed clone left behind (`directory_exists`) is cloned afresh (the project removed and
- * registered again) only in the wizard, and only once the project's keys are read and it has no own
- * key or own key choice to lose; otherwise, and always with `keepProject`, it is explained.
+ * offers Try again and Cancel (remove the project).
  */
 export function ImportProgress({
   source,
@@ -69,22 +41,16 @@ export function ImportProgress({
 }: {
   source: 'import_url' | 'import_folder';
   projectId: string;
-  /** The body that registered the project, for Try again. */
   createBody: CreateProjectBody;
-  /** The create answered `awaiting_key` with this key: show it at once (the first status read confirms it). */
   initialSshKey?: ImportSshKey | null;
-  /** Whether it now waits for the project's key (Clone now): the wizard's footer says so. */
   onWaitingForKey?: (waiting: boolean) => void;
   onDetected: (detect: ProjectDetectResponse) => void;
   onRecreated: (projectId: string) => void;
-  /** The project is gone; `failure` when a Try again could not register it again. */
   onCancelled: (failure?: { message: string; onName: boolean }) => void;
-  /** Never removes the project to clone it afresh (Project settings): Try again always clones into it. */
   keepProject?: boolean;
-  /** Asked (window.confirm) before Cancel removes the project. */
   confirmCancel?: string;
 }) {
-  const [phase, setPhase] = useState<Phase>(
+  const [phase, setPhase] = useState<ImportPhase>(
     source !== 'import_url'
       ? { kind: 'detecting' }
       : initialSshKey !== undefined
@@ -92,18 +58,14 @@ export function ImportProgress({
         : { kind: 'cloning', tail: '', note: null },
   );
   const [actionError, setActionError] = useState<string | null>(null);
-  /** Bumped to poll again after `import-clone` started a clone. */
   const [pollRun, setPollRun] = useState(0);
-  /** The project's keys, read after an ssh failure: the key in use is shown with where to add it. */
   const [keys, setKeys] = useState<ProjectSshKeyResponse | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
   const repoUrl = createBody.repoUrl ?? '';
   const ssh = source === 'import_url' && isSshAddress(repoUrl);
   const alive = useRef(true);
   const terminalId = useRef<string | null>(null);
-  // Detection is handed over once: a second answer (StrictMode, a retry race) must not reset edits.
   const delivered = useRef(false);
-  // A new callback identity must not restart the polling.
   const onDetectedRef = useRef(onDetected);
   onDetectedRef.current = onDetected;
   useEffect(() => {
@@ -126,7 +88,6 @@ export function ImportProgress({
     }
   }, [projectId]);
 
-  // Poll the clone; a failed poll (runner restarting) is shown and retried, never fatal.
   useEffect(() => {
     if (source !== 'import_url') {
       void detect();
@@ -166,7 +127,6 @@ export function ImportProgress({
         timer = setTimeout(() => void poll(), POLL_MS * 3);
       }
     };
-    // A project waiting for its key answers `awaiting_key` (no clone runs); Clone now polls again.
     void poll();
     return () => {
       stopped = true;
@@ -174,7 +134,6 @@ export function ImportProgress({
     };
   }, [source, projectId, detect, pollRun]);
 
-  // After an ssh failure: which key the project uses, to show it (and offer to make one).
   const failedOverSsh = ssh && phase.kind === 'cloneFailed';
   const readKeys = useCallback(async () => {
     try {
@@ -188,7 +147,6 @@ export function ImportProgress({
     if (failedOverSsh) void readKeys();
   }, [failedOverSsh, readKeys]);
 
-  /** Stops a clone still running, then removes the registered project; a folder import keeps the folder itself. */
   const remove = async () => {
     if (terminalId.current) {
       await api(`/api/terminals/${terminalId.current}`, 'DELETE').catch(() => undefined);
@@ -197,28 +155,18 @@ export function ImportProgress({
     await api(`/api/projects/${projectId}${source === 'import_folder' ? '?deleteFiles=0' : ''}`, 'DELETE');
   };
 
-  /**
-   * The project has its own key, or chose one (a deploy key, a choice, that go with the project on
-   * Cancel or a fresh clone).
-   */
   const ownKey =
     createBody.sshKeyChoice === 'own' ||
     (phase.kind === 'awaitingKey' && phase.sshKey !== null) ||
     keys?.choice === 'own' ||
     (keys?.key ?? null) !== null;
-  /**
-   * Whether the project holds its own key now, as last learned (its keys read, or the wait showing
-   * the key): only then does Cancel say it removes that key (Ruling 28). A choice of its own key whose
-   * key was deleted has none to remove. Kept while nothing new is known (a clone running, busy).
-   */
   const ownKeyNow =
     keys !== null ? keys.key !== null : phase.kind === 'awaitingKey' ? phase.sshKey !== null : null;
   const [ownKeyKnown, setOwnKeyKnown] = useState(false);
   if (ownKeyNow !== null && ownKeyNow !== ownKeyKnown) setOwnKeyKnown(ownKeyNow);
   const hasOwnKey = ownKeyNow ?? ownKeyKnown;
 
-  /** Removes the failed project and registers it again from the same body (a new clone). */
-  const recreate = async (before: Phase) => {
+  const recreate = async (before: ImportPhase) => {
     setActionError(null);
     setPhase({ kind: 'busy', label: 'Removing the failed clone…' });
     try {
@@ -235,7 +183,6 @@ export function ImportProgress({
       if (alive.current) onRecreated(res.project.id);
     } catch (err) {
       if (!alive.current) return;
-      // The failed project is already removed: back to the repository step with the reason.
       const leftover = err instanceof ApiRequestError && err.code === PROJECT_CONFLICT.directoryExists;
       onCancelled({
         message: leftover
@@ -246,7 +193,6 @@ export function ImportProgress({
     }
   };
 
-  /** Clones again into the same project, keeping it and its key (`import-clone`). */
   const cloneAgain = async () => {
     setActionError(null);
     const before = phase;
@@ -261,9 +207,6 @@ export function ImportProgress({
     } catch (err) {
       if (!alive.current) return;
       const leftover = err instanceof ApiRequestError && err.code === PROJECT_CONFLICT.directoryExists;
-      // A failed clone left files behind (a tag checked out, say): in the wizard, with the shared key
-      // (known: the keys were read), nothing is lost by cloning afresh, as for https; a project's own
-      // key or choice would be, so it says so instead. Project settings never remove the project.
       if (leftover && !keepProject && before.kind === 'cloneFailed' && keys !== null && !ownKey) {
         void recreate(before);
         return;
@@ -309,7 +252,6 @@ export function ImportProgress({
     }
   };
 
-  /** Makes a key the failure or the wait asks for: the shared key, the project's key, or switches the project to its own. */
   const makeKey = async (how: 'shared' | 'own' | 'chooseOwn') => {
     setKeyBusy(true);
     setActionError(null);
@@ -347,7 +289,6 @@ export function ImportProgress({
   onWaitingRef.current = onWaitingForKey;
   useEffect(() => onWaitingRef.current?.(waiting), [waiting]);
 
-  // The buttons swap with the phase: keep focus on what replaced the one that was pressed.
   const statusRef = useRef<HTMLParagraphElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
   const cloneRef = useRef<HTMLButtonElement>(null);
@@ -379,13 +320,11 @@ export function ImportProgress({
               : phase.label;
 
   const problem = phase.kind === 'cloneFailed' ? sshProblemFor(repoUrl, phase.code) : null;
-  // Trusting is the way on: a plain Try again would meet the same unknown key.
   const trustOffered = problem === 'host_key_unknown' && phase.kind === 'cloneFailed' && !!phase.hostKey;
-  const inUse = keys ? keyInUse(keys) : null;
-  const ownChosen = keys?.choice === 'own';
 
   return (
     <div className="wizard-step">
+      <ImportProgressSteps source={source} phase={phase} usesOwnKey={ownKey} />
       <p
         ref={statusRef}
         tabIndex={-1}
@@ -396,85 +335,29 @@ export function ImportProgress({
       </p>
       {phase.kind === 'cloning' && phase.note && <p className="muted small">{phase.note}</p>}
       {phase.kind === 'awaitingKey' && (
-        <div className="wizard-ssh-key">
-          {phase.sshKey ? (
-            <>
-              <p className="muted small">
-                Fingerprint <span className="mono">{phase.sshKey.fingerprint}</span>
-              </p>
-              <SshKeyLine publicKey={phase.sshKey.publicKey} copyLabel="Copy" />
-              <p className="muted small">{deployKeyHint(repoUrl)}</p>
-            </>
-          ) : (
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={keyBusy}
-                onClick={() => void makeKey('own')}
-              >
-                {keyBusy ? 'Creating…' : "Create this project's key"}
-              </button>
-            </div>
-          )}
-        </div>
+        <ImportAwaitingKeyBox
+          sshKey={phase.sshKey}
+          repoUrl={repoUrl}
+          keyBusy={keyBusy}
+          onMakeOwnKey={() => void makeKey('own')}
+        />
       )}
       {source === 'import_url' && (tail || phase.kind === 'cloning') && (
         <pre className="wizard-tail mono" tabIndex={0} aria-label="Clone output">
           {tail || 'Waiting for output…'}
         </pre>
       )}
-      {trustOffered && phase.kind === 'cloneFailed' && phase.hostKey && (
-        <HostKeyTrust hostKey={phase.hostKey} trustLabel="Trust and try again" onTrusted={cloneAgain} />
-      )}
-      {problem === 'host_key_changed' && phase.kind === 'cloneFailed' && (
-        <HostKeyChangedNote hostKey={phase.hostKey} newTab />
-      )}
-      {(problem === 'auth_refused' || problem === 'ssh_key_missing') && keys && (
-        <div className="wizard-ssh-key">
-          {inUse ? (
-            <>
-              <p className="small">
-                The clone uses {ownChosen ? "this project's own key" : "Emberline's shared key"}{' '}
-                <span className="muted mono">({inUse.fingerprint})</span>. Add its public key, then try again.
-              </p>
-              <SshKeyLine publicKey={inUse.publicKey} copyLabel="Copy" />
-              <p className="muted small">{ownChosen ? deployKeyHint(repoUrl) : SHARED_KEY_HINT}</p>
-            </>
-          ) : (
-            <div className="actions">
-              {ownChosen ? (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={keyBusy}
-                  onClick={() => void makeKey('own')}
-                >
-                  Create this project&apos;s key
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={keyBusy}
-                    onClick={() => void makeKey('shared')}
-                  >
-                    Create a shared key
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={keyBusy}
-                    onClick={() => void makeKey('chooseOwn')}
-                  >
-                    {OWN_KEY_BUTTON}
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+      {phase.kind === 'cloneFailed' && (
+        <ImportSshFailureBox
+          problem={problem}
+          hostKey={phase.hostKey}
+          trustOffered={trustOffered}
+          keys={keys}
+          repoUrl={repoUrl}
+          keyBusy={keyBusy}
+          onCloneAgain={cloneAgain}
+          onMakeKey={(how) => void makeKey(how)}
+        />
       )}
       {actionError && (
         <p className="form-error" role="alert">

@@ -10,18 +10,20 @@ import { api, errorMessage } from '../api';
 import { useThemeMode } from '../hooks/useThemeMode';
 import { monacoTheme } from '../monaco';
 import {
+  refreshWorktreeConfigViews,
   WORKTREE_EDIT_HINT,
   WORKTREE_RELOAD_DISCARD_LABEL,
   WORKTREE_RELOAD_WARNING,
   WORKTREE_SAVE_LABEL,
   WORKTREE_VALIDATE_DELAY_MS,
-  refreshWorktreeConfigViews,
   worktreeEditorStart,
   worktreeReloadStep,
   worktreeSaveEnabled,
   worktreeSaveFailure,
 } from '../projectSettings';
 import { MonacoEditor } from './MonacoEditor';
+import './project-settings-ux.css';
+import { Disclosure } from './ui/Disclosure';
 
 /** Edits .emberline/worktree.yml: validated as you type, saved as one commit on main and approved. */
 export function WorktreeEditor({
@@ -153,7 +155,13 @@ export function WorktreeEditor({
           )}
         </div>
       )}
-      <p className="muted small">{WORKTREE_EDIT_HINT}</p>
+      <Disclosure label="Format reference">
+        <p>
+          {WORKTREE_EDIT_HINT} Keys: <span className="mono">version: 1</span>,{' '}
+          <span className="mono">setup</span>, <span className="mono">services</span>,{' '}
+          <span className="mono">checks</span>.
+        </p>
+      </Disclosure>
       <div className="actions">
         <button
           type="button"

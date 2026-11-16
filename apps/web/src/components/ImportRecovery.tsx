@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api } from '../api';
 import { unfinishedImport, unfinishedImportUrl } from '../sshKeys';
+import './project-settings-ux.css';
 import { ImportProgress } from './wizard/ImportProgress';
 
 /**
@@ -25,22 +26,18 @@ function useUnfinishedImport(project: Project) {
 /**
  * Project settings → Repository, for an import the wizard left unfinished (Ruling 23): the import's
  * own progress view (the project's public key with Copy and the deploy-key hint, Clone now, the
- * fixes for an ssh failure, Try again), and removing the project (asked first). Try again always
- * clones into this project: a folder a failed clone left is explained, the project never removed.
+ * fixes for an ssh failure, Try again), and removing the project (asked first).
  */
 export function ImportRecovery({ project }: { project: Project }) {
   const state = useUnfinishedImport(project);
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
-  // Shown from the first unfinished answer until the clone is done or the project removed:
-  // a status read in between (cloning) must not unmount the progress.
   const [shownAs, setShownAs] = useState<'awaiting_key' | 'failed' | null>(null);
   const [done, setDone] = useState(false);
   useEffect(() => {
     if (state) setShownAs((current) => current ?? state);
   }, [state]);
   const shown = shownAs !== null;
-  // Try again's fallback (a fresh clone) keeps the project's own key choice.
   const keys = useQuery({
     queryKey: ['api', `/api/projects/${project.id}/ssh-key`],
     queryFn: () => api<ProjectSshKeyResponse>(`/api/projects/${project.id}/ssh-key`),
@@ -65,8 +62,8 @@ export function ImportRecovery({ project }: { project: Project }) {
       <h4 id="import-recovery-title">The import is not finished</h4>
       <p className="muted small">
         {shownAs === 'awaiting_key'
-          ? 'This project has its own key, and its clone waits until the key is on the repository. Clone it here, or remove the project.'
-          : "This project's clone failed. Clone it again here, or remove the project."}
+          ? 'Waiting for this project’s SSH key on the repository.'
+          : 'Clone failed. Retry or remove the project.'}
       </p>
       <ImportProgress
         source="import_url"
@@ -79,7 +76,6 @@ export function ImportRecovery({ project }: { project: Project }) {
         }}
         keepProject
         confirmCancel={`Remove ${project.name}? Its folder goes too${
-          // Only a key the project holds (read, and there) is named (Ruling 28).
           keys.data?.key ? ", with its own SSH key (remove it from the repository's deploy keys too)" : ''
         }.`}
         onDetected={() => {
