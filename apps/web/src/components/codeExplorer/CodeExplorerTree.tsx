@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FilePlus,
   FileText,
   Folder,
   FolderOpen,
@@ -88,7 +89,7 @@ export function CodeExplorerTree({
 
   return (
     <aside
-      className="panel"
+      className={`panel code-tree-panel${dragOverTree ? ' code-tree-panel-drag' : ''}`}
       onDragOver={(e) => {
         e.preventDefault();
         setDragOverTree(true);
@@ -101,20 +102,12 @@ export function CodeExplorerTree({
           void triggerUpload(e.dataTransfer.files);
         }
       }}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        padding: '10px',
-        gap: '8px',
-        border: dragOverTree ? '2px dashed var(--ember-1)' : undefined,
-      }}
     >
       <input
         ref={fileInputRef}
         type="file"
         multiple
-        style={{ display: 'none' }}
+        className="code-tree-file-input"
         onChange={(e) => {
           if (e.target.files?.length) {
             void triggerUpload(e.target.files);
@@ -122,39 +115,27 @@ export function CodeExplorerTree({
         }}
       />
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '6px',
-        }}
-      >
-        <span className="eyebrow">Files ({fileCount})</span>
-        <div style={{ display: 'flex', gap: '4px' }}>
+      <div className="code-tree-header">
+        <span className="eyebrow code-tree-heading">Files ({fileCount})</span>
+        <div className="code-tree-header-actions">
           <button
             type="button"
-            className="btn btn-sm btn-ghost"
-            style={{ padding: '2px 6px', fontSize: '0.72rem' }}
-            title="Upload files (or drag and drop onto the sidebar)"
-            onClick={() => setShowUploadBox((v) => !v)}
-          >
-            <Upload className="icon" aria-hidden /> Upload
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            style={{ padding: '2px 6px', fontSize: '0.72rem' }}
+            className="btn btn-sm btn-ghost code-tree-action-btn"
             onClick={() => setCreatingFile((v) => !v)}
           >
-            + File
+            <FilePlus className="icon" aria-hidden /> Create file
           </button>
           <button
             type="button"
-            className="btn btn-sm btn-ghost"
-            style={{ padding: '2px 6px', fontSize: '0.72rem' }}
+            className="btn btn-sm btn-ghost code-tree-action-btn"
+            onClick={() => setShowUploadBox((v) => !v)}
+          >
+            <Upload className="icon" aria-hidden /> Upload files
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost code-tree-action-btn"
             onClick={onRefresh}
-            title="Refresh workspace files"
             aria-label="Refresh workspace files"
           >
             <RefreshCw className="icon" aria-hidden />
@@ -163,32 +144,21 @@ export function CodeExplorerTree({
       </div>
 
       {showUploadBox && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-            padding: '8px',
-            borderRadius: '6px',
-            background: 'var(--surface-2)',
-            border: '1px solid var(--border)',
-          }}
-        >
-          <label className="small muted" style={{ fontSize: '0.72rem' }}>
-            Target Folder (optional):
+        <div className="code-tree-upload-box">
+          <label className="small muted code-tree-upload-label" htmlFor="code-upload-folder">
+            Target folder (optional)
           </label>
           <input
-            className="input mono"
-            style={{ padding: '4px 6px', fontSize: '0.74rem' }}
-            placeholder="e.g. public/downloads or src/assets (blank = root)"
+            id="code-upload-folder"
+            className="input mono code-tree-upload-input"
+            placeholder="public/downloads (blank = root)"
             value={uploadTargetDir}
             onChange={(e) => onUploadTargetDirChange(e.target.value)}
           />
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <div className="code-tree-upload-actions">
             <button
               type="button"
-              className="btn btn-sm btn-primary"
-              style={{ flex: 1, padding: '4px 8px', fontSize: '0.74rem' }}
+              className="btn btn-sm code-tree-upload-choose"
               disabled={uploading}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -196,37 +166,33 @@ export function CodeExplorerTree({
                 'Uploading…'
               ) : (
                 <>
-                  <Upload className="icon" aria-hidden /> Choose File(s)…
+                  <Upload className="icon" aria-hidden /> Choose files
                 </>
               )}
             </button>
             <button
               type="button"
-              className="btn btn-sm btn-ghost"
-              style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+              className="btn btn-sm btn-ghost code-tree-action-btn"
               onClick={() => setShowUploadBox(false)}
             >
               Cancel
             </button>
           </div>
-          <span className="muted" style={{ fontSize: '0.68rem' }}>
-            Tip: You can also drag &amp; drop any file(s) directly onto this file tree.
-          </span>
         </div>
       )}
 
       {creatingFile && (
-        <form onSubmit={(e) => void submitNewFile(e)} style={{ display: 'flex', gap: '4px' }}>
+        <form onSubmit={(e) => void submitNewFile(e)} className="code-tree-create-form">
           <input
-            className="input mono"
-            style={{ flex: 1, padding: '4px 6px', fontSize: '0.75rem' }}
+            className="input mono code-tree-create-input"
+            aria-label="New file path"
             placeholder="src/newFile.ts"
             value={newFilePath}
             onChange={(e) => setNewFilePath(e.target.value)}
             autoFocus
           />
-          <button type="submit" className="btn btn-sm btn-primary" style={{ padding: '4px 8px' }}>
-            Add
+          <button type="submit" className="btn btn-sm code-tree-create-btn">
+            Add file
           </button>
         </form>
       )}
@@ -234,20 +200,12 @@ export function CodeExplorerTree({
       <SearchInput
         className="code-explorer-search"
         ariaLabel="Filter workspace files"
-        placeholder="Filter files (e.g. .apk, .ts, dist)…"
+        placeholder="Filter files…"
         value={filterText}
         onChange={onFilterTextChange}
       />
 
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '2px',
-        }}
-      >
+      <div className="code-tree-list">
         {loading && !hasData && !hasError && <ViewLoadingState compact label="Loading workspace files…" />}
         {loadError !== undefined && !hasData && (
           <ViewErrorBanner
@@ -267,19 +225,8 @@ export function CodeExplorerTree({
           return (
             <div
               key={entry.path}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '4px 6px',
-                paddingLeft: `${6 + depth * 12}px`,
-                borderRadius: '4px',
-                cursor: 'pointer',
-                background: isSelected ? 'var(--surface-hover)' : 'transparent',
-                borderLeft: isSelected ? '2px solid var(--ember-1)' : '2px solid transparent',
-                fontSize: '0.78rem',
-                gap: '4px',
-              }}
+              className={`code-tree-row${isSelected ? ' code-tree-row-selected' : ''}`}
+              style={{ paddingLeft: `${6 + depth * 12}px` }}
               onClick={() => {
                 if (isDir) {
                   onToggleDir(entry.path);
@@ -289,18 +236,7 @@ export function CodeExplorerTree({
                 }
               }}
             >
-              <span
-                className="mono"
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontWeight: isDir || isSelected ? 600 : 400,
-                  color: isDir ? 'var(--ember-2)' : 'var(--text)',
-                  flex: 1,
-                }}
-                title={isDir ? `${entry.path}/` : `${entry.path} (${formatBytes(entry.sizeBytes)})`}
-              >
+              <span className={`mono code-tree-row-name${isDir ? ' code-tree-row-dir' : ''}`}>
                 {isDir ? (
                   isCollapsed ? (
                     <>
@@ -317,30 +253,15 @@ export function CodeExplorerTree({
                 {entry.name}
               </span>
               {!isDir && (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '2px',
-                    flexShrink: 0,
-                  }}
-                >
+                <span className="code-tree-row-meta">
                   {entry.sizeBytes >= 100 * 1024 && (
-                    <span className="muted mono" style={{ fontSize: '0.66rem', marginRight: '2px' }}>
-                      {formatBytes(entry.sizeBytes)}
-                    </span>
+                    <span className="muted mono code-tree-row-size">{formatBytes(entry.sizeBytes)}</span>
                   )}
                   <a
                     href={getFileDownloadUrl(projectId, targetId, entry.path)}
                     download={entry.name}
-                    className="btn btn-ghost btn-sm"
-                    style={{
-                      padding: '0 4px',
-                      fontSize: '0.7rem',
-                      opacity: 0.75,
-                      textDecoration: 'none',
-                    }}
-                    title={`Download ${entry.path} (${formatBytes(entry.sizeBytes)})`}
+                    className="btn btn-ghost btn-sm code-tree-row-icon-btn"
+                    aria-label={`Download ${entry.path}`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <Download className="icon" aria-hidden />
@@ -348,9 +269,7 @@ export function CodeExplorerTree({
                   {!isWorktreeYmlPath(entry.path) && !isEmberlineDirPath(entry.path) && (
                     <button
                       type="button"
-                      className="btn btn-ghost btn-sm"
-                      style={{ padding: '0 4px', fontSize: '0.68rem', opacity: 0.6 }}
-                      title={`Delete ${entry.path}`}
+                      className="btn btn-ghost btn-sm code-tree-row-icon-btn"
                       aria-label={`Delete ${entry.path}`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -366,7 +285,7 @@ export function CodeExplorerTree({
           );
         })}
         {visibleEntries.length === 0 && !loading && !hasError && loadError === undefined && (
-          <p className="muted small" style={{ padding: '8px' }}>
+          <p className="muted small code-tree-empty">
             {filterText.trim() ? 'No files match the filter.' : 'No matching files in workspace.'}
           </p>
         )}

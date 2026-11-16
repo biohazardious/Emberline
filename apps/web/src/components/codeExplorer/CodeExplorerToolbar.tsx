@@ -1,8 +1,11 @@
 import type { Project, Run } from '@emberline/protocol';
 import { FileCode2, Package, SquareKanban } from 'lucide-react';
-import { Link } from 'wouter';
+import { useLocation } from 'wouter';
 import { ViewErrorBanner } from '../ErrorBoundary';
 import { SectionState } from '../SectionState';
+import { HelpHint } from '../ui/HelpHint';
+import { MoreMenu, type MoreMenuItem } from '../ui/MoreMenu';
+import { PageHeader } from '../ui/PageHeader';
 
 export function CodeExplorerToolbar({
   projectId,
@@ -35,6 +38,8 @@ export function CodeExplorerToolbar({
   error: string | null;
   statusMessage: string | null;
 }) {
+  const [, navigate] = useLocation();
+
   if (!project && (projectLoading || projectError !== undefined)) {
     return (
       <SectionState
@@ -47,69 +52,56 @@ export function CodeExplorerToolbar({
     );
   }
 
+  const menuItems: MoreMenuItem[] = [
+    {
+      id: 'download-archive',
+      label: 'Download archive',
+      description: 'Export workspace as .tar.gz',
+      icon: <Package className="icon" aria-hidden />,
+      href: `/api/projects/${projectId}/export.tar.gz`,
+    },
+    {
+      id: 'open-board',
+      label: 'Open board',
+      icon: <SquareKanban className="icon" aria-hidden />,
+      onSelect: () => navigate(`/projects/${projectId}/board`),
+    },
+  ];
+
   return (
     <>
-      <div
-        className="panel"
-        style={{
-          padding: '10px 14px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '10px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', minWidth: 0 }}>
-          <span className="badge badge-soft mono" style={{ fontWeight: 600 }}>
-            <FileCode2 className="icon" aria-hidden /> Code Explorer
-          </span>
-          <strong>{project?.name ?? projectId}</strong>
-          <span className="muted mono small" style={{ overflowWrap: 'anywhere' }}>
-            {workspacePath ?? project?.path ?? 'No workspace path available'}
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            flexWrap: 'wrap',
-            minWidth: 0,
-            maxWidth: '100%',
-          }}
-        >
-          <label className="small muted" htmlFor="code-target-select">
-            Target:
-          </label>
-          <select
-            id="code-target-select"
-            className="input"
-            style={{ width: 'auto', maxWidth: 'min(320px, 100%)', padding: '4px 8px', fontSize: '0.78rem' }}
-            value={targetId}
-            onChange={(e) => onChangeTargetId(e.target.value)}
-          >
-            <option value="main">Main Workspace ({project?.defaultBranch ?? 'main'})</option>
-            {projectRuns.map((r) => (
-              <option key={r.id} value={r.id}>
-                Worktree · {r.title ?? r.branch} ({r.state})
-              </option>
-            ))}
-          </select>
-
-          <Link href={`/projects/${projectId}/board`} className="btn btn-sm btn-ghost">
-            <SquareKanban className="icon" aria-hidden /> Kanban Board
-          </Link>
-          <a
-            href={`/api/projects/${projectId}/export.tar.gz`}
-            className="btn btn-sm btn-ghost"
-            title="Download workspace as .tar.gz archive"
-          >
-            <Package className="icon" aria-hidden /> Download .tar.gz
-          </a>
-        </div>
-      </div>
+      <PageHeader
+        title="Code"
+        icon={<FileCode2 className="icon" aria-hidden />}
+        meta={
+          <>
+            <span className="badge badge-soft">{project?.name ?? projectId}</span>
+            <HelpHint topic="workspace">
+              Workspace path:{' '}
+              <span className="mono">{workspacePath ?? project?.path ?? 'No workspace path available'}</span>
+            </HelpHint>
+          </>
+        }
+        actions={
+          <>
+            <select
+              id="code-target-select"
+              className="input code-target-select"
+              aria-label="Workspace target"
+              value={targetId}
+              onChange={(e) => onChangeTargetId(e.target.value)}
+            >
+              <option value="main">{project?.defaultBranch ?? 'main'}</option>
+              {projectRuns.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.title ?? r.branch} ({r.state})
+                </option>
+              ))}
+            </select>
+            <MoreMenu items={menuItems} ariaLabel="Workspace actions" />
+          </>
+        }
+      />
 
       {Boolean(fileListError && !hasFileListData) && (
         <ViewErrorBanner
@@ -119,15 +111,11 @@ export function CodeExplorerToolbar({
         />
       )}
       {error && (
-        <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
+        <div className="banner banner-error code-banner" role="alert">
           {error}
         </div>
       )}
-      {statusMessage && (
-        <div className="banner banner-ok" style={{ margin: 0 }}>
-          {statusMessage}
-        </div>
-      )}
+      {statusMessage && <div className="banner banner-ok code-banner">{statusMessage}</div>}
     </>
   );
 }

@@ -4,7 +4,10 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
 import { LiveBrowserStudio } from '../components/LiveBrowserStudio';
+import { HelpHint } from '../components/ui/HelpHint';
+import { PageHeader } from '../components/ui/PageHeader';
 import { useApi } from '../hooks/useApi';
+import '../components/liveBrowser/live-browser.css';
 
 export function LiveBrowserPage({ projectId }: { projectId: string }) {
   const projectsPoll = useApi<Project[]>('/api/projects', 10_000);
@@ -16,7 +19,7 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
 
   if (projectsPoll.error && !projectsPoll.data) {
     return (
-      <div className="board-page">
+      <div className="board-page live-browser-page">
         <ViewErrorBanner
           label="Could not load project"
           error={projectsPoll.error}
@@ -28,19 +31,19 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
 
   if (projectsPoll.loading && !project) {
     return (
-      <div className="board-page">
-        <ViewLoadingState label="Loading Live Browser Studio…" />
+      <div className="board-page live-browser-page">
+        <ViewLoadingState label="Loading live browser…" />
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="board-page">
+      <div className="board-page live-browser-page">
         <div className="empty">
           <p>Project not found.</p>
           <Link href="/" className="btn btn-sm">
-            Back to dashboard
+            Open dashboard
           </Link>
         </div>
       </div>
@@ -48,53 +51,38 @@ export function LiveBrowserPage({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="board-page">
-      <header className="board-head">
-        <div className="board-title">
-          <Link href="/" className="btn btn-ghost btn-sm" aria-label="Back to overview">
-            ←
-          </Link>
-          <div>
-            <p className="eyebrow">{project.name} · Shared Runner Chromium + Playwright MCP</p>
-            <h1>
-              <Globe className="icon" aria-hidden /> Live Browser Studio
-            </h1>
-            <p className="muted small">
-              Watch agents navigate, click, and verify the application in real time, or interact with the live
-              Chromium browser directly.
-            </p>
-          </div>
-        </div>
-
-        <div className="board-controls">
-          {targets.length > 1 && (
+    <div className="board-page live-browser-page">
+      <PageHeader
+        title="Live browser"
+        icon={<Globe className="icon" aria-hidden />}
+        meta={
+          <>
+            <span className="badge badge-soft">{project.name}</span>
+            <HelpHint topic="live browser">
+              Shared runner Chromium over CDP (1280×720 at http://127.0.0.1:9222) and Playwright MCP. Click
+              the viewport to send mouse clicks, or open More for playtest, QA checks, device sizes, and
+              console logs.
+            </HelpHint>
+          </>
+        }
+        subtitle="A Chromium in the runner that agents and you share"
+        actions={
+          targets.length > 1 ? (
             <select
-              className="input"
-              aria-label="Live Browser target"
+              className="input live-browser-target-select"
+              aria-label="Live browser target"
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
-              style={{
-                width: 'auto',
-                maxWidth: 'min(320px, 100%)',
-                fontSize: '0.78rem',
-                padding: '5px 10px',
-              }}
             >
               {targets.map((t) => (
                 <option key={t.id} value={t.id}>
-                  Target: {t.label}
+                  {t.label}
                 </option>
               ))}
             </select>
-          )}
-          <Link href={`/projects/${project.id}/board`} className="btn btn-sm">
-            Kanban Board
-          </Link>
-          <Link href="/fleet" className="btn btn-sm">
-            Fleet &amp; Terminals
-          </Link>
-        </div>
-      </header>
+          ) : undefined
+        }
+      />
 
       {Boolean(statusPoll.error && !statusPoll.data) && (
         <ViewErrorBanner
