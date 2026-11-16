@@ -1,26 +1,11 @@
 import type { AgentPersona, McpServerEntry, McpServerTransport, SkillPluginEntry } from '@emberline/protocol';
-import { Plug, Plus, X } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
-import { ico, SectionState } from '../SectionState';
+import { SectionState } from '../SectionState';
+import { HelpHint } from '../ui/HelpHint';
 import { SaveBar } from '../ui/SaveBar';
-import { PersonaScopePills, SkillPluginsSection } from './SkillPluginsSection';
-import {
-  ST_BADGE_64,
-  ST_CARD_GRID_310,
-  ST_COL_6,
-  ST_COL_14,
-  ST_CUSTOM_BOX,
-  ST_DESC_73,
-  ST_FIELD_4,
-  ST_HEAD_SPLIT,
-  ST_HR,
-  ST_LABEL_68,
-  ST_PANEL_FORM,
-  ST_PANEL_PAD,
-  ST_ROW_BETWEEN,
-  ST_ROW_WRAP6,
-  ST_SAVE_ROW,
-} from './settingsMeta';
+import { McpServerRow, parseEnvLines } from './automation/McpServerRow';
+import './settings-sections.css';
+import { SkillPluginsSection } from './SkillPluginsSection';
 
 export interface McpPluginsSectionProps {
   mcpServers: McpServerEntry[];
@@ -57,6 +42,7 @@ export function McpPluginsSection({
   const [mcpCommand, setMcpCommand] = useState('npx');
   const [mcpArgs, setMcpArgs] = useState('-y @modelcontextprotocol/server-everything');
   const [mcpUrl, setMcpUrl] = useState('');
+  const [mcpEnv, setMcpEnv] = useState('');
 
   if ((loadError !== undefined || loading) && servers.length === 0 && skills.length === 0) {
     return (
@@ -67,7 +53,6 @@ export function McpPluginsSection({
         loadingText="Loading MCP servers & skill plugins…"
         emptyText="No MCP servers or skill plugins registered."
         errorPrefix="Could not load MCP & plugin registry"
-        style={ST_PANEL_PAD}
       />
     );
   }
@@ -89,6 +74,10 @@ export function McpPluginsSection({
 
   const setMcpAllPersonas = (id: string) => {
     onChangeMcpServers(servers.map((s) => (s.id === id ? { ...s, personas: [] } : s)));
+  };
+
+  const updateMcpServer = (id: string, patch: Partial<McpServerEntry>) => {
+    onChangeMcpServers(servers.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   };
 
   const removeCustomMcp = (id: string) => {
@@ -113,7 +102,7 @@ export function McpPluginsSection({
       command: mcpTransport === 'stdio' ? mcpCommand.trim() : '',
       args: mcpTransport === 'stdio' ? mcpArgs.trim().split(/\s+/).filter(Boolean) : [],
       url: mcpTransport !== 'stdio' ? mcpUrl.trim() || null : null,
-      env: {},
+      env: parseEnvLines(mcpEnv),
       enabled: true,
       builtIn: false,
       personas: [],
@@ -123,87 +112,77 @@ export function McpPluginsSection({
     setMcpId('');
     setMcpName('');
     setMcpDesc('');
+    setMcpEnv('');
     setShowAddMcp(false);
   };
 
   const activeMcpCount = servers.filter((s) => s.enabled).length;
 
   return (
-    <form onSubmit={onSave} className="panel" style={ST_PANEL_FORM}>
-      <div style={ST_COL_14}>
-        <div style={ST_HEAD_SPLIT}>
-          <div>
-            <span className="eyebrow">Model Context Protocol (MCP) Hub</span>
-            <h3 style={{ margin: '4px 0 4px' }}>
-              {ico(Plug)} MCP Tool Servers ({activeMcpCount} of {servers.length} Active)
-            </h3>
-            <p className="muted small" style={{ maxWidth: 740, margin: 0 }}>
-              Enable curated or custom MCP servers and scope them to specific specialist personas. Active MCP
-              servers are automatically wired into <code>--mcp-config</code> and pre-authorized in autonomous
+    <form onSubmit={onSave} className="panel settings-section-form">
+      <section className="settings-group" aria-labelledby="mcp-servers-heading">
+        <header className="settings-group-head settings-group-head-split">
+          <div className="settings-group-title-row">
+            <h2 id="mcp-servers-heading">MCP servers</h2>
+            <span className="badge mono">
+              {activeMcpCount} of {servers.length} on
+            </span>
+            <HelpHint topic="MCP servers">
+              Active MCP servers are wired into <code>--mcp-config</code> and pre-authorized in autonomous
               runs.
-            </p>
+            </HelpHint>
           </div>
-          <button type="button" className="btn btn-sm" onClick={() => setShowAddMcp((v) => !v)}>
-            {showAddMcp ? 'Cancel' : <>{ico(Plus)} Add Custom MCP Server</>}
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-expanded={showAddMcp}
+            onClick={() => setShowAddMcp((v) => !v)}
+          >
+            {showAddMcp ? 'Cancel' : 'Add server'}
           </button>
-        </div>
+        </header>
 
         {showAddMcp && (
-          <div style={ST_CUSTOM_BOX}>
-            <strong style={{ fontSize: '0.85rem' }}>Register Custom MCP Server</strong>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))',
-                gap: '10px',
-              }}
-            >
-              <label className="field" style={ST_FIELD_4}>
-                <span className="muted mono" style={ST_LABEL_68}>
-                  Server Name
-                </span>
+          <div className="settings-add-box">
+            <div className="settings-field-grid">
+              <label className="field">
+                <span>Server name</span>
                 <input
                   type="text"
                   className="input"
-                  placeholder="e.g. Stripe / Supabase / Custom MCP"
+                  placeholder="Stripe"
                   value={mcpName}
                   onChange={(e) => setMcpName(e.target.value)}
                 />
               </label>
-              <label className="field" style={ST_FIELD_4}>
-                <span className="muted mono" style={ST_LABEL_68}>
-                  Server ID (Slug)
-                </span>
+              <label className="field">
+                <span>Server ID</span>
                 <input
                   type="text"
                   className="input mono"
-                  placeholder="e.g. stripe-mcp (auto if blank)"
+                  placeholder="stripe-mcp"
                   value={mcpId}
                   onChange={(e) => setMcpId(e.target.value)}
                 />
               </label>
-              <label className="field" style={ST_FIELD_4}>
-                <span className="muted mono" style={ST_LABEL_68}>
-                  Transport
-                </span>
+              <label className="field">
+                <span>Transport</span>
                 <select
                   className="input"
                   value={mcpTransport}
                   onChange={(e) => setMcpTransport(e.target.value as McpServerTransport)}
                 >
-                  <option value="stdio">stdio (CLI Command &amp; Args)</option>
-                  <option value="sse">sse (HTTP Server-Sent Events URL)</option>
-                  <option value="http">http (Streamable HTTP URL)</option>
+                  <option value="stdio">stdio</option>
+                  <option value="sse">sse</option>
+                  <option value="http">http</option>
                 </select>
               </label>
             </div>
 
             {mcpTransport === 'stdio' ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '10px' }}>
-                <label className="field" style={ST_FIELD_4}>
-                  <span className="muted mono" style={ST_LABEL_68}>
-                    Command
-                  </span>
+              <div className="settings-stdio-grid">
+                <label className="field">
+                  <span>Command</span>
                   <input
                     type="text"
                     className="input mono"
@@ -212,10 +191,8 @@ export function McpPluginsSection({
                     onChange={(e) => setMcpCommand(e.target.value)}
                   />
                 </label>
-                <label className="field" style={ST_FIELD_4}>
-                  <span className="muted mono" style={ST_LABEL_68}>
-                    Arguments (space-separated)
-                  </span>
+                <label className="field">
+                  <span>Arguments</span>
                   <input
                     type="text"
                     className="input mono"
@@ -226,10 +203,8 @@ export function McpPluginsSection({
                 </label>
               </div>
             ) : (
-              <label className="field" style={ST_FIELD_4}>
-                <span className="muted mono" style={ST_LABEL_68}>
-                  Endpoint URL
-                </span>
+              <label className="field">
+                <span>Endpoint URL</span>
                 <input
                   type="url"
                   className="input mono"
@@ -240,137 +215,59 @@ export function McpPluginsSection({
               </label>
             )}
 
-            <label className="field" style={ST_FIELD_4}>
-              <span className="muted mono" style={ST_LABEL_68}>
-                Description
-              </span>
+            <label className="field">
+              <span>Environment variables</span>
+              <textarea
+                className="input mono"
+                rows={2}
+                placeholder="KEY=value"
+                value={mcpEnv}
+                onChange={(e) => setMcpEnv(e.target.value)}
+              />
+            </label>
+
+            <label className="field">
+              <span>Description</span>
               <input
                 type="text"
                 className="input"
-                placeholder="What tools does this MCP server provide to your agents?"
+                placeholder="Tools provided to agents"
                 value={mcpDesc}
                 onChange={(e) => setMcpDesc(e.target.value)}
               />
             </label>
 
-            <div style={ST_SAVE_ROW}>
+            <div className="settings-form-actions">
               <button
                 type="button"
-                className="btn btn-sm btn-primary"
+                className="btn btn-sm"
                 onClick={handleCreateCustomMcp}
                 disabled={!mcpName.trim()}
               >
-                Add MCP Server to Registry
+                Add server
               </button>
             </div>
           </div>
         )}
 
         {servers.length === 0 ? (
-          <p className="muted small" style={{ margin: 0 }}>
-            No MCP tool servers registered yet.
-          </p>
+          <p className="muted small">No MCP tool servers registered yet.</p>
         ) : (
-          <div style={ST_CARD_GRID_310}>
-            {servers.map((srv) => {
-              const cmdPreview =
-                srv.transport === 'stdio' ? `${srv.command} ${srv.args.join(' ')}`.trim() : (srv.url ?? '');
-              return (
-                <div
-                  key={srv.id}
-                  style={{
-                    padding: '13px',
-                    borderRadius: '8px',
-                    background: srv.enabled
-                      ? 'var(--surface-2)'
-                      : 'color-mix(in srgb, var(--text) 1.5%, transparent)',
-                    border: srv.enabled
-                      ? '1px solid color-mix(in srgb, var(--info) 45%, transparent)'
-                      : '1px dashed var(--border)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '10px',
-                  }}
-                >
-                  <div style={ST_COL_6}>
-                    <div style={ST_ROW_BETWEEN}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                        <span style={{ fontSize: '1.05rem' }}>{srv.icon}</span>
-                        <strong style={{ fontSize: '0.88rem' }}>{srv.name}</strong>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <button
-                          type="button"
-                          className={`btn btn-xs ${srv.enabled ? 'btn-primary' : 'btn-ghost'}`}
-                          onClick={() => toggleMcpEnabled(srv.id)}
-                        >
-                          {srv.enabled ? '✓ Active' : '+ Enable'}
-                        </button>
-                        {!srv.builtIn && (
-                          <button
-                            type="button"
-                            className="btn btn-xs btn-ghost"
-                            onClick={() => removeCustomMcp(srv.id)}
-                            title="Remove custom MCP server"
-                            aria-label="Remove custom MCP server"
-                          >
-                            {ico(X)}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={ST_ROW_WRAP6}>
-                      <span className="badge mono" style={ST_BADGE_64}>
-                        mcp__{srv.id}__*
-                      </span>
-                      <span className="badge mono" style={ST_BADGE_64}>
-                        {srv.transport.toUpperCase()}
-                      </span>
-                      {!srv.builtIn && (
-                        <span className="badge mono" style={{ ...ST_BADGE_64, color: 'var(--info)' }}>
-                          Custom
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="muted small" style={ST_DESC_73}>
-                      {srv.description}
-                    </div>
-
-                    <code
-                      className="mono muted"
-                      style={{
-                        fontSize: '0.67rem',
-                        padding: '4px 6px',
-                        borderRadius: '4px',
-                        background: 'var(--surface-2)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={cmdPreview}
-                    >
-                      {cmdPreview}
-                    </code>
-                  </div>
-
-                  <PersonaScopePills
-                    labelPrefix="Persona Scope"
-                    personas={srv.personas}
-                    onSelectAll={() => setMcpAllPersonas(srv.id)}
-                    onToggle={(persona) => toggleMcpPersona(srv.id, persona)}
-                    itemTitle={srv.name}
-                  />
-                </div>
-              );
-            })}
+          <div className="settings-group-rows">
+            {servers.map((srv) => (
+              <McpServerRow
+                key={srv.id}
+                server={srv}
+                onToggleEnabled={toggleMcpEnabled}
+                onTogglePersona={toggleMcpPersona}
+                onSelectAllPersonas={setMcpAllPersonas}
+                onUpdate={updateMcpServer}
+                onRemove={removeCustomMcp}
+              />
+            ))}
           </div>
         )}
-      </div>
-
-      <hr style={ST_HR} />
+      </section>
 
       <SkillPluginsSection skills={skills} onChangeSkillPlugins={onChangeSkillPlugins} />
 
