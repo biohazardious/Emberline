@@ -7,26 +7,31 @@ import {
   type ToolchainActionResponse,
   type ToolchainStatusResponse,
 } from '@emberline/protocol';
-import { Cpu, Folder, LoaderCircle, RefreshCw, RotateCw } from 'lucide-react';
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../../api';
+import { useQueryParam } from '../../hooks/navigation';
 import { useClaudeUsage, useToolchainStatus } from '../../hooks/useSettingsQueries';
 import { PERSONA_LIST } from '../PersonaBadge';
 import { SdkToolchainPanel } from '../SdkToolchainPanel';
-import { ico, SectionState } from '../SectionState';
+import { SectionState } from '../SectionState';
 import { SaveBar } from '../ui/SaveBar';
-import { PersonaRoutingSection } from './PersonaRoutingSection';
-import { ProviderCard } from './ProviderCard';
+import { AgentsView } from './providers/AgentsView';
+import './providers/providers.css';
+import { RoutingView } from './providers/RoutingView';
 import {
-  ALL_PROVIDER_IDS,
   defaultRoute,
+  PROVIDER_VIEWS,
   type ProviderSectionForm,
-  ST_HEAD_SPLIT,
-  ST_HR,
-  ST_PANEL_FORM,
+  type ProviderView,
   ST_PANEL_PAD,
 } from './settingsMeta';
+
+const PROVIDER_VIEW_ITEMS: ReadonlyArray<{ id: ProviderView; label: string }> = [
+  { id: 'agents', label: 'Agents' },
+  { id: 'routing', label: 'Routing' },
+  { id: 'sdks', label: 'SDKs' },
+];
 
 export function ProvidersSection({
   form,
@@ -56,6 +61,12 @@ export function ProvidersSection({
     setError,
   } = form;
   const [, setLocation] = useLocation();
+  const [viewParam, setViewParam] = useQueryParam('view');
+  const activeView: ProviderView = PROVIDER_VIEWS.includes(viewParam as ProviderView)
+    ? (viewParam as ProviderView)
+    : 'agents';
+  const setActiveView = (next: ProviderView) => setViewParam(next === 'agents' ? null : next);
+
   const toolchainQuery = useToolchainStatus(true);
   const toolchain = toolchainQuery.data;
   const claudeUsage = useClaudeUsage(30_000).data;
@@ -157,13 +168,11 @@ export function ProvidersSection({
 
   const toggleProviderEnabled = (providerId: AgentId) => {
     if (providerId === 'antigravity' && !antigravityAck && !enabledProviders.includes('antigravity')) {
-      setNotice('Accept the Antigravity account risk on its card before enabling it.');
       return;
     }
     setEnabledProviders((prev) => {
       const exists = prev.includes(providerId);
       if (exists && prev.length <= 1) {
-        setNotice('At least one AI provider must remain active.');
         return prev;
       }
       const next = exists ? prev.filter((p) => p !== providerId) : [...prev, providerId];
@@ -192,103 +201,51 @@ export function ProvidersSection({
   };
 
   return (
-    <form onSubmit={onSave} className="panel" style={ST_PANEL_FORM}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div style={ST_HEAD_SPLIT}>
-          <div>
-            <span className="eyebrow">
-              Step 1 · Provider Registry, Persistent CLI Volume &amp; Credentials
-            </span>
-            <h3 style={{ margin: '4px 0 4px' }}>Active AI Providers ({enabledProviders.length} Enabled)</h3>
-            <p className="muted small" style={{ maxWidth: 760, margin: 0 }}>
-              Runner image is generic and CLI-agnostic. All AI CLIs are dynamically installed and updated
-              inside the persistent <code>{toolchain?.toolsDir ?? '/opt/ai-tools'}</code> volume so container
-              rebuilds never lose your tools.
-            </p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            {toolchain && (
-              <span
-                className="badge mono"
-                style={{
-                  fontSize: '0.68rem',
-                  padding: '4px 8px',
-                  borderColor: 'color-mix(in srgb, var(--ok) 40%, transparent)',
-                  color: 'var(--ok)',
-                }}
-                title="Generic Runner Base OS & Node.js LTS Runtime"
+    <form onSubmit={onSave} className="panel providers-section">
+      <div className="providers-top-bar">
+        <div className="segmented providers-view-switch" role="group" aria-label="Providers view">
+          {PROVIDER_VIEW_ITEMS.map(({ id, label }) => {
+            const active = activeView === id;
+            return (
+              <button
+                key={id}
+                id={`providers-view-${id}`}
+                type="button"
+                aria-pressed={active}
+                className={active ? 'active' : ''}
+                onClick={() => setActiveView(id)}
               >
-                {ico(Cpu)} {toolchain.osInfo} · Node {toolchain.nodeVersion} · {ico(Folder)}{' '}
-                {toolchain.toolsDir}
-              </span>
-            )}
-            <button
-              type="button"
-              className="btn btn-xs btn-primary"
-              disabled={updatingAllTools || busyToolProvider !== null}
-              onClick={() => void handleUpdateAllTools()}
-              title="Install missing enabled CLIs and update all installed AI CLIs in /opt/ai-tools to their latest release"
-            >
-              {updatingAllTools ? (
-                <>{ico(LoaderCircle, true)} Updating All CLIs…</>
-              ) : (
-                <>{ico(RotateCw)} Update All Active CLIs</>
-              )}
-            </button>
-            <button
-              type="button"
-              className="btn btn-xs btn-ghost"
-              onClick={() => void toolchainQuery.refresh()}
-              title="Refresh CLI installation & version status"
-            >
-              {ico(RefreshCw)} Refresh
-            </button>
-          </div>
-        </div>
-
-        {toolchainQuery.error !== undefined && !toolchain && (
-          <p className="form-error" role="alert">
-            Could not load CLI toolchain status: {errorMessage(toolchainQuery.error)}{' '}
-            <button type="button" className="btn btn-xs" onClick={() => void toolchainQuery.refresh()}>
-              Retry
-            </button>
-          </p>
-        )}
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(295px, 100%), 1fr))',
-            gap: '10px',
-          }}
-        >
-          {ALL_PROVIDER_IDS.map((providerId) => (
-            <ProviderCard
-              key={providerId}
-              providerId={providerId}
-              form={form}
-              settings={settings}
-              toolStatus={toolchain?.tools.find((t) => t.provider === providerId)}
-              busyToolProvider={busyToolProvider}
-              updatingAllTools={updatingAllTools}
-              launchingLoginProvider={launchingLoginProvider}
-              onToggleEnabled={() => toggleProviderEnabled(providerId)}
-              onToolchainAction={(action, spawnTerminal) =>
-                void handleToolchainAction(providerId, action, spawnTerminal)
-              }
-              onStartLogin={() => void handleStartProviderLogin(providerId)}
-            />
-          ))}
+                {label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <hr style={ST_HR} />
+      {activeView === 'agents' && (
+        <AgentsView
+          form={form}
+          settings={settings}
+          toolchain={toolchain}
+          toolchainError={toolchainQuery.error}
+          busyToolProvider={busyToolProvider}
+          updatingAllTools={updatingAllTools}
+          launchingLoginProvider={launchingLoginProvider}
+          onRefreshToolchain={toolchainQuery.refresh}
+          onUpdateAllTools={handleUpdateAllTools}
+          onToggleProviderEnabled={toggleProviderEnabled}
+          onToolchainAction={(providerId, action, spawnTerminal) =>
+            void handleToolchainAction(providerId, action, spawnTerminal)
+          }
+          onStartLogin={(providerId) => void handleStartProviderLogin(providerId)}
+        />
+      )}
 
-      <SdkToolchainPanel sdks={toolchain?.sdks ?? []} onChanged={toolchainQuery.refresh} />
+      {activeView === 'routing' && <RoutingView form={form} claudeUsage={claudeUsage} />}
 
-      <hr style={ST_HR} />
-
-      <PersonaRoutingSection form={form} claudeUsage={claudeUsage} />
+      {activeView === 'sdks' && (
+        <SdkToolchainPanel sdks={toolchain?.sdks ?? []} onChanged={toolchainQuery.refresh} />
+      )}
 
       <SaveBar dirty={dirty} saving={saving} onDiscard={onDiscard} />
     </form>

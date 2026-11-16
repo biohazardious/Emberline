@@ -1,6 +1,8 @@
 import type { SdkActionResponse, SdkId, SdkStatus } from '@emberline/protocol';
 import {
+  Check,
   CircuitBoard,
+  CircleOff,
   Download,
   LoaderCircle,
   RotateCw,
@@ -11,6 +13,10 @@ import {
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
+import { ico } from './SectionState';
+import './settings/providers/providers.css';
+import { Disclosure } from './ui/Disclosure';
+import { HelpHint } from './ui/HelpHint';
 
 const SDK_ICONS: Record<SdkId, typeof CircuitBoard> = {
   platformio: CircuitBoard,
@@ -21,7 +27,7 @@ const SDK_ICONS: Record<SdkId, typeof CircuitBoard> = {
 
 /**
  * SDKs for desktop, mobile and embedded projects. Installs run as runner terminals (they download
- * gigabytes), so every action opens its terminal; the cards follow the status while it runs.
+ * gigabytes), so every action opens its terminal; the rows follow the status while it runs.
  */
 export function SdkToolchainPanel({
   sdks,
@@ -50,101 +56,128 @@ export function SdkToolchainPanel({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <div>
-        <span className="eyebrow">Project SDKs · Desktop, Mobile &amp; Embedded</span>
-        <h3 style={{ margin: '4px 0 4px' }}>SDKs for Non-Web Projects</h3>
-        <p className="muted small" style={{ maxWidth: 760, margin: 0 }}>
-          Installed into the persistent tools volume at pinned versions and already on the agents&apos;{' '}
-          <code>PATH</code> (<code>JAVA_HOME</code> and <code>ANDROID_HOME</code> included). Agents can also
-          install them with <code>emberline-sdk install &lt;id&gt;</code>.
-        </p>
-      </div>
-      {error && <div className="banner banner-error">{error}</div>}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
-          gap: '10px',
-        }}
-      >
-        {sdks.map((sdk) => {
-          const Icon = SDK_ICONS[sdk.id];
-          const disabled = busy !== null || anyInstalling;
-          return (
-            <div
-              key={sdk.id}
-              className="panel"
-              style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}
-            >
-              <div
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
-              >
-                <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <Icon className="icon" aria-hidden /> {sdk.label}
-                </strong>
-                <span
-                  className="badge mono"
-                  style={{ fontSize: '0.68rem', color: sdk.installed ? 'var(--ok)' : 'var(--muted)' }}
-                  title={sdk.version ?? undefined}
-                >
-                  {sdk.installing ? 'Working…' : sdk.installed ? 'Installed' : 'Not installed'}
-                </span>
-              </div>
-              <p className="muted small" style={{ margin: 0 }}>
-                {sdk.description}
+    <section className="sdk-panel" aria-labelledby="providers-sdks-heading">
+      <header className="providers-view-head">
+        <div className="providers-view-title-group">
+          <h3 id="providers-sdks-heading" className="providers-view-title">
+            Project SDKs
+          </h3>
+          <HelpHint topic="project SDKs">
+            <div className="providers-hint-body">
+              <p>
+                Installed into the persistent tools volume at pinned versions and already on the agents&apos;{' '}
+                <code>PATH</code> (<code>JAVA_HOME</code> and <code>ANDROID_HOME</code> included).
               </p>
-              <p className="muted small mono" style={{ margin: 0, fontSize: '0.7rem' }}>
-                <code>{sdk.id}</code> · {sdk.sizeHint}
+              <p>
+                Agents can also install them from a run with <code>emberline-sdk install &lt;id&gt;</code>.
               </p>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: 'auto' }}>
-                {sdk.installing && sdk.terminalId ? (
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-ghost"
-                    onClick={() => setLocation(`/terminals/${sdk.terminalId}`)}
-                  >
-                    <SquareTerminal className="icon" aria-hidden /> Show progress
-                  </button>
-                ) : sdk.installed ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-ghost"
-                      disabled={disabled}
-                      onClick={() => void run(sdk.id, 'update')}
-                    >
-                      <RotateCw className="icon" aria-hidden /> Reinstall
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-ghost"
-                      disabled={disabled}
-                      onClick={() => void run(sdk.id, 'uninstall')}
-                    >
-                      <Trash2 className="icon" aria-hidden /> Uninstall
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-primary"
-                    disabled={disabled}
-                    onClick={() => void run(sdk.id, 'install')}
-                  >
-                    {busy === sdk.id ? (
-                      <LoaderCircle className="icon icon-spin" aria-hidden />
-                    ) : (
-                      <Download className="icon" aria-hidden />
-                    )}{' '}
-                    Install
-                  </button>
-                )}
-              </div>
             </div>
-          );
-        })}
-      </div>
-    </div>
+          </HelpHint>
+        </div>
+        <p className="muted providers-view-summary">
+          Optional toolchains for desktop, mobile and embedded projects.
+        </p>
+      </header>
+
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
+
+      {sdks.length === 0 ? (
+        <p className="muted small">No project SDKs registered.</p>
+      ) : (
+        <div className="sdk-list" role="list" aria-label="Project SDKs">
+          {sdks.map((sdk) => {
+            const Icon = SDK_ICONS[sdk.id];
+            const disabled = busy !== null || anyInstalling;
+            const statusClass = sdk.installing
+              ? 'sdk-status-installing'
+              : sdk.installed
+                ? 'sdk-status-installed'
+                : 'sdk-status-not_installed';
+            return (
+              <div key={sdk.id} className="sdk-row" role="listitem" data-sdk-row={sdk.id}>
+                <div className="sdk-row-main">
+                  <div className="sdk-row-identity">
+                    <strong className="sdk-row-title">
+                      <Icon className="icon" aria-hidden="true" /> {sdk.label}
+                    </strong>
+                    {sdk.installed && sdk.version && (
+                      <span className="mono muted sdk-row-meta">{sdk.version}</span>
+                    )}
+                    <span className="mono muted sdk-row-meta">{sdk.sizeHint}</span>
+                    <span className={`badge mono provider-status ${statusClass}`}>
+                      {sdk.installing ? ico(LoaderCircle, true) : sdk.installed ? ico(Check) : ico(CircleOff)}
+                      <span>
+                        {sdk.installing ? 'Working…' : sdk.installed ? 'Installed' : 'Not installed'}
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="sdk-row-actions">
+                    {sdk.installing && sdk.terminalId ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => setLocation(`/terminals/${sdk.terminalId}`)}
+                      >
+                        <SquareTerminal className="icon" aria-hidden="true" /> Show progress
+                      </button>
+                    ) : sdk.installed ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={disabled}
+                        onClick={() => void run(sdk.id, 'update')}
+                      >
+                        <RotateCw className="icon" aria-hidden="true" /> Reinstall
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={disabled}
+                        onClick={() => void run(sdk.id, 'install')}
+                      >
+                        {busy === sdk.id ? (
+                          <LoaderCircle className="icon icon-spin" aria-hidden="true" />
+                        ) : (
+                          <Download className="icon" aria-hidden="true" />
+                        )}{' '}
+                        Install
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <Disclosure label="Details">
+                  <div className="sdk-details-body">
+                    <p className="muted">{sdk.description}</p>
+                    <p className="mono muted">
+                      <code>{sdk.id}</code> · {sdk.sizeHint}
+                      {sdk.version ? ` · v${sdk.version}` : ''} · <code>emberline-sdk install {sdk.id}</code>
+                    </p>
+                    {sdk.installed && !sdk.installing && (
+                      <div>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost danger"
+                          disabled={disabled}
+                          onClick={() => void run(sdk.id, 'uninstall')}
+                        >
+                          <Trash2 className="icon" aria-hidden="true" /> Uninstall
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </Disclosure>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
