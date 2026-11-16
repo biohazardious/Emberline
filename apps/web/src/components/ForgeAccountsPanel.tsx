@@ -23,12 +23,15 @@ import {
   serverAfterProviderChange,
 } from '../forgeAccounts';
 import { useApi } from '../hooks/useApi';
+import './settings/settings-panels.css';
+import { HelpHint } from './ui/HelpHint';
 
 const PROVIDERS: ForgeProvider[] = ['github', 'gitlab', 'gitea'];
 
-/** Settings → Forge & Webhooks → Forge accounts: one account per server; tokens are write-only. */
+/** Settings → Forges and webhooks → Forge accounts: one account per server; tokens are write-only. */
 export function ForgeAccountsPanel() {
   const list = useApi<ForgeAccountsResponse>('/api/forge/accounts', 60_000);
+  const [adding, setAdding] = useState(false);
   const [provider, setProvider] = useState<ForgeProvider>('github');
   const [serverUrl, setServerUrl] = useState(FORGE_DEFAULT_SERVER_URL.github);
   const [token, setToken] = useState('');
@@ -109,7 +112,10 @@ export function ForgeAccountsPanel() {
       () => api<ForgeAccount>('/api/forge/accounts', 'POST', built.body),
       'Account added.',
     );
-    if (ok) setAllowHttp(false);
+    if (ok) {
+      setAllowHttp(false);
+      setAdding(false);
+    }
   };
 
   const saveToken = async (a: ForgeAccount) => {
@@ -135,15 +141,34 @@ export function ForgeAccountsPanel() {
 
   return (
     <section
-      className="panel forge-accounts"
+      className="panel settings-panel forge-accounts"
       id="forge-accounts"
       ref={panelRef}
       aria-labelledby="forge-accounts-title"
     >
-      <header className="panel-head">
-        <div>
-          <h2 id="forge-accounts-title">Forge accounts</h2>
-          <p className="muted">One account per server. Emberline sends a token only to its own server.</p>
+      <header className="settings-panel-head">
+        <div className="settings-panel-title-group">
+          <div className="settings-panel-heading-row">
+            <h2 id="forge-accounts-title">Forge accounts</h2>
+            <HelpHint topic="forge accounts">
+              Emberline keeps forge tokens in core and sends each token only to its own server. Agents clone
+              and push through one-time gateway URLs.
+            </HelpHint>
+          </div>
+          <p className="muted">One account per server.</p>
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-expanded={adding}
+            onClick={() => {
+              setFeedback((f) => feedbackAfterToggle(f, 'add'));
+              setAdding((v) => !v);
+            }}
+          >
+            {adding ? 'Cancel' : 'Add account'}
+          </button>
         </div>
       </header>
       {list.error !== undefined && !list.data && (
@@ -183,12 +208,15 @@ export function ForgeAccountsPanel() {
           const fromEnv = a.source === 'environment';
           return (
             <li key={a.id} className="forge-account-row">
-              <div>
-                <span className="badge badge-soft">{PROVIDER_LABEL[a.provider]}</span>{' '}
+              <div className="forge-account-main">
+                <span className="badge badge-soft">{PROVIDER_LABEL[a.provider]}</span>
                 <span className="mono">{accountHost(a)}</span>
                 <p className="muted small">{accountUserLine(a)}</p>
-                {fromEnv && (
-                  <p className="muted small">From environment (EMBERLINE_FORGE_TOKEN): change it there.</p>
+                {a.scopesHint && (
+                  <HelpHint topic={`${accountHost(a)} scopes`}>
+                    {a.scopesHint}
+                    {fromEnv ? ' Configured via EMBERLINE_FORGE_TOKEN.' : ''}
+                  </HelpHint>
                 )}
               </div>
               <div className="actions">
@@ -224,7 +252,7 @@ export function ForgeAccountsPanel() {
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-ghost"
+                      className="btn btn-sm btn-ghost danger"
                       disabled={busy !== null}
                       onClick={() => {
                         if (!window.confirm(`Remove the account for ${accountHost(a)}?`)) return;
@@ -268,60 +296,61 @@ export function ForgeAccountsPanel() {
           );
         })}
       </ul>
-      <form className="form" onSubmit={(e) => void add(e)}>
-        <h3 id="forge-add-title">Add account</h3>
-        <div className="segmented segmented-radios" role="radiogroup" aria-labelledby="forge-add-title">
-          {PROVIDERS.map((p) => (
-            <label key={p} className={provider === p ? 'active' : ''}>
+      {adding && (
+        <form className="form settings-subform" onSubmit={(e) => void add(e)}>
+          <div className="segmented segmented-radios" role="radiogroup" aria-label="Forge provider">
+            {PROVIDERS.map((p) => (
+              <label key={p} className={provider === p ? 'active' : ''}>
+                <input
+                  type="radio"
+                  name="forge-provider"
+                  value={p}
+                  checked={provider === p}
+                  onChange={() => chooseProvider(p)}
+                />
+                <span>{PROVIDER_LABEL[p]}</span>
+              </label>
+            ))}
+          </div>
+          <div className="form-row">
+            <label className="field">
+              Server URL
               <input
-                type="radio"
-                name="forge-provider"
-                value={p}
-                checked={provider === p}
-                onChange={() => chooseProvider(p)}
+                type="text"
+                inputMode="url"
+                className="input"
+                placeholder="https://gitea.example.com"
+                value={serverUrl}
+                onChange={(e) => setServerUrl(e.target.value)}
               />
-              <span>{PROVIDER_LABEL[p]}</span>
             </label>
-          ))}
-        </div>
-        <div className="form-row">
-          <label className="field">
-            Server URL
-            <input
-              type="text"
-              inputMode="url"
-              className="input"
-              placeholder="https://gitea.example.com"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Token
-            <input
-              type="password"
-              autoComplete="new-password"
-              className="input"
-              placeholder="Kept in core only"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
-          </label>
-        </div>
-        <p className="muted small">{FORGE_SCOPE_HINTS[provider]}</p>
-        {isPlainHttpServer(serverUrl) && (
-          <label className="review-checkbox-label">
-            <input type="checkbox" checked={allowHttp} onChange={(e) => setAllowHttp(e.target.checked)} />
-            Send the token to this server over plain http:// (unencrypted)
-          </label>
-        )}
-        <div className="form-actions">
-          <button type="submit" className="btn btn-sm btn-primary" disabled={busy !== null}>
-            {busy === 'add' ? 'Checking…' : 'Add account'}
-          </button>
-        </div>
-        {show('add')}
-      </form>
+            <label className="field">
+              Token
+              <input
+                type="password"
+                autoComplete="new-password"
+                className="input"
+                placeholder="Kept in core only"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="muted small">{FORGE_SCOPE_HINTS[provider]}</p>
+          {isPlainHttpServer(serverUrl) && (
+            <label className="review-checkbox-label">
+              <input type="checkbox" checked={allowHttp} onChange={(e) => setAllowHttp(e.target.checked)} />
+              Send the token to this server over plain http:// (unencrypted)
+            </label>
+          )}
+          <div className="form-actions">
+            <button type="submit" className="btn btn-sm btn-primary" disabled={busy !== null}>
+              {busy === 'add' ? 'Checking…' : 'Add account'}
+            </button>
+          </div>
+        </form>
+      )}
+      {show('add')}
     </section>
   );
 }

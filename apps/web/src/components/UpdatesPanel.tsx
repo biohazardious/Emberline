@@ -10,6 +10,10 @@ import { type FormEvent, useState } from 'react';
 import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
+import './settings/settings-panels.css';
+import { Disclosure } from './ui/Disclosure';
+import { HelpHint } from './ui/HelpHint';
+import { Switch } from './ui/Switch';
 
 const STATE_LABELS: Record<UpdateItemState, string> = {
   up_to_date: 'Up to date',
@@ -21,17 +25,11 @@ const STATE_LABELS: Record<UpdateItemState, string> = {
   error: 'Check failed',
 };
 
-const STATE_COLORS: Partial<Record<UpdateItemState, string>> = {
-  up_to_date: 'var(--ok)',
-  update_available: 'var(--warn)',
-  error: 'var(--bad)',
-};
-
 const KIND_TITLES: Record<UpdateItem['kind'], string> = {
   emberline: 'Emberline',
   cli: 'Agent CLIs',
-  mcp: 'MCP servers (npx)',
-  bundled: 'Bundled with Emberline',
+  mcp: 'MCP servers',
+  bundled: 'Bundled',
 };
 
 /**
@@ -117,21 +115,26 @@ export function UpdatesPanel() {
     .filter((g) => g.items.length > 0);
 
   return (
-    <section className="panel" aria-labelledby="updates-title">
-      <header className="panel-head">
-        <div>
-          <h2 id="updates-title">Updates</h2>
-          <p className="muted">
-            Checks GitHub for Emberline releases, and npm / PyPI for the agent CLIs and the MCP servers run
-            through npx.{' '}
-            {status?.checkedAt
-              ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
-              : 'Not checked yet.'}
+    <section className="panel settings-panel" aria-labelledby="updates-title">
+      <header className="settings-panel-head">
+        <div className="settings-panel-title-group">
+          <div className="settings-panel-heading-row">
+            <h2 id="updates-title">Updates</h2>
+            <HelpHint topic="updates">
+              Checks GitHub for Emberline releases, and npm or PyPI for the agent CLIs and the MCP servers run
+              through npx. Core restarts on upgrade; the runner restarts only when its image changes, which
+              stops running agents.
+            </HelpHint>
+          </div>
+          <p className="muted mono">
+            Running v{status?.currentVersion ?? '—'} ·{' '}
+            {status?.checkedAt ? `checked ${new Date(status.checkedAt).toLocaleString()}` : 'not checked yet'}
+            .
           </p>
         </div>
         <div className="actions">
           {status && status.available > 0 && (
-            <span className="badge badge-warn">{status.available} available</span>
+            <span className="badge badge-warn mono">{status.available} available</span>
           )}
           <button
             type="button"
@@ -140,95 +143,51 @@ export function UpdatesPanel() {
             onClick={() => void checkNow()}
           >
             {busy === 'check' ? (
-              <LoaderCircle className="icon icon-spin" aria-hidden />
+              <LoaderCircle className="icon icon-spin" aria-hidden="true" />
             ) : (
-              <RefreshCw className="icon" aria-hidden />
+              <RefreshCw className="icon" aria-hidden="true" />
             )}{' '}
             Check now
           </button>
         </div>
       </header>
 
-      {error && <div className="banner banner-error">{error}</div>}
-      {notice && <div className="banner banner-ok">{notice}</div>}
-
-      <div className="form" style={{ marginBottom: '1rem' }}>
-        <div className="form-row">
-          <label className="review-checkbox-label">
-            <input
-              type="checkbox"
-              checked={data?.config.autoCheck ?? true}
-              disabled={!data || busy !== null}
-              onChange={(e) => void setAutoCheck(e.target.checked)}
-            />
-            Check automatically every 12 hours
-          </label>
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
         </div>
-        <form className="form-row" onSubmit={saveToken}>
-          <input
-            type="password"
-            autoComplete="new-password"
-            className="input"
-            aria-label="GitHub token"
-            placeholder={
-              data?.config.tokenConfigured
-                ? 'GitHub token set (leave blank to keep)'
-                : 'Optional GitHub token (needed while the repository is private)'
-            }
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            style={{ maxWidth: '380px' }}
-          />
-          <button type="submit" className="btn btn-sm" disabled={busy !== null || !token.trim()}>
-            Save token
-          </button>
-          {data?.config.tokenConfigured && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={busy !== null}
-              onClick={() => void clearToken()}
-            >
-              Remove token
-            </button>
-          )}
-        </form>
-        <p className="muted small" style={{ margin: 0 }}>
-          The token is only sent to api.github.com. A fine-grained token with read access to the
-          repository&apos;s contents is enough.
-        </p>
-      </div>
-
-      {status?.release && (
-        <div className="panel update-release">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-            <strong>
-              Emberline {status.release.version} is available (running {status.currentVersion})
-            </strong>
-            <a className="btn btn-xs btn-ghost" href={status.release.url} target="_blank" rel="noreferrer">
-              <ExternalLink className="icon" aria-hidden /> Release page
-            </a>
-          </div>
-          <p className="muted small" style={{ margin: 0 }}>
-            Upgrade on the Docker host. Core restarts; the runner restarts too when its image or settings
-            change, which stops running agents, so upgrade when they are idle.
-          </p>
-          <pre className="update-commands mono">
-            {`# published images: download this release's deploy/compose.yaml first (then redo your own edits to it)\ncp compose.yaml compose.yaml.bak\ncurl -fsSLO https://raw.githubusercontent.com/biohazardious/Emberline/v${status.release.version}/deploy/compose.yaml\ndocker compose pull && docker compose up -d\n\n# from a git checkout\ngit pull && make up`}
-          </pre>
-          {status.release.notes.trim() && (
-            <details>
-              <summary className="small">Release notes</summary>
-              <pre className="update-notes">{status.release.notes.trim()}</pre>
-            </details>
-          )}
+      )}
+      {notice && (
+        <div className="banner banner-ok" role="status">
+          {notice}
         </div>
       )}
 
-      {!status?.checkedAt && !query.loading && (
-        <p className="muted small">
-          Press “Check now” to compare the installed versions with the latest releases.
-        </p>
+      {status?.release && (
+        <div className="panel update-release">
+          <div className="update-release-head">
+            <strong>
+              Emberline {status.release.version} is available (running {status.currentVersion})
+            </strong>
+            <a className="btn btn-sm btn-ghost" href={status.release.url} target="_blank" rel="noreferrer">
+              <ExternalLink className="icon" aria-hidden="true" /> Open release
+            </a>
+          </div>
+          <Disclosure label="Upgrade commands and changelog">
+            <div className="quota-details-stack">
+              <p className="muted small">
+                Upgrade on the Docker host. Core restarts; the runner restarts too when its image or settings
+                change, which stops running agents, so upgrade when they are idle.
+              </p>
+              <pre className="update-commands mono">
+                {`# published images: download this release's deploy/compose.yaml first (then redo your own edits to it)\ncp compose.yaml compose.yaml.bak\ncurl -fsSLO https://raw.githubusercontent.com/biohazardious/Emberline/v${status.release.version}/deploy/compose.yaml\ndocker compose pull && docker compose up -d\n\n# from a git checkout\ngit pull && make up`}
+              </pre>
+              {status.release.notes.trim() && (
+                <pre className="update-notes">{status.release.notes.trim()}</pre>
+              )}
+            </div>
+          </Disclosure>
+        </div>
       )}
 
       {groups.map((group) => (
@@ -241,27 +200,25 @@ export function UpdatesPanel() {
                   <strong>{item.name}</strong>
                   {item.note && <span className="muted small">{item.note}</span>}
                 </div>
-                <span className="mono small update-versions">
+                <span className="mono update-versions">
                   {item.installed ?? '—'}
                   {item.latest && item.latest !== item.installed ? ` → ${item.latest}` : ''}
                 </span>
-                <span className="badge" style={{ color: STATE_COLORS[item.state] ?? 'var(--muted)' }}>
-                  {STATE_LABELS[item.state]}
-                </span>
+                <span className={`badge update-state-${item.state}`}>{STATE_LABELS[item.state]}</span>
                 <div className="update-action">
                   {item.kind === 'cli' &&
                     item.provider &&
                     (item.state === 'update_available' || item.state === 'unknown') && (
                       <button
                         type="button"
-                        className="btn btn-xs btn-ghost"
+                        className="btn btn-sm btn-ghost"
                         disabled={busy !== null}
                         onClick={() => void updateCli(item)}
                       >
                         {busy === item.id ? (
-                          <LoaderCircle className="icon icon-spin" aria-hidden />
+                          <LoaderCircle className="icon icon-spin" aria-hidden="true" />
                         ) : (
-                          <RotateCw className="icon" aria-hidden />
+                          <RotateCw className="icon" aria-hidden="true" />
                         )}{' '}
                         Update
                       </button>
@@ -269,17 +226,16 @@ export function UpdatesPanel() {
                   {item.kind === 'mcp' && item.state === 'update_available' && (
                     <button
                       type="button"
-                      className="btn btn-xs btn-ghost"
+                      className="btn btn-sm btn-ghost"
                       disabled={busy !== null}
-                      title="Removes the cached copy; the next start downloads the latest version"
                       onClick={() => void refreshMcp(item)}
                     >
                       {busy === item.id ? (
-                        <LoaderCircle className="icon icon-spin" aria-hidden />
+                        <LoaderCircle className="icon icon-spin" aria-hidden="true" />
                       ) : (
-                        <RotateCw className="icon" aria-hidden />
+                        <RotateCw className="icon" aria-hidden="true" />
                       )}{' '}
-                      Refresh
+                      Update
                     </button>
                   )}
                 </div>
@@ -288,6 +244,51 @@ export function UpdatesPanel() {
           </div>
         </div>
       ))}
+
+      <div className="update-controls-bar">
+        <Switch
+          checked={data?.config.autoCheck ?? true}
+          disabled={!data || busy !== null}
+          onChange={(next) => void setAutoCheck(next)}
+          label="Check every 12 hours"
+        />
+        <Disclosure label={data?.config.tokenConfigured ? 'GitHub token (set)' : 'GitHub token'}>
+          <div className="quota-details-stack">
+            <form className="form-row" onSubmit={saveToken}>
+              <input
+                type="password"
+                autoComplete="new-password"
+                className="input settings-token-input"
+                aria-label="GitHub token"
+                placeholder={
+                  data?.config.tokenConfigured
+                    ? 'GitHub token set (leave blank to keep)'
+                    : 'Optional GitHub token (private repository)'
+                }
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+              <button type="submit" className="btn btn-sm" disabled={busy !== null || !token.trim()}>
+                Save token
+              </button>
+              {data?.config.tokenConfigured && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm danger"
+                  disabled={busy !== null}
+                  onClick={() => void clearToken()}
+                >
+                  Remove token
+                </button>
+              )}
+            </form>
+            <p className="muted small quota-details-note">
+              Sent only to api.github.com. A fine-grained token with read access to repository contents is
+              enough.
+            </p>
+          </div>
+        </Disclosure>
+      </div>
     </section>
   );
 }

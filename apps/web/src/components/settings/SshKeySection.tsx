@@ -1,6 +1,7 @@
 import { useSshKeys } from '../../hooks/useSettingsQueries';
 import { SectionState } from '../SectionState';
 import { SshKeyPanel } from '../SshKeyPanel';
+import './settings-panels.css';
 
 export function SshKeySection() {
   const { shared } = useSshKeys();

@@ -85,12 +85,14 @@ describe('Settings → SSH key', () => {
     expect(calls).toEqual(['generate']);
   });
 
-  it('shows the key with its fingerprint, date and where to add it', async () => {
+  it('shows the key with its fingerprint and date, and reveals where to add it on disclosure', async () => {
     shared = keyA;
     await renderDom(createElement(SshKeyPanel));
     await waitFor(() => expect(text()).toContain(keyA.publicKey));
     expect(text()).toContain('SHA256:aaaa');
     expect(text()).toContain('ed25519 · created 10 Nov 2026');
+    expect(text()).not.toContain('GitHub → Settings → SSH and GPG keys');
+    await click(getButton('Where to add this key'));
     expect(text()).toContain('GitHub → Settings → SSH and GPG keys');
   });
 
@@ -103,19 +105,21 @@ describe('Settings → SSH key', () => {
     await waitFor(() => expect(text()).toContain('Copied.'));
   });
 
-  it('asks before New key, and says to swap the key on the forge after', async () => {
+  it('asks before Replace key, styles it as danger, and says to swap the key on the forge after', async () => {
     shared = keyA;
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await renderDom(createElement(SshKeyPanel));
     await waitFor(() => expect(text()).toContain(keyA.publicKey));
-    await click(getButton('New key'));
+    const replaceBtn = getButton('Replace key');
+    expect(replaceBtn.classList.contains('danger')).toBe(true);
+    await click(replaceBtn);
     expect(confirm).toHaveBeenCalledOnce();
     expect(confirm.mock.calls[0]![0]).toContain('stops working at once');
     expect(calls).toEqual([]);
     await click(getButton('Copy public key'));
     await waitFor(() => expect(text()).toContain('Copied.'));
     confirm.mockReturnValue(true);
-    await click(getButton('New key'));
+    await click(getButton('Replace key'));
     await waitFor(() => expect(text()).toContain(keyB.publicKey));
     expect(calls).toEqual(['generate']);
     expect(text()).toContain('Remove the old public key');
@@ -128,7 +132,9 @@ describe('Settings → SSH key', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await renderDom(createElement(SshKeyPanel));
     await waitFor(() => expect(text()).toContain(keyA.publicKey));
-    await click(getButton('Delete'));
+    const deleteBtn = getButton('Delete');
+    expect(deleteBtn.classList.contains('danger')).toBe(true);
+    await click(deleteBtn);
     expect(calls).toEqual([]);
     expect(confirm.mock.calls[0]![0]).toContain('remove its public key');
     confirm.mockReturnValue(true);
@@ -143,7 +149,9 @@ describe('Settings → SSH key', () => {
     await renderDom(createElement(SshKeyPanel));
     await waitFor(() => expect(text()).toContain('git.example.com:2222'));
     expect(text()).toContain('SHA256:host');
-    await click(getButton('Remove'));
+    const removeBtn = getButton('Remove');
+    expect(removeBtn.classList.contains('danger')).toBe(true);
+    await click(removeBtn);
     expect(confirm.mock.calls[0]![0]).toContain('git.example.com:2222');
     await waitFor(() => expect(text()).toContain('No trusted host keys'));
     expect(removed).toEqual([{ host: 'git.example.com', port: 2222, keyType: 'ssh-ed25519' }]);

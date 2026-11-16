@@ -1,6 +1,7 @@
 import { useScheduler } from '../../hooks/liveData';
 import { QuotaPanel } from '../QuotaPanel';
 import { SectionState } from '../SectionState';
+import './settings-panels.css';
 
 export function QuotaSection() {
   const { scheduler, loading, error, refresh } = useScheduler();

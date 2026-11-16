@@ -1,9 +1,10 @@
 import { type ReactNode, useState } from 'react';
 import { copyText } from '../clipboard';
 import { CopyFallback } from './CopyFallback';
+import './settings/settings-panels.css';
 
 /**
- * A public key's OpenSSH line, with Copy and any other actions beside it (New key, Delete). A copy
+ * A public key's OpenSSH line, with Copy and any other actions beside it (Replace key, Delete). A copy
  * the browser blocks (plain HTTP) shows the line in a field to copy by hand.
  */
 export function SshKeyLine({
@@ -16,7 +17,7 @@ export function SshKeyLine({
   /** More buttons in the same row, after Copy. */
   children?: ReactNode;
 }) {
-  // The line copied (or to copy by hand): a new key (New key) shows neither for the old one.
+  // The line copied (or to copy by hand): a new key shows neither for the old one.
   const [copied, setCopied] = useState<string | null>(null);
   const [manual, setManual] = useState<string | null>(null);
   const copy = async () => {

@@ -1,5 +1,6 @@
 import { AccountPanel } from '../AccountPanel';
 import { SectionState } from '../SectionState';
+import './settings-panels.css';
 
 export function AccountSection({
   loading,
