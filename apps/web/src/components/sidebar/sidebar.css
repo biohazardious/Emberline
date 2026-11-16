@@ -1,0 +1,139 @@
+/* Sidebar, top bar, and command palette styles (M6 shell, token-only, >= 0.8rem). */
+
+.sidebar-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-nav-group + .sidebar-nav-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-nav-items {
+  display: grid;
+  gap: 2px;
+}
+
+.sidebar-group-label {
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sidebar-project-box {
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-project-select {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+
+.sidebar-project-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.sidebar-telemetry {
+  font-size: 0.8rem;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-telemetry-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-telemetry-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-telemetry-tab:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.sidebar-telemetry-tab.active {
+  border-color: var(--ember-1);
+  background: color-mix(in hsl, var(--ember-1) 14%, var(--surface));
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sidebar-telemetry-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.sidebar-telemetry-dot.ok {
+  background: var(--ok);
+}
+
+.sidebar-telemetry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-telemetry-head {
+  color: var(--text);
+}
+
+.sidebar-telemetry-status.ok {
+  color: var(--ok);
+}
+
+.sidebar-telemetry-status.warn {
+  color: var(--warn);
+}
+
+.sidebar-collapsed .sidebar-group-label {
+  display: none;
+}
+
+@media (max-width: 820px) {
+  .sidebar-collapsed .sidebar.sidebar-open .sidebar-group-label {
+    display: revert;
+  }
+}

@@ -162,7 +162,7 @@ a {
 }
 
 .brand-version {
-  font-size: 0.66rem;
+  font-size: 0.8rem;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -958,7 +958,7 @@ a {
   background: var(--bg);
   color: var(--muted);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   cursor: pointer;
   transition: border-color 0.15s;
 }
@@ -1054,7 +1054,7 @@ a {
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--surface-2);
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   color: var(--text);
 }
 
@@ -1091,12 +1091,13 @@ a {
 }
 
 .sidebar-count {
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
 .sidebar-empty {
   padding: 4px 8px;
+  font-size: 0.8rem;
 }
 
 .sidebar-foot {
@@ -1115,7 +1116,7 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface);
   border: 1px solid var(--border);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -2910,7 +2911,7 @@ dialog.cmd-dialog::backdrop {
 }
 
 .cmd-icon {
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   color: var(--ember-1);
 }
 
@@ -2955,8 +2956,7 @@ dialog.cmd-dialog::backdrop {
 }
 
 .cmd-group {
-  font-size: 0.66rem;
-  text-transform: uppercase;
+  font-size: 0.8rem;
   color: var(--muted);
   min-width: 110px;
 }
@@ -2973,7 +2973,7 @@ dialog.cmd-dialog::backdrop {
 
 .cmd-meta {
   margin-left: auto;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;

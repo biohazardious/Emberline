@@ -74,73 +74,6 @@
   display: none;
 }
 
-.sidebar-project-box {
-  padding: 0 2px 8px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.sidebar-project-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-}
-
-.sidebar-telemetry {
-  font-size: 0.7rem;
-  padding: 7px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.sidebar-telemetry-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sidebar-telemetry-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 5px;
-  font-size: 0.65rem;
-  font-family: inherit;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.sidebar-telemetry-tab.active {
-  border-color: var(--ember-1);
-  background: color-mix(in hsl, var(--ember-1) 14%, var(--surface));
-  color: var(--text);
-  font-weight: 600;
-}
-
-.sidebar-telemetry-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--warn);
-}
-
-.sidebar-telemetry-dot.ok {
-  background: var(--ok);
-}
-
 .code-explorer-page {
   display: flex;
   flex-direction: column;
@@ -191,6 +124,7 @@
   .sidebar-collapsed .sidebar.sidebar-open .brand-version,
   .sidebar-collapsed .sidebar.sidebar-open .cmd-trigger-text,
   .sidebar-collapsed .sidebar.sidebar-open .cmd-trigger .kbd,
+  .sidebar-collapsed .sidebar.sidebar-open .sidebar-group-label,
   .sidebar-collapsed .sidebar.sidebar-open .nav-label,
   .sidebar-collapsed .sidebar.sidebar-open .nav-badge,
   .sidebar-collapsed .sidebar.sidebar-open .sidebar-section-head,
