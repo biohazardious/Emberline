@@ -333,6 +333,7 @@ function installOverviewRoutes(overrides: Record<string, (body?: unknown) => unk
         content: '# Emberline\n',
       }),
       'GET /api/cron': () => [],
+      'POST /api/cron/preview': () => ({ nextRuns: ['2026-11-17T04:00:00.000Z'] }),
       'GET /api/system': () => connectedSystem,
       ...overrides,
     }),
@@ -379,7 +380,7 @@ describe('AC-6.5 word density budgets for Overview and its sub-panels', () => {
     expect(primaries[0]?.textContent?.trim()).toBe('Send to factory');
   });
 
-  it('keeps ProjectStatusAndDemoPanel, ProjectAdvisorPanel, Runs tab, ScheduledJobsPanel, BudgetPanel and BlueprintModal at or under 75% of 0.9.3 words', async () => {
+  it('keeps ProjectStatusAndDemoPanel and ProjectAdvisorPanel at or under 75% of 0.9.3 words', async () => {
     const statusView = await renderDom(createElement(ProjectStatusAndDemoPanel, { project }));
     await waitFor(() => expect(statusView.container.textContent).toContain('dist/index.html'));
     expect(visibleWordCount(statusView.container)).toBeLessThanOrEqual(PROJECT_STATUS_WORD_BUDGET);
@@ -394,8 +395,9 @@ describe('AC-6.5 word density budgets for Overview and its sub-panels', () => {
     );
     await waitFor(() => expect(advisorView.container.textContent).toContain('Add auth endpoints'));
     expect(visibleWordCount(advisorView.container)).toBeLessThanOrEqual(PROJECT_ADVISOR_WORD_BUDGET);
-    await cleanup();
+  });
 
+  it('keeps the Overview Runs tab at or under 75% of its 0.9.3 word count', async () => {
     installOverviewRoutes({
       'GET /api/runs': () => [sampleRun],
       'GET /api/terminals': () =>
@@ -416,11 +418,15 @@ describe('AC-6.5 word density budgets for Overview and its sub-panels', () => {
       createElement(Dashboard, { system: connectedSystem, activeProjectId: 'p1' }),
       { path: '/?section=runs' },
     );
-    await waitFor(() => expect(runsView.container.textContent).toContain('EMB-1 Setup database'));
+    await waitFor(() => {
+      expect(runsView.container.textContent).toContain('EMB-1 Setup database');
+      expect(runsView.container.textContent).toContain('Usage and budget');
+    });
     expect(visibleWordCount(runsView.container)).toBeLessThanOrEqual(OVERVIEW_RUNS_WORD_BUDGET);
     expect(runsView.container.querySelectorAll('.btn-primary')).toHaveLength(1);
-    await cleanup();
+  });
 
+  it('keeps ScheduledJobsPanel, BudgetPanel and BlueprintModal at or under 75% of 0.9.3 words', async () => {
     installOverviewRoutes({
       'GET /api/cron': () => [sampleJob],
     });
@@ -681,8 +687,10 @@ describe('Overview Runs tab: workspace MoreMenu, StartRunForm Advanced overrides
       createElement(Dashboard, { system: connectedSystem, activeProjectId: 'p1' }),
       { path: '/?section=runs' },
     );
-    await waitFor(() => expect(container.textContent).toContain('Nightly Test & Lint'));
-    expect(container.textContent).toContain('Usage and budget');
+    await waitFor(() => {
+      expect(container.textContent).toContain('Nightly Test & Lint');
+      expect(container.textContent).toContain('Usage and budget');
+    });
 
     // Workspace MoreMenu -> Clean worktrees
     await click(

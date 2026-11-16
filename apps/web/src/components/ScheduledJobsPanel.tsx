@@ -73,7 +73,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   const loadJobs = useCallback(async () => {
     try {
       const list = await api<ScheduledJob[]>('/api/cron');
-      setJobs(list);
+      setJobs(Array.isArray(list) ? list : []);
     } catch {
       // ignore initial load error
     }
@@ -98,7 +98,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
         timeZone: timeZone.trim(),
       })
         .then((res) => {
-          if (!stale) setPreview({ runs: res.nextRuns, error: null });
+          if (!stale) setPreview({ runs: Array.isArray(res?.nextRuns) ? res.nextRuns : [], error: null });
         })
         .catch((err: unknown) => {
           if (!stale) setPreview({ runs: [], error: errorMessage(err) });
@@ -198,7 +198,9 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
           </HelpHint>
         </div>
         <div className="scheduled-jobs-head-meta">
-          <span className="badge mono">{visibleJobs.filter((j) => j.enabled).length} active</span>
+          {visibleJobs.length > 0 && (
+            <span className="badge mono">{visibleJobs.filter((j) => j.enabled).length} active</span>
+          )}
           <button
             type="button"
             className="btn btn-sm"
@@ -325,7 +327,7 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
 
       {visibleJobs.length === 0 ? (
         <div className="empty">
-          <p>No scheduled jobs configured.</p>
+          <p>No scheduled jobs.</p>
         </div>
       ) : (
         <ul className="list">

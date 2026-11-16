@@ -31,7 +31,7 @@ import '../pages/dashboard-ux.css';
 
 const CATEGORY_LABELS: Record<DashboardRunCategory, string> = {
   all: 'All',
-  live: 'Active and waiting',
+  live: 'Live',
   working: 'Working',
   attention: 'Needs your input',
   queued: 'Queued or paused',
@@ -216,7 +216,7 @@ function RunRow({
       {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
       <span className="row-prompt">{run.prompt || <em className="muted">interactive</em>}</span>
       <span className="row-meta mono">
-        {run.lastEvent ? `${run.lastEvent} · ` : ''}
+        {run.lastEvent ? `${run.lastEvent}, ` : ''}
         {timeAgo(run.stateChangedAt)}
       </span>
     </>

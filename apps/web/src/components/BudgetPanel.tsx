@@ -5,7 +5,7 @@ import { HelpHint } from './ui/HelpHint';
 import '../pages/dashboard-ux.css';
 
 const formatDuration = (sec: number) =>
-  sec >= 3600 ? `${(sec / 3600).toFixed(1)} h` : sec >= 60 ? `${Math.round(sec / 60)} min` : `${sec} s`;
+  sec >= 3600 ? `${(sec / 3600).toFixed(1)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`;
 
 /**
  * Per-project usage over the last 7 days and the factory guardrails (daily run budget, ticket
@@ -15,7 +15,7 @@ const formatDuration = (sec: number) =>
 export function BudgetPanel({ project }: { project: Project }) {
   const usage = useApi<ProjectUsageResponse>(`/api/projects/${project.id}/usage?days=7`, 30_000);
   const data = usage.data;
-  if (!data) return null;
+  if (!data || !Array.isArray(data.days)) return null;
   const totals = data.days.reduce(
     (acc, d) => ({
       runs: acc.runs + d.runs,
@@ -48,9 +48,9 @@ export function BudgetPanel({ project }: { project: Project }) {
         </div>
         <div className="actions">
           <span className={`badge mono${data.budgetExhausted ? ' badge-warn' : ''}`}>
-            {data.runsLast24h}/{budget === 0 ? '∞' : budget} · 24h
+            {data.runsLast24h}/{budget === 0 ? '∞' : budget} (24h)
           </span>
-          <span className="badge badge-soft mono">depth ≤ {data.maxTicketDepth}</span>
+          <span className="badge badge-soft mono">depth ≤{data.maxTicketDepth}</span>
         </div>
       </header>
       {data.budgetExhausted && (

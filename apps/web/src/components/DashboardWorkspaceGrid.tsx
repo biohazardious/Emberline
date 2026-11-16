@@ -108,6 +108,17 @@ export function DashboardWorkspaceGrid({
           {visibleProjects.map((p) => {
             const moreItems: MoreMenuItem[] = [
               {
+                id: `open-blueprint-${p.id}`,
+                label: 'Open PROJECT.md',
+                onSelect: () => onOpenBlueprint(p),
+              },
+              {
+                id: `open-shell-${p.id}`,
+                label: 'Open shell',
+                disabled: runnerDown,
+                onSelect: () => onOpenTerminal('shell', p.id),
+              },
+              {
                 id: `clean-worktrees-${p.id}`,
                 label: 'Clean worktrees',
                 description: 'Prune finished git worktrees for this project',
@@ -156,17 +167,6 @@ export function DashboardWorkspaceGrid({
                   <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
                     Open board
                   </Link>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={runnerDown}
-                    onClick={() => onOpenTerminal('shell', p.id)}
-                  >
-                    Open shell
-                  </button>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => onOpenBlueprint(p)}>
-                    Open PROJECT.md
-                  </button>
                   <MoreMenu items={moreItems} ariaLabel={`Workspace actions for ${p.name}`} />
                 </div>
 
