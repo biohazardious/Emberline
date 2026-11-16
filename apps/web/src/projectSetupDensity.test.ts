@@ -317,7 +317,7 @@ describe('Project settings and Wizard interactive flows and disclosures', () => 
     expect(view.container.textContent).toContain('Keep pushed pushes to');
 
     // Danger zone opens ProjectDeleteConfirm and cancels cleanly
-    await click(getButton('Delete project', view.container));
+    await click(getButton('Remove project', view.container));
     expect(view.container.textContent).toContain('Remove “Shop”?');
     await click(getButton('Cancel', view.container));
     expect(view.container.textContent).not.toContain('Remove “Shop”?');

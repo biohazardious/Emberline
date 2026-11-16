@@ -205,12 +205,6 @@
   font-size: 0.8rem;
 }
 
-.event-source {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 .event-type {
   font-size: 0.82rem;
   font-weight: 600;

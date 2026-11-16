@@ -69,7 +69,7 @@ export function TerminalView({ terminalId, compact = false, autoFocus = true, on
 
     const term = new Terminal({
       fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-      fontSize: compact ? 11.5 : window.innerWidth < 640 ? 12 : 13,
+      fontSize: 13,
       cursorBlink: true,
       scrollback: 5000,
       theme: THEME,

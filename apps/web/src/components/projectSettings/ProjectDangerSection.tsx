@@ -20,7 +20,7 @@ export function ProjectDangerSection({ project }: { project: Project }) {
         </h3>
         {!confirming && (
           <button type="button" className="btn btn-sm danger" onClick={() => setConfirming(true)}>
-            Delete project
+            Remove project
           </button>
         )}
       </div>

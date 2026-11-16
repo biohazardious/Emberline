@@ -284,36 +284,6 @@ a {
   background: color-mix(in hsl, var(--ember-1) 10%, var(--surface-2));
 }
 
-.chip-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 0.15s,
-    border-color 0.15s,
-    background 0.15s;
-}
-
-.chip-toggle.active {
-  color: var(--text);
-  border-color: color-mix(in hsl, var(--ember-1) 45%, var(--border));
-  background: color-mix(in hsl, var(--ember-1) 10%, var(--surface));
-}
-
-.chip-toggle.active .dot {
-  background: var(--ember-1);
-  box-shadow: 0 0 8px var(--ember-1);
-}
-
 .input {
   width: 100%;
   padding: 7px 10px;
@@ -570,7 +540,7 @@ a {
 
 .auth-footnote {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -657,14 +627,14 @@ a {
   align-items: center;
   gap: 6px;
   color: var(--warn);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
 }
 
 .strength {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -716,7 +686,7 @@ a {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 700;
   color: var(--ember-1);
   background: color-mix(in srgb, var(--ember-1) 12%, transparent);
@@ -901,7 +871,6 @@ a {
 .sidebar-collapsed .nav-badge,
 .sidebar-collapsed .sidebar-section-head,
 .sidebar-collapsed .sidebar-empty,
-.sidebar-collapsed .sidebar-foot .footer,
 .sidebar-collapsed .sidebar-quota span:not(.dot),
 .sidebar-collapsed .nav-run .run-pill,
 .sidebar-collapsed .nav-run .persona-badge {
@@ -1131,13 +1100,6 @@ a {
 
 .sidebar-quota-paused .dot {
   background: hsl(265 70% 72%);
-}
-
-.footer {
-  margin: 0;
-  font-size: 0.66rem;
-  line-height: 1.35;
-  color: var(--muted);
 }
 
 .workbench-main {
@@ -1587,27 +1549,6 @@ a {
   font-size: 0.82rem;
 }
 
-.inline-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.inline-form .input {
-  flex: 1 1 140px;
-  width: auto;
-}
-
-.inline-form .grow {
-  flex: 2 1 200px;
-}
-
-.inline-form .full {
-  flex-basis: 100%;
-}
-
 /* --- runs & states --------------------------------------------------------- */
 
 .run-pill {
@@ -1801,20 +1742,6 @@ a {
   font-weight: 600;
 }
 
-.quota-countdown {
-  color: var(--q);
-  font-weight: 600;
-}
-
-.quota-message {
-  flex-basis: 100%;
-  font-size: 0.72rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .quota-side {
   display: flex;
   flex-wrap: wrap;
@@ -1879,44 +1806,8 @@ a {
   gap: 12px;
 }
 
-.board-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.board-title h1 {
-  margin: 0;
-  font-size: 1.15rem;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-}
-
-.board-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
 .board-export {
   position: relative;
-}
-
-.board-export-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
-  width: min(280px, calc(100vw - 32px));
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--bg-elevated);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
 }
 
 .board-export-group {
@@ -2165,15 +2056,6 @@ a {
   color: var(--muted);
 }
 
-.card-branch {
-  font-size: 0.66rem;
-  color: var(--ember-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-
 .prio-dot {
   margin-left: auto;
   width: 6px;
@@ -2196,21 +2078,6 @@ a {
   align-items: center;
   gap: 6px;
   min-width: 0;
-}
-
-.card-event {
-  font-size: 0.66rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-meta {
-  margin-left: auto;
-  font-size: 0.68rem;
-  color: var(--muted);
-  white-space: nowrap;
 }
 
 .drop-marker {
@@ -2269,14 +2136,6 @@ a {
   min-height: 96px;
   font-family: var(--font-sans);
   line-height: 1.45;
-}
-
-.drawer-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 .drawer-label {
@@ -2486,12 +2345,6 @@ a {
   align-items: center;
   gap: 6px;
   font-size: 0.72rem;
-}
-
-.event-source {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 .event-type {
@@ -2719,36 +2572,6 @@ a {
   gap: 12px;
 }
 
-.workspace-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.workspace-bar-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.workspace-bar-title h1 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 650;
-}
-
-.workspace-bar-controls {
-  display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  gap: 8px;
-}
-
 .fleet-grid {
   flex: 1;
   min-height: 0;
@@ -2817,12 +2640,6 @@ a {
   color: var(--ember-2);
 }
 
-.fleet-pane-meta {
-  margin-left: auto;
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-
 .fleet-pane-actions {
   display: flex;
   align-items: center;
@@ -2858,11 +2675,6 @@ a {
   padding: 6px 8px;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-}
-
-.fleet-templates {
-  display: flex;
-  gap: 4px;
 }
 
 .fleet-input {
@@ -3373,15 +3185,6 @@ dialog.cmd-dialog::backdrop {
   background: var(--panel);
 }
 
-.diff-annotation-composer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-elev);
-}
-
 .diff-file-annotations {
   display: flex;
   flex-direction: column;
@@ -3391,17 +3194,6 @@ dialog.cmd-dialog::backdrop {
   background: color-mix(in srgb, var(--ember-1) 6%, transparent);
   max-height: 120px;
   overflow-y: auto;
-}
-
-.diff-annotation-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.76rem;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--panel);
-  border: 1px solid var(--border);
 }
 
 .monaco-diff-canvas {
@@ -3487,47 +3279,6 @@ dialog.cmd-dialog::backdrop {
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
-}
-
-.attention-next {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
-  border-radius: 8px;
-  background: color-mix(in hsl, var(--warn) 10%, transparent);
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.attention-next:hover {
-  background: color-mix(in hsl, var(--warn) 18%, transparent);
-}
-
-.attention-next .attention-count {
-  font-weight: 600;
-}
-
-.attention-next kbd {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.attention-enable {
-  margin-top: 6px;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  text-decoration: underline;
-  cursor: pointer;
 }
 
 /* --- persistent review ------------------------------------------------------ */
@@ -3864,14 +3615,6 @@ dialog.cmd-dialog::backdrop {
 }
 
 /* Settings > Quota: per-provider limit gauges (QuotaPanel.tsx) */
-.quota-provider-head {
-  display: flex;
-  align-items: center;
-  margin: 4px 0 -4px;
-  font-size: 0.86rem;
-  font-weight: 600;
-  color: var(--text);
-}
 .quota-gauges {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
@@ -4132,391 +3875,6 @@ dialog.cmd-dialog::backdrop {
   flex: none;
 }
 
-/* --- build outputs (/projects/:id/outputs) --------------------------------- */
-
-.build-outputs-page {
-  overflow-y: auto;
-}
-
-.build-outputs-usage {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.build-outputs-usage p {
-  margin: 0;
-}
-
-.build-outputs-usage-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-}
-
-.build-outputs-usage-line code {
-  overflow-wrap: anywhere;
-}
-
-.build-outputs-meter {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.build-outputs-meter-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--ok);
-  transition: width 0.3s;
-}
-
-.build-outputs-meter-fill.warn {
-  background: var(--warn);
-}
-
-.build-outputs-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.build-outputs-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.build-outputs-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 1 260px;
-  min-width: 0;
-  color: var(--muted);
-}
-
-.build-outputs-search .input {
-  flex: 1;
-  min-width: 0;
-}
-
-.build-outputs-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--muted);
-}
-
-.build-outputs-empty p {
-  margin: 0;
-  max-width: 48ch;
-}
-
-.build-outputs-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-
-.build-outputs-table th {
-  text-align: left;
-  font-weight: 600;
-  color: var(--muted);
-  font-size: 0.75rem;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-}
-
-.build-outputs-table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-
-.build-outputs-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  overflow-wrap: anywhere;
-}
-
-.build-outputs-table td.build-outputs-name {
-  display: table-cell;
-}
-
-.build-outputs-ticket-title {
-  color: var(--text);
-}
-
-.build-outputs-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-}
-
-.build-outputs-pinned {
-  color: var(--ok);
-}
-
-.build-outputs-cards {
-  display: none;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  gap: 8px;
-}
-
-.build-outputs-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  min-width: 0;
-}
-
-.build-outputs-card .build-outputs-actions {
-  width: 100%;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-
-@media (max-width: 640px) {
-  .build-outputs-table {
-    display: none;
-  }
-
-  .build-outputs-cards {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .build-outputs-search {
-    flex-basis: 100%;
-  }
-}
-
-/* --- Docker page (/docker) --------------------------------------------------- */
-
-.docker-page {
-  overflow-y: auto;
-}
-
-.docker-engine-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
-
-.docker-engine-line,
-.docker-engine p,
-.docker-alert p,
-.docker-owner,
-.docker-group-hint,
-.docker-confirm p {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.docker-engine-line {
-  font-weight: 600;
-}
-
-.docker-alert {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.docker-output {
-  margin: 0;
-  max-height: 320px;
-  overflow: auto;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-size: 0.72rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.docker-disk {
-  width: 100%;
-  max-width: 520px;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-}
-
-.docker-disk th,
-.docker-disk td {
-  text-align: left;
-  padding: 5px 10px 5px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.docker-disk thead th {
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.docker-disk tbody th {
-  font-weight: 500;
-}
-
-.docker-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--muted);
-}
-
-.docker-empty p {
-  margin: 0;
-  max-width: 56ch;
-}
-
-.docker-empty code {
-  overflow-wrap: anywhere;
-}
-
-.docker-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.docker-projects,
-.docker-containers {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.docker-projects {
-  gap: 8px;
-}
-
-.docker-project {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  min-width: 0;
-}
-
-.docker-project-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
-}
-
-.docker-project-name {
-  overflow-wrap: anywhere;
-}
-
-.docker-containers {
-  gap: 4px;
-}
-
-.docker-container {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  padding: 4px 0;
-  border-top: 1px solid var(--border);
-  font-size: 0.82rem;
-  min-width: 0;
-}
-
-.docker-container-service {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.docker-image {
-  overflow-wrap: anywhere;
-}
-
-.docker-port {
-  font-size: 0.78rem;
-}
-
-.docker-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.docker-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in hsl, var(--warn) 40%, var(--border));
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-size: 0.82rem;
-}
-
-.docker-confirm-warning {
-  color: var(--warn);
-  font-weight: 600;
-}
-
-.docker-logs {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.docker-logs-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-
-.docker-logs-service {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.docker-logs-service .input {
-  max-width: 200px;
-}
-
 .copy-fallback {
   display: flex;
   flex-wrap: wrap;
@@ -4606,7 +3964,6 @@ dialog.cmd-dialog::backdrop {
 }
 
 .inbox-item-head,
-.inbox-meta,
 .inbox-actions {
   display: flex;
   align-items: center;
@@ -5298,30 +4655,11 @@ dialog.cmd-dialog::backdrop {
   margin: 16px 0;
 }
 
-.container-preview-setup-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin: 8px 0;
-}
-
-.container-preview-setup-fields label {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
 .worktree-editor {
   height: 360px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
-}
-
-.worktree-heading {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .worktree-review-errors {
@@ -5604,28 +4942,6 @@ dialog.cmd-dialog::backdrop {
   line-height: 1.4;
 }
 
-/* A card whose label holds only the name and description (preset cards): it stacks like the card. */
-.wizard-card-label {
-  display: grid;
-  gap: 4px;
-  cursor: pointer;
-}
-
-/* Preset guidance: what it is best for, then the cost in a quieter line. */
-.wizard-card-best {
-  font-size: 0.76rem;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.wizard-card-tradeoff {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-style: italic;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
 .wizard-vision-hint {
   display: grid;
   gap: 2px;
@@ -5788,17 +5104,12 @@ dialog.cmd-dialog::backdrop {
   min-width: 0;
 }
 
-.wizard-dim-affects,
 .wizard-dim-hint {
   margin: 0;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
-}
-
-.wizard-dim-hint {
-  font-size: 0.74rem;
 }
 
 .wizard-dim-edited {
@@ -5876,13 +5187,6 @@ dialog.cmd-dialog::backdrop {
   font-weight: 600;
 }
 
-.wizard-sum-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .wizard-sum-list {
   display: grid;
   gap: 4px;
@@ -5905,16 +5209,11 @@ dialog.cmd-dialog::backdrop {
   overflow-wrap: anywhere;
 }
 
-.wizard-tickets,
 .wizard-files {
   display: grid;
   gap: 6px;
   margin: 0;
-  padding-left: 18px;
   font-size: 0.8rem;
-}
-
-.wizard-files {
   padding-left: 0;
   list-style: none;
 }
@@ -6231,22 +5530,6 @@ dialog.cmd-dialog::backdrop {
 /* --- Project settings → Repository --- */
 .repo-block {
   margin: 0 0 16px;
-}
-
-.repo-status {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 4px 12px;
-  margin: 0 0 8px;
-}
-
-.repo-status dt {
-  color: var(--text-muted);
-}
-
-.repo-status dd {
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 
 .repo-actions {

@@ -13,7 +13,7 @@ import {
   selectProviderModelByTier,
   type ThemeMode,
 } from '@emberline/protocol';
-import type { CSSProperties, FormEvent } from 'react';
+import type { FormEvent } from 'react';
 import { PERSONA_BY_ID, PERSONA_LIST } from '../PersonaBadge';
 
 export const ALL_PROVIDER_IDS: AgentId[] = ['claude', 'antigravity', 'codex', 'copilot', 'aider'];
@@ -78,55 +78,6 @@ export function providerStatus(input: ProviderStatusInput): ProviderStatusResult
   const label = customLabel?.trim() || 'Ready';
   return { kind: 'ready', state: 'ready', label };
 }
-
-export const ST_PANEL_PAD: CSSProperties = { padding: '20px' };
-export const ST_PANEL_FORM: CSSProperties = {
-  padding: '20px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '22px',
-};
-export const ST_HR: CSSProperties = { border: 'none', borderTop: '1px solid var(--border)', margin: 0 };
-export const ST_SAVE_ROW: CSSProperties = { display: 'flex', justifyContent: 'flex-end' };
-export const ST_HEAD_SPLIT: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: '12px',
-  flexWrap: 'wrap',
-};
-export const ST_ROW_BETWEEN: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '8px',
-};
-export const ST_ROW_WRAP6: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '6px',
-  flexWrap: 'wrap',
-};
-export const ST_COL_14: CSSProperties = { display: 'flex', flexDirection: 'column', gap: '14px' };
-export const ST_COL_6: CSSProperties = { display: 'flex', flexDirection: 'column', gap: '6px' };
-export const ST_CUSTOM_BOX: CSSProperties = {
-  padding: '14px',
-  borderRadius: '8px',
-  background: 'var(--bg-elevated)',
-  border: '1px solid var(--border)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '10px',
-};
-export const ST_CARD_GRID_310: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(310px, 100%), 1fr))',
-  gap: '10px',
-};
-export const ST_FIELD_4: CSSProperties = { gap: 4 };
-export const ST_LABEL_68: CSSProperties = { fontSize: '0.8rem' };
-export const ST_BADGE_64: CSSProperties = { fontSize: '0.8rem' };
-export const ST_DESC_73: CSSProperties = { fontSize: '0.8rem', lineHeight: 1.35 };
 
 export const TIER_COLORS: Record<
   ModelCapabilityTier,

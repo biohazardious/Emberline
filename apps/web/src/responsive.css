@@ -37,14 +37,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.overview-nav-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .segmented-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -61,13 +53,6 @@
   align-items: center;
   gap: 6px;
   max-width: 100%;
-}
-
-.workspace-bar-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
 
 .sidebar-mobile-close {
@@ -212,7 +197,6 @@
   .board-search,
   .run-search,
   .fleet-search,
-  .build-outputs-search,
   .roadmap-search {
     flex: 1 1 100%;
     max-width: none;

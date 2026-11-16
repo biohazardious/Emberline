@@ -9,7 +9,6 @@
 .btn:focus-visible,
 .icon-btn:focus-visible,
 .chip-btn:focus-visible,
-.chip-toggle:focus-visible,
 .stat-card-btn:focus-visible,
 .nav-item:focus-visible,
 .topbar-tab:focus-visible {
@@ -209,7 +208,6 @@
   max-width: 260px;
 }
 
-.build-outputs-search,
 .roadmap-search {
   flex: 1 1 200px;
   max-width: 280px;

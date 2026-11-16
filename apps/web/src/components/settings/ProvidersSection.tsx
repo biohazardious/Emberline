@@ -19,13 +19,7 @@ import { SaveBar } from '../ui/SaveBar';
 import { AgentsView } from './providers/AgentsView';
 import './providers/providers.css';
 import { RoutingView } from './providers/RoutingView';
-import {
-  defaultRoute,
-  PROVIDER_VIEWS,
-  type ProviderSectionForm,
-  type ProviderView,
-  ST_PANEL_PAD,
-} from './settingsMeta';
+import { defaultRoute, PROVIDER_VIEWS, type ProviderSectionForm, type ProviderView } from './settingsMeta';
 
 const PROVIDER_VIEW_ITEMS: ReadonlyArray<{ id: ProviderView; label: string }> = [
   { id: 'agents', label: 'Agents' },
@@ -84,7 +78,6 @@ export function ProvidersSection({
         loadingText="Loading AI providers & model routing matrix…"
         emptyText="No AI provider settings available yet."
         errorPrefix="Could not load provider settings"
-        style={ST_PANEL_PAD}
       />
     );
   }
