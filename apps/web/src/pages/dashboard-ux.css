@@ -1,0 +1,268 @@
+/* Overview page, advisor, workspace, runs, scheduled jobs, budget and PROJECT.md modal styles (M6 EMB-46). */
+
+.dashboard .stat-label {
+  font-size: 0.8rem;
+}
+
+.dashboard .stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-docker {
+  font-size: 0.8rem;
+}
+
+.overview-tabs {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* --- ProjectAdvisorPanel ("Next steps") ------------------------------------ */
+
+.advisor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.advisor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.advisor-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.advisor-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.advisor-personas-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.advisor-persona-chip {
+  font-size: 0.8rem;
+}
+
+.advisor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advisor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.advisor-row-high {
+  border-color: color-mix(in hsl, var(--ember-1) 45%, var(--border));
+}
+
+.advisor-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.advisor-row-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.advisor-row-desc {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* --- DashboardWorkspaceGrid & StartRunForm --------------------------------- */
+
+.workspace-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.run-main-clickable {
+  cursor: pointer;
+}
+
+.run-form-persona-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-form-advanced-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.run-form-overrides-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-form-model-select {
+  width: auto;
+  max-width: min(260px, 100%);
+  font-size: 0.8rem;
+  padding: 4px 8px;
+}
+
+.run-form-hint {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+/* --- ScheduledJobsPanel ---------------------------------------------------- */
+
+.scheduled-jobs-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduled-job-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.scheduled-job-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.scheduled-job-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 8px;
+}
+
+.scheduled-job-preview {
+  margin: 0;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduled-job-notice {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduled-job-row {
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduled-job-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scheduled-job-mode-select {
+  width: auto;
+  max-width: 190px;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+}
+
+/* --- BudgetPanel ----------------------------------------------------------- */
+
+.budget-heading-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.budget-summary {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-day-label,
+.usage-day-runs {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- BlueprintModal -------------------------------------------------------- */
+
+.blueprint-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.blueprint-modal-sub {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.blueprint-editor {
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.blueprint-saved-notice {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ok);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .advisor-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -14,6 +14,9 @@ import { timeAgo } from '../time';
 import { StartRunForm } from './DashboardRunsSection';
 import { ViewErrorBanner, ViewLoadingState } from './ErrorBoundary';
 import { ProjectDeleteConfirm, type ProjectDeleted } from './ProjectDeleteConfirm';
+import { HelpHint } from './ui/HelpHint';
+import { MoreMenu, type MoreMenuItem } from './ui/MoreMenu';
+import '../pages/dashboard-ux.css';
 
 const KIND_LABEL: Record<TerminalInfo['kind'], string> = {
   shell: 'shell',
@@ -69,19 +72,25 @@ export function DashboardWorkspaceGrid({
 }) {
   const [deleteConfirmFor, setDeleteConfirmFor] = useState<string>();
 
+  const cleanWorktrees = async (projectId: string) => {
+    onActionError(undefined);
+    try {
+      const res = await api<GarbageCollectRunsResponse>(
+        `/api/projects/${projectId}/cleanup-worktrees`,
+        'POST',
+      );
+      onCleanedWorktrees(keptWorktreesSummary(res) ?? undefined);
+    } catch (e) {
+      onActionError(errorMessage(e));
+    }
+  };
+
   return (
     <div className="dashboard-grid">
       <section className="panel" aria-labelledby="projects-title">
         <header className="panel-head">
-          <div>
-            <h2 id="projects-title">{activeProject ? 'Workspace Controls' : 'Projects'}</h2>
-            <p className="muted">
-              {activeProject
-                ? `Repository path and quick actions for ${activeProject.name}.`
-                : 'Create your first project to start the AI Coding Factory.'}
-            </p>
-          </div>
-          {onOpenWizard && (
+          <h2 id="projects-title">Workspace</h2>
+          {visibleProjects.length === 0 && onOpenWizard && (
             <div className="actions">
               <button
                 id="open-project-wizard"
@@ -89,127 +98,131 @@ export function DashboardWorkspaceGrid({
                 className="btn btn-sm btn-primary"
                 onClick={onOpenWizard}
               >
-                + AI Factory Wizard
+                Create project
               </button>
             </div>
           )}
         </header>
+
         <ul className="list">
-          {visibleProjects.map((p) => (
-            <li key={p.id} className="row row-wrap">
-              <div className="row-main">
-                <span className="row-title">{p.name}</span>
-                {p.appType && p.appType !== 'custom' && (
-                  <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
+          {visibleProjects.map((p) => {
+            const moreItems: MoreMenuItem[] = [
+              {
+                id: `open-blueprint-${p.id}`,
+                label: 'Open PROJECT.md',
+                onSelect: () => onOpenBlueprint(p),
+              },
+              {
+                id: `open-shell-${p.id}`,
+                label: 'Open shell',
+                disabled: runnerDown,
+                onSelect: () => onOpenTerminal('shell', p.id),
+              },
+              {
+                id: `clean-worktrees-${p.id}`,
+                label: 'Clean worktrees',
+                description: 'Prune finished git worktrees for this project',
+                icon: <Eraser className="icon" aria-hidden />,
+                onSelect: () => void cleanWorktrees(p.id),
+              },
+              ...(onOpenWizard
+                ? [
+                    {
+                      id: `new-project-${p.id}`,
+                      label: 'New project',
+                      onSelect: onOpenWizard,
+                    },
+                  ]
+                : []),
+              {
+                id: `remove-project-${p.id}`,
+                label: 'Remove project',
+                description: 'Remove from Emberline, keeping or deleting files',
+                icon: <Trash className="icon" aria-hidden />,
+                danger: true,
+                onSelect: () => setDeleteConfirmFor(deleteConfirmFor === p.id ? undefined : p.id),
+              },
+            ];
+
+            return (
+              <li key={p.id} className="row row-wrap">
+                <div className="row-main">
+                  <span className="row-title">{p.name}</span>
+                  {p.appType && p.appType !== 'custom' && (
+                    <span className="badge badge-soft">{p.appType.replace('_', ' ')}</span>
+                  )}
+                  <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
+                </div>
+                <div className="workspace-row-actions">
+                  <button
+                    id={`start-run-${p.slug}`}
+                    type="button"
+                    className={`btn btn-sm${runFormFor ? '' : ' btn-primary'}`}
+                    disabled={runnerDown}
+                    aria-expanded={runFormFor === p.id}
+                    onClick={() => onToggleRunForm(runFormFor === p.id ? undefined : p.id, 'coder', '')}
+                  >
+                    Start run
+                  </button>
+                  <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
+                    Open board
+                  </Link>
+                  <MoreMenu items={moreItems} ariaLabel={`Workspace actions for ${p.name}`} />
+                </div>
+
+                {deleteConfirmFor === p.id && (
+                  <ProjectDeleteConfirm
+                    project={p}
+                    onCancel={() => setDeleteConfirmFor(undefined)}
+                    onDeleted={async (res) => {
+                      setDeleteConfirmFor(undefined);
+                      await onProjectDeleted(res);
+                    }}
+                  />
                 )}
-                <span className="row-meta mono">{p.repoUrl ?? p.path}</span>
-              </div>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => onOpenBlueprint(p)}
-                  title="Open PROJECT.md Blueprint"
-                >
-                  PROJECT.md
-                </button>
-                <Link id={`board-${p.slug}`} href={`/projects/${p.id}/board`} className="btn btn-sm">
-                  Board
-                </Link>
-                <button
-                  className="btn btn-sm"
-                  disabled={runnerDown}
-                  onClick={() => onOpenTerminal('shell', p.id)}
-                >
-                  Shell
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  title="Prune finished git worktrees for this project"
-                  onClick={async () => {
-                    onActionError(undefined);
-                    try {
-                      const res = await api<GarbageCollectRunsResponse>(
-                        `/api/projects/${p.id}/cleanup-worktrees`,
-                        'POST',
-                      );
-                      onCleanedWorktrees(keptWorktreesSummary(res) ?? undefined);
-                    } catch (e) {
-                      onActionError(errorMessage(e));
-                    }
-                  }}
-                >
-                  <Eraser className="icon" aria-hidden /> Clean Worktrees
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  style={{ color: 'var(--danger)' }}
-                  title="Remove the project from Emberline, keeping or deleting its files"
-                  aria-expanded={deleteConfirmFor === p.id}
-                  onClick={() => setDeleteConfirmFor(deleteConfirmFor === p.id ? undefined : p.id)}
-                >
-                  <Trash className="icon" aria-hidden /> Remove
-                </button>
-                <button
-                  id={`start-run-${p.slug}`}
-                  className="btn btn-sm btn-primary"
-                  disabled={runnerDown}
-                  aria-expanded={runFormFor === p.id}
-                  onClick={() => onToggleRunForm(runFormFor === p.id ? undefined : p.id, 'coder', '')}
-                >
-                  Start run
-                </button>
-              </div>
-              {deleteConfirmFor === p.id && (
-                <ProjectDeleteConfirm
-                  project={p}
-                  onCancel={() => setDeleteConfirmFor(undefined)}
-                  onDeleted={async (res) => {
-                    setDeleteConfirmFor(undefined);
-                    await onProjectDeleted(res);
-                  }}
-                />
-              )}
-              {runFormFor === p.id && (
-                <StartRunForm
-                  key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
-                  project={p}
-                  initialPersona={runFormPersona}
-                  initialPrompt={runFormPrompt}
-                  onCancel={() => onToggleRunForm(undefined)}
-                  onStarted={onRunStarted}
-                />
-              )}
-            </li>
-          ))}
+                {runFormFor === p.id && (
+                  <StartRunForm
+                    key={`${p.id}-${runFormPersona}-${runFormPrompt.slice(0, 16)}`}
+                    project={p}
+                    initialPersona={runFormPersona}
+                    initialPrompt={runFormPrompt}
+                    onCancel={() => onToggleRunForm(undefined)}
+                    onStarted={onRunStarted}
+                  />
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
 
       <section className="panel" aria-labelledby="terminals-title">
         <header className="panel-head">
-          <div>
+          <div className="budget-heading-row">
             <h2 id="terminals-title">Terminals</h2>
-            <p className="muted">Sessions live in the runner and survive reloads and core restarts.</p>
+            <HelpHint topic="terminals">
+              Sessions live in the runner and survive reloads and restarts. Open Claude to sign in with your
+              subscription.
+            </HelpHint>
           </div>
           <div className="actions">
             <button
               id="new-shell"
+              type="button"
               className="btn btn-sm"
               disabled={runnerDown}
               onClick={() => onOpenTerminal('shell', activeProject?.id)}
             >
-              New shell
+              Open shell
             </button>
             <button
               id="new-claude"
-              className="btn btn-sm btn-primary"
+              type="button"
+              className="btn btn-sm"
               disabled={runnerDown}
               onClick={() => onOpenTerminal('claude', activeProject?.id)}
-              title="Starts Claude Code; on first run it walks you through logging in with your subscription"
             >
-              Claude
+              Open Claude
             </button>
           </div>
         </header>
@@ -227,9 +240,6 @@ export function DashboardWorkspaceGrid({
         ) : plainTerminals.length === 0 && !terminalsError ? (
           <div className="empty">
             <p>No terminals yet.</p>
-            <p className="muted">
-              First time here? Open <strong>Claude</strong> and log in with your own subscription.
-            </p>
           </div>
         ) : (
           <ul className="list">
@@ -248,9 +258,9 @@ export function DashboardWorkspaceGrid({
                   </span>
                 </Link>
                 <button
+                  type="button"
                   className="icon-btn"
                   aria-label={`Close ${t.title}`}
-                  title={t.status === 'running' ? 'Kill and remove' : 'Remove'}
                   onClick={() => onRemoveTerminal(t.id)}
                 >
                   <X className="icon" aria-hidden />

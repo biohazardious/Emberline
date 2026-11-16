@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { api, errorMessage } from '../api';
 import { useApi } from '../hooks/useApi';
 import { PERSONA_LIST, PersonaBadge } from './PersonaBadge';
+import '../pages/dashboard-ux.css';
 
 /**
  * The stack badges beside the project's name: language, frontend, backend and database, each once.
@@ -89,135 +90,76 @@ export function ProjectAdvisorPanel({
   };
 
   const stackBadges = stackBadgesOf(project.techStack);
+  const recommendations = recs.data ?? [];
 
   return (
-    <section className="panel" aria-labelledby="advisor-title">
-      <header className="panel-head" style={{ flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-          <p className="eyebrow">AI Coding Factory · Active Workspace</p>
-          <h2
-            id="advisor-title"
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}
-          >
-            <span>{project.name}</span>
-            <span className="badge mono">{project.appType.replace('_', ' ')}</span>
-            {stackBadges.map((item) => (
-              <span key={item} className="badge badge-soft">
-                {item}
-              </span>
-            ))}
+    <section className="panel advisor-panel" aria-labelledby="advisor-title">
+      <header className="advisor-head">
+        <div className="advisor-title-group">
+          <h2 id="advisor-title" className="advisor-title">
+            Next steps
           </h2>
-          <p className="muted">
-            {project.description ||
-              `Guided recommendations and specialist agent personas for ${project.name}.`}
-          </p>
+          <span className="badge mono">{project.appType.replace('_', ' ')}</span>
+          {stackBadges.map((item) => (
+            <span key={item} className="badge badge-soft">
+              {item}
+            </span>
+          ))}
         </div>
         <div className="actions">
-          <button
-            id="open-blueprint-btn"
-            type="button"
-            className="btn btn-sm"
-            onClick={onOpenBlueprint}
-            title="View or edit PROJECT.md Blueprint"
-          >
-            PROJECT.md Blueprint
+          <button id="open-blueprint-btn" type="button" className="btn btn-sm" onClick={onOpenBlueprint}>
+            Open PROJECT.md
           </button>
           <button
             type="button"
-            className="btn btn-sm btn-primary"
+            className="btn btn-sm"
             onClick={() => navigate(`/projects/${project.id}/board`)}
           >
-            Open Kanban Board →
+            Open board
           </button>
         </div>
       </header>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          flexWrap: 'wrap',
-          paddingBottom: '10px',
-          borderBottom: '1px solid var(--border)',
-          marginBottom: '10px',
-        }}
-      >
-        <span className="muted small mono" style={{ marginRight: '4px' }}>
-          Dispatch Specialist:
-        </span>
+      <div className="advisor-personas-bar">
         {PERSONA_LIST.map((p) => (
           <button
             key={p.id}
             type="button"
-            className="chip-btn"
-            title={p.hint}
+            className="chip-btn advisor-persona-chip"
             onClick={() => onStartPersonaRun(p.id)}
           >
-            <span className="mono muted" style={{ marginRight: '4px' }}>
-              [{p.shortLabel}]
-            </span>
             {p.label}
           </button>
         ))}
       </div>
 
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
-          gap: '10px',
-        }}
-      >
-        {(recs.data ?? []).map((rec) => (
-          <div
-            key={rec.id}
-            style={{
-              padding: '12px 14px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: `1px solid ${rec.priority === 'high' ? 'color-mix(in hsl, var(--ember-1) 45%, var(--border))' : 'var(--border)'}`,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              gap: '10px',
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '6px',
-                  marginBottom: '6px',
-                }}
-              >
-                <PersonaBadge persona={rec.persona} showFull />
-                <span className="badge badge-soft mono">{rec.priority} priority</span>
+      {recommendations.length > 0 && (
+        <ul className="advisor-list">
+          {recommendations.map((rec) => (
+            <li key={rec.id} className={`advisor-row${rec.priority === 'high' ? ' advisor-row-high' : ''}`}>
+              <div className="advisor-row-main">
+                <PersonaBadge persona={rec.persona} />
+                <span className="advisor-row-title">{rec.title}</span>
+                <span className="advisor-row-desc">{rec.description}</span>
               </div>
-              <strong style={{ display: 'block', fontSize: '0.92rem', marginBottom: '4px' }}>
-                {rec.title}
-              </strong>
-              <p className="muted small" style={{ margin: 0 }}>
-                {rec.description}
-              </p>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button
                 type="button"
-                className="btn btn-sm btn-primary"
+                className="btn btn-sm"
                 disabled={busyId === rec.id}
                 onClick={() => void executeRecommendation(rec)}
               >
-                {busyId === rec.id ? 'Working…' : rec.actionLabel}
+                {busyId === rec.id ? 'Starting…' : rec.actionLabel}
               </button>
-            </div>
-          </div>
-        ))}
-      </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

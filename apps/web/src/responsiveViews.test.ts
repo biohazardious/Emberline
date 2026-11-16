@@ -192,13 +192,13 @@ describe('Dashboard interactive stat cards and run search', () => {
     );
 
     await renderDom(createElement(Dashboard, { system: undefined, activeProjectId: 'p1' }), { path: '/' });
-    await waitFor(() => expect(getButton(/Needs Your Input/)).toBeTruthy());
+    await waitFor(() => expect(getButton(/Needs your input/)).toBeTruthy());
 
-    await click(getButton(/Needs Your Input/));
+    await click(getButton(/Needs your input/));
     await waitFor(() => expect(document.body.textContent).toContain('EMB-21 Needs Answer'));
     expect(document.body.textContent).not.toContain('EMB-22 Shipped Feature');
 
-    await click(getButton(/Needs Your Input/));
+    await click(getButton(/Needs your input/));
     await waitFor(() => expect(document.body.textContent).toContain('EMB-22 Shipped Feature'));
 
     const runSearch = document.querySelector<HTMLInputElement>('#dashboard-run-search');
