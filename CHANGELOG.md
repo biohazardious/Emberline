@@ -15,6 +15,24 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
   - Sidebar and command palette: **Factory Overview** → **Overview**, **Roadmap & Brainstorm** → **Roadmap**, **Kanban Board** → **Board**, **Code Explorer** → **Code**, **Build Outputs** → **Build outputs**, **Live Browser** → **Live browser**, **Fleet Multiplexer** → **Fleet**, **Factory Settings** → **Settings**.
   - Settings tabs: **Auto-Pilot & Theme** → **Automation**, **Multi-Agent & Model Matrix** → **Providers**, **MCP & Plugins** → **MCP and skills**, **Quota & Concurrency** → **Usage limits**, **Forge & Webhooks** → **Forges and webhooks**.
 
+## [0.10.0] - 2026-11-16
+
+### Added
+
+- **Sticky Save / Discard bar in Settings.** Unsaved settings stay in place when you switch tabs or views, and a bar stays on screen to save or discard them.
+- **Settings → Providers has three views** (`?tab=providers&view=agents|routing|sdks`):
+  - **Agents:** one row per CLI (Claude Code, Antigravity, Codex, Copilot, Aider) showing its status, version, an on/off switch and at most one next step (**Install** or **Sign in**). Expand a row to see its description, terms, sign-in and `make …-login` command, API key, CLI maintenance and model list. Install errors, sign-in warnings and stored keys still show when the row is collapsed.
+  - **Routing:** one row per persona showing its first route, how many fallbacks it has and its capability rank. Expand a row to see its fallback chain and tier quick-match. **Apply preset** and the quota-policy selects sit above the list.
+  - **SDKs:** the project's SDK toolchain list.
+
+### Changed
+
+- **Calmer, shorter screens across the web app.** Each page now starts with its state and your next step, with plain headings and short button labels. Longer explanations, command lines and secondary actions are one click away under **Details** sections, **?** help hints or **More** menus. Nothing you could see or do in 0.9.3 has been removed. This covers Overview, Roadmap, Board (header, cards, ticket drawer and issue import), Code, Live browser, Git, Docker, Build outputs, Inbox, Fleet, the run inspector, the answer dialog, Project settings, the New project wizard and every Settings tab.
+- **Overview shows project status and the live demo as separate views** instead of one long panel.
+- **Lighter sidebar, top bar and command palette.**
+- **Renamed navigation items.** In the sidebar and command palette: **Factory Overview** → **Overview**, **Roadmap & Brainstorm** → **Roadmap**, **Kanban Board** → **Board**, **Code Explorer** → **Code**, **Build Outputs** → **Build outputs**, **Live Browser** → **Live browser**, **Fleet Multiplexer** → **Fleet**, **Factory Settings** → **Settings**.
+- **Renamed Settings tabs:** **Auto-Pilot & Theme** → **Automation**, **Multi-Agent & Model Matrix** → **Providers**, **MCP & Plugins** → **MCP and skills**, **Quota & Concurrency** → **Usage limits**, **Forge & Webhooks** → **Forges and webhooks**. Existing `/settings?tab=<id>` links still open the same sections.
+
 ## [0.9.3] - 2026-11-15
 
 ### Added
