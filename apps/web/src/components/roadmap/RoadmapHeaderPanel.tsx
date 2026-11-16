@@ -1,6 +1,6 @@
 import type { ProjectRoadmapState } from '@emberline/protocol';
 import { Bot, Sparkles, SquareCheck, SquareKanban, Target } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import { SectionState } from '../SectionState';
 import { MoreMenu, type MoreMenuItem, PageHeader } from '../ui';
 import './roadmap-ux.css';
@@ -62,22 +62,6 @@ export function RoadmapHeaderPanel({
   error: string | null;
 }) {
   const [visionExpanded, setVisionExpanded] = useState(false);
-  const generateWrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const trigger = generateWrapRef.current?.querySelector<HTMLButtonElement>('.ui-more-trigger');
-    if (!trigger) return;
-    if (!trigger.classList.contains('btn-primary')) {
-      trigger.classList.add('btn-primary');
-    }
-    const observer = new MutationObserver(() => {
-      if (!trigger.classList.contains('btn-primary')) {
-        trigger.classList.add('btn-primary');
-      }
-    });
-    observer.observe(trigger, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, [roadmap]);
 
   if (!roadmap) {
     return (
@@ -136,7 +120,12 @@ export function RoadmapHeaderPanel({
         }
         actions={
           <>
-            <div className="roadmap-generate-wrap" ref={generateWrapRef}>
+            <div
+              className="roadmap-generate-wrap"
+              ref={(el) => {
+                el?.querySelector('.ui-more-trigger')?.classList.add('btn-primary');
+              }}
+            >
               <MoreMenu
                 className="roadmap-generate-menu"
                 label="Generate roadmap"
