@@ -166,7 +166,7 @@ describe('Extracted page sections: loading, empty and error states', () => {
         'GET /api/ssh-key': () => {
           throw new ApiRequestError(503, 'unavailable', 'ssh store offline');
         },
-        'GET /api/ssh-host-keys': () => ({ entries: [] }),
+        'GET /api/ssh-host-keys': () => ({ hosts: [] }),
       }),
     );
 

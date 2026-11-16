@@ -58,7 +58,7 @@ function defaultRoutes(initial = makeSettings(), onPatch?: (body: unknown) => Fa
     'GET /api/forge-accounts': () => ({ accounts: [] }),
     'GET /api/notifications/webhooks': () => ({ webhooks: [] }),
     'GET /api/ssh-key': () => ({ configured: false, publicKey: null, fingerprint: null }),
-    'GET /api/ssh-host-keys': () => ({ entries: [] }),
+    'GET /api/ssh-host-keys': () => ({ hosts: [] }),
     'GET /api/updates/status': () => ({
       currentVersion: '0.9.3',
       latestVersion: '0.9.3',
