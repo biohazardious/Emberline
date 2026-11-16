@@ -4,6 +4,7 @@ import { useRuns } from '../../hooks/liveData';
 import { overlapWaitingFor, overlapWaitingLabel } from '../../ticketDeps';
 import { HoldRecovery } from '../HoldRecovery';
 import { modeHint, PermissionModePicker } from '../PermissionModePicker';
+import { PersonaPicker, TaskTemplateBar } from '../PersonaBadge';
 import { HandoffMenu } from '../QuotaLanes';
 import {
   formatAgentDisplayName,
@@ -13,10 +14,11 @@ import {
 } from '../RunInspector';
 import { BuildOutputsList } from '../RunOutcome';
 import { RunStatePill } from '../RunStatePill';
+import { Disclosure } from '../ui/Disclosure';
 import type { DrawerCtx } from './boardMeta';
 
 /** The runs that came before `run` in its handoff chain (oldest first); the same attempt continued on other routes. */
-function AttemptChain({ run }: { run: Run }) {
+export function AttemptChain({ run }: { run: Run }) {
   const { runs } = useRuns();
   const chain: { id: string; run?: Run }[] = [];
   const seen = new Set([run.id]);
@@ -50,9 +52,7 @@ function AttemptChain({ run }: { run: Run }) {
                 </Link>
               </>
             ) : (
-              <span className="mono" title="This run is no longer listed">
-                {id.slice(0, 8)}
-              </span>
+              <span className="mono">{id.slice(0, 8)}</span>
             )}
           </li>
         ))}
@@ -66,9 +66,13 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
     ticket,
     run,
     conflictFallback,
+    primaryAction,
     title,
+    setTitle,
+    setBody,
+    persona,
+    setPersona,
     viewTab,
-    setViewTab,
     permissionMode,
     setPermissionMode,
     followUp,
@@ -88,40 +92,32 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
   return (
     <section className="drawer-agent" aria-label="Agent">
       <div className="drawer-agent-head">
-        <h2>Agent Execution</h2>
+        <h2>Agent</h2>
         {run && (
           <div className="agent-run">
-            <RunStatePill
-              state={run.state}
-              cancelled={run.cancelled}
-              autoRetry={run.autoRetry}
-              handedOffTo={run.handedOffTo}
-            />
             <span className="badge badge-soft mono">{formatAgentDisplayName(run.agent)}</span>
             {run.branch && <span className="badge badge-soft mono">{run.branch}</span>}
+            {run.worktreePath && (
+              <Link
+                href={`/runs/${run.id}/review`}
+                className={`btn btn-sm${primaryAction === 'open_review' ? ' btn-primary' : ''}`}
+              >
+                Open review
+              </Link>
+            )}
             {run.terminalId && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => setViewTab(viewTab === 'terminal' ? 'details' : 'terminal')}
-                >
-                  {viewTab === 'terminal' ? 'Show spec' : 'Docked terminal'}
-                </button>
-                <Link
-                  id="drawer-terminal"
-                  href={`/terminals/${run.terminalId}`}
-                  className="btn btn-sm btn-ghost"
-                >
-                  Open terminal →
-                </Link>
-              </>
+              <Link
+                id="drawer-terminal"
+                href={`/terminals/${run.terminalId}`}
+                className="btn btn-sm btn-ghost"
+              >
+                Open terminal
+              </Link>
             )}
           </div>
         )}
       </div>
-      {run && <HandoffMenu run={run} />}
-      {run && <AttemptChain run={run} />}
+
       {run && <RunFailureBanner run={run} />}
       {run && (
         <HoldRecovery
@@ -132,13 +128,14 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
           conflictFallback={conflictFallback}
         />
       )}
-      {/* The Events tab shows these itself, next to the final answer. */}
       {run && viewTab !== 'events' && <BuildOutputsList runId={run.id} refreshKey={run.stateChangedAt} />}
+
       {queued && (
         <div className="agent-note">
-          <span>Queued: starts as soon as a slot and quota are free.</span>
+          <span>Queued for next free slot.</span>
           <button
             id="drawer-cancel"
+            type="button"
             className="btn btn-sm btn-ghost"
             disabled={!!busyAction}
             onClick={() => void runAction('stop')}
@@ -147,49 +144,38 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
           </button>
         </div>
       )}
+
       {run?.state === 'rate_limited' && (
         <div className="agent-note agent-note-limit">
           <span>
             {run.autoRetry
-              ? `A temporary provider error stopped the turn. ${formatAgentDisplayName(run.agent)} retries automatically at ${new Date(run.autoRetry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (attempt ${run.autoRetry.attempt} of ${run.autoRetry.max}).`
-              : `Paused by the usage limit. ${formatAgentDisplayName(run.agent)} continues automatically when the window resets.`}
+              ? `Retrying at ${new Date(run.autoRetry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${run.autoRetry.attempt}/${run.autoRetry.max}).`
+              : `Paused by usage limit; ${formatAgentDisplayName(run.agent)} resumes on reset.`}
           </span>
           <button
             id="drawer-resume"
+            type="button"
             className="btn btn-sm"
             disabled={!!busyAction}
             onClick={() => void runAction('resume')}
           >
-            Resume now
+            Resume
           </button>
         </div>
       )}
+
       {canFollowUp && (
         <div className="run-form drawer-form">
-          <div className="template-bar" aria-label="Stage prompt templates">
-            <span className="template-label mono">Stage:</span>
-            {STAGE_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                className="chip-btn"
-                title={tpl.hint}
-                onClick={() => setFollowUp(tpl.prompt)}
-              >
-                {tpl.label}
-              </button>
-            ))}
-          </div>
           <textarea
             id="drawer-followup"
             className="input"
-            rows={3}
+            rows={2}
             placeholder={
               !live || !run
                 ? formatAgentResumePlaceholder(run?.agent)
                 : run.state === 'waiting_input'
                   ? `${formatAgentDisplayName(run.agent)} is waiting for you…`
-                  : `Follow-up for ${formatAgentDisplayName(run.agent)} (sent to the live session)`
+                  : `Follow-up for ${formatAgentDisplayName(run.agent)}…`
             }
             value={followUp}
             onChange={(e) => setFollowUp(e.target.value)}
@@ -198,14 +184,11 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
             }}
           />
           <div className="run-form-foot">
-            <span className="muted small">
-              {live
-                ? 'Permission prompts are answered in the terminal.'
-                : 'Resumes the same branch and conversation.'}
-            </span>
+            <span />
             <button
               id="drawer-send"
-              className="btn btn-sm btn-primary"
+              type="button"
+              className={`btn btn-sm${primaryAction === 'send' ? ' btn-primary' : ''}`}
               disabled={!followUp.trim() || !!busyAction}
               onClick={() => void sendFollowUp()}
             >
@@ -214,29 +197,24 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
           </div>
         </div>
       )}
+
       {!live && (
         <div className="run-form drawer-form">
-          <PermissionModePicker value={permissionMode} onChange={setPermissionMode} />
-          <p className="muted small">
-            {modeHint(permissionMode)}. Works on its own branch and worktree; queued if all slots are busy or
-            the quota is exhausted.
-          </p>
           <div className="run-form-foot">
             {ticket.blockedBy.length > 0 ? (
               <span className="muted small" role={confirmStart ? 'alert' : undefined}>
                 {confirmStart ? 'Still waiting for ' : 'Waiting for '}
-                {ticket.blockedBy.map((b) => b.key).join(', ')}. Starting now skips the wait.
+                {ticket.blockedBy.map((b) => b.key).join(', ')}.
               </span>
             ) : overlapWaitingFor(ticket) ? (
-              <span className="muted small">
-                {overlapWaitingLabel(overlapWaitingFor(ticket)!)}. Starting manually runs in parallel.
-              </span>
+              <span className="muted small">{overlapWaitingLabel(overlapWaitingFor(ticket)!)}.</span>
             ) : (
               <span />
             )}
             <button
               id="drawer-start"
-              className={`btn btn-sm ${run?.resumable && run.state !== 'failed' ? '' : 'btn-primary'}`}
+              type="button"
+              className={`btn btn-sm${primaryAction === 'start' ? ' btn-primary' : ''}`}
               disabled={!!busyAction || !title.trim()}
               onClick={startRun}
             >
@@ -246,11 +224,49 @@ export function DrawerAgentSection({ ctx }: { ctx: DrawerCtx }) {
                   ? 'Start anyway'
                   : run
                     ? 'Start new run'
-                    : 'Start Agent Run'}
+                    : 'Start'}
             </button>
           </div>
         </div>
       )}
+
+      <Disclosure label="Advanced">
+        <div className="drawer-advanced">
+          <label className="drawer-label">Persona</label>
+          <PersonaPicker value={persona} onChange={setPersona} />
+          <TaskTemplateBar
+            onSelect={(tpl) => {
+              setPersona(tpl.persona);
+              setPermissionMode(tpl.permissionMode);
+              if (!title.trim()) setTitle(tpl.titlePlaceholder);
+              setBody(tpl.promptTemplate);
+            }}
+          />
+          {!live && (
+            <>
+              <label className="drawer-label">Permission mode</label>
+              <PermissionModePicker value={permissionMode} onChange={setPermissionMode} />
+              <p className="muted small">{modeHint(permissionMode)}</p>
+            </>
+          )}
+          {canFollowUp && (
+            <div className="template-bar" aria-label="Stage prompt templates">
+              <span className="template-label mono">Stage:</span>
+              {STAGE_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  className="chip-btn"
+                  onClick={() => setFollowUp(tpl.prompt)}
+                >
+                  {tpl.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {run && <HandoffMenu run={run} />}
+        </div>
+      </Disclosure>
     </section>
   );
 }

@@ -1,5 +1,5 @@
-import type { AgentPersona, Ticket, TicketStatus, Run } from '@emberline/protocol';
-import { Check, Coins, Wrench } from 'lucide-react';
+import type { AgentPersona, Run, Ticket, TicketStatus } from '@emberline/protocol';
+import { Check } from 'lucide-react';
 import { type DragEvent, type FormEvent, useState } from 'react';
 import { api, errorMessage } from '../api';
 import { issueHref } from '../issueImport';
@@ -10,9 +10,9 @@ import {
   waitingLabel,
   waitingTitle,
 } from '../ticketDeps';
-import { timeAgo } from '../time';
 import { PERSONA_LIST, PersonaBadge } from './PersonaBadge';
 import { RunStatePill } from './RunStatePill';
+import './board/board-ux.css';
 
 export const BOARD_COLUMNS: { status: TicketStatus; label: string; hint: string }[] = [
   { status: 'backlog', label: 'Backlog', hint: 'Ideas and not-yet-ready work' },
@@ -27,6 +27,13 @@ export const BOARD_COLUMNS: { status: TicketStatus; label: string; hint: string 
 ];
 
 export const BOARD_PRIORITIES = ['Low', 'Normal', 'High', 'Urgent'] as const;
+
+function conflictCardLabel(lastEvent: string | null | undefined): string | null {
+  if (lastEvent === 'conflict_auto_resolved') return 'auto-resolved';
+  if (lastEvent === 'conflict_resolver_started') return 'resolving conflicts';
+  if (lastEvent === 'conflict_heal_failed') return 'conflict';
+  return null;
+}
 
 export function QuickAdd({
   projectId,
@@ -63,11 +70,10 @@ export function QuickAdd({
         aria-label="Ticket persona"
         value={persona}
         onChange={(e) => setPersona(e.target.value as AgentPersona)}
-        title="Assign specialist persona for this ticket"
       >
         {PERSONA_LIST.map((p) => (
           <option key={p.id} value={p.id}>
-            [{p.shortLabel}] {p.label}
+            {p.label}
           </option>
         ))}
       </select>
@@ -98,7 +104,6 @@ export function IssueChips({ external }: { external: Ticket['external'] }) {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          title="Open the issue"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -107,14 +112,7 @@ export function IssueChips({ external }: { external: Ticket['external'] }) {
       ) : (
         <span className="badge badge-soft mono">#{external.number}</span>
       )}
-      {external.triage && (
-        <span
-          className="badge badge-warn"
-          title="Label sync imported this from an author who is not in Trusted authors. Automatic dispatch skips it until you move or edit it."
-        >
-          needs triage
-        </span>
-      )}
+      {external.triage && <span className="badge badge-warn">needs triage</span>}
       {external.state === 'closed' && <span className="badge badge-soft">closed</span>}
       {external.labels.map((l) => (
         <span key={l} className="badge badge-soft card-issue-label">
@@ -151,8 +149,8 @@ export function TicketCard({
   onDragOver: (e: DragEvent<HTMLLIElement>) => void;
 }) {
   const live = run && !run.endedAt;
-  const shortBranch = run?.branch?.replace(/^emberline\//, '');
   const overlapWait = overlapWaitingFor(ticket);
+  const conflictNote = conflictCardLabel(run?.lastEvent);
   const activate = (range: boolean) => (selection ? selection.onToggle(range) : onOpen());
   return (
     <>
@@ -183,8 +181,10 @@ export function TicketCard({
           )}
           <span className="card-key mono">{ticket.key}</span>
           <PersonaBadge persona={ticket.persona} />
-          {shortBranch && <span className="card-branch mono">{shortBranch}</span>}
-          <span className="prio-dot" title={`${BOARD_PRIORITIES[ticket.priority]} priority`} />
+          <span className="card-prio mono">
+            <span className="prio-dot" aria-hidden="true" />
+            {BOARD_PRIORITIES[ticket.priority]}
+          </span>
         </div>
         <p className="card-title">{ticket.title}</p>
         <IssueChips external={ticket.external} />
@@ -211,26 +211,7 @@ export function TicketCard({
               autoRetry={run.autoRetry}
               handedOffTo={run.handedOffTo}
             />
-            {run.telemetry && run.telemetry.totalTokens > 0 && (
-              <span
-                className="card-event mono"
-                style={{ fontVariantNumeric: 'tabular-nums' }}
-                title={`Input: ${run.telemetry.inputTokens.toLocaleString()} tok · Output: ${run.telemetry.outputTokens.toLocaleString()} tok · Tools: ${run.telemetry.toolCalls}`}
-              >
-                <Coins className="icon" aria-hidden /> {(run.telemetry.totalTokens / 1000).toFixed(1)}k
-                {run.telemetry.toolCalls > 0 ? (
-                  <>
-                    {' · '}
-                    <Wrench className="icon" aria-hidden />
-                    {run.telemetry.toolCalls}
-                  </>
-                ) : (
-                  ''
-                )}
-              </span>
-            )}
-            {run.lastEvent && <span className="card-event mono">{run.lastEvent}</span>}
-            <span className="card-meta mono">{timeAgo(run.stateChangedAt)}</span>
+            {conflictNote && <span className="card-conflict-note mono">{conflictNote}</span>}
           </div>
         )}
       </li>

@@ -1,5 +1,5 @@
 import type { Ticket, TicketExportFormat, TicketStatus } from '@emberline/protocol';
-import { Download } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { errorMessage } from '../api';
 import { downloadBoardExport } from '../boardExport';
@@ -14,14 +14,24 @@ interface Props {
   projectId: string;
   columns: readonly ExportColumn[];
   tickets: readonly Ticket[] | undefined;
+  openFormat?: TicketExportFormat | null;
+  onClose?: () => void;
+  hideTrigger?: boolean;
 }
 
 type ExportState = { kind: 'idle' } | { kind: 'busy' } | { kind: 'error'; message: string };
 
-/** Board toolbar control: pick a format and columns, then download the board as CSV or JSON. */
-export function BoardExportMenu({ projectId, columns, tickets }: Props) {
-  const [open, setOpen] = useState(false);
-  const [format, setFormat] = useState<TicketExportFormat>('csv');
+/** Board export dialog: pick a format and columns, then download the board as CSV or JSON. */
+export function BoardExportMenu({
+  projectId,
+  columns,
+  tickets,
+  openFormat,
+  onClose,
+  hideTrigger = false,
+}: Props) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [format, setFormat] = useState<TicketExportFormat>(openFormat ?? 'csv');
   const [picked, setPicked] = useState<ReadonlySet<TicketStatus>>(
     () => new Set(columns.map((c) => c.status)),
   );
@@ -29,6 +39,21 @@ export function BoardExportMenu({ projectId, columns, tickets }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+
+  const isControlled = openFormat !== undefined;
+  const open = isControlled ? openFormat !== null : internalOpen;
+
+  useEffect(() => {
+    if (openFormat) {
+      setFormat(openFormat);
+      setState({ kind: 'idle' });
+    }
+  }, [openFormat]);
+
+  const closePanel = () => {
+    if (isControlled) onClose?.();
+    else setInternalOpen(false);
+  };
 
   const counts = useMemo(() => {
     const byStatus = new Map<TicketStatus, number>(columns.map((c) => [c.status, 0]));
@@ -42,22 +67,28 @@ export function BoardExportMenu({ projectId, columns, tickets }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    const onPointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    const onPointer = (event: PointerEvent | MouseEvent) => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
+        if (isControlled) onClose?.();
+        else setInternalOpen(false);
+      }
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setOpen(false);
+      if (isControlled) onClose?.();
+      else setInternalOpen(false);
       triggerRef.current?.focus();
     };
     document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('mousedown', onPointer);
     document.addEventListener('keydown', onKey);
     rootRef.current?.querySelector<HTMLInputElement>('input')?.focus();
     return () => {
       document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('mousedown', onPointer);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, isControlled, onClose]);
 
   const toggle = (status: TicketStatus) =>
     setPicked((prev) => {
@@ -72,28 +103,37 @@ export function BoardExportMenu({ projectId, columns, tickets }: Props) {
     try {
       const fileName = await downloadBoardExport({ projectId, format, statuses: [...picked] });
       setState({ kind: 'idle' });
-      setOpen(false);
+      closePanel();
       toastInfo(`Exported ${selectedCount} ticket${selectedCount === 1 ? '' : 's'} to ${fileName}`);
     } catch (error) {
       setState({ kind: 'error', message: errorMessage(error) });
     }
   };
 
+  if (hideTrigger && !open) return null;
+
   return (
     <div className="board-export" ref={rootRef}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`btn btn-sm${open ? ' btn-primary' : ''}`}
-        aria-expanded={open}
-        aria-controls={panelId}
-        title="Download the board as CSV or JSON"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Download className="icon" aria-hidden /> Export
-      </button>
+      {!hideTrigger && (
+        <button
+          ref={triggerRef}
+          type="button"
+          className={`btn btn-sm${open ? ' active' : ''}`}
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setInternalOpen((v) => !v)}
+        >
+          <Download className="icon" aria-hidden /> Export
+        </button>
+      )}
       {open && (
-        <div id={panelId} className="board-export-panel" role="dialog" aria-label="Export tickets">
+        <div id={panelId} className="board-export-dialog" role="dialog" aria-label="Export tickets">
+          <div className="board-export-head">
+            <h3 className="board-export-title">Export tickets</h3>
+            <button type="button" className="icon-btn" aria-label="Close export" onClick={closePanel}>
+              <X className="icon" aria-hidden />
+            </button>
+          </div>
           <fieldset className="board-export-group">
             <legend>Format</legend>
             {(['csv', 'json'] as const).map((f) => (
@@ -105,7 +145,7 @@ export function BoardExportMenu({ projectId, columns, tickets }: Props) {
                   checked={format === f}
                   onChange={() => setFormat(f)}
                 />
-                {f === 'csv' ? 'CSV (spreadsheet)' : 'JSON (with status counts)'}
+                {f === 'csv' ? 'CSV' : 'JSON'}
               </label>
             ))}
           </fieldset>
@@ -130,7 +170,7 @@ export function BoardExportMenu({ projectId, columns, tickets }: Props) {
             </span>
             <button
               type="button"
-              className="btn btn-sm btn-primary"
+              className="btn btn-sm"
               disabled={picked.size === 0 || state.kind === 'busy'}
               onClick={() => void run()}
             >

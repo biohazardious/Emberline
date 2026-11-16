@@ -131,7 +131,7 @@ export function BoardBulkBar({ projectId, columns, selection, onApplied, onExit 
             </option>
             {PERSONA_LIST.map((p) => (
               <option key={p.id} value={p.id}>
-                [{p.shortLabel}] {p.label}
+                {p.label}
               </option>
             ))}
           </select>
@@ -175,9 +175,9 @@ export function BoardBulkBar({ projectId, columns, selection, onApplied, onExit 
           type="button"
           className="btn btn-sm btn-ghost bulk-bar-exit"
           onClick={onExit}
-          title="Leave selection mode (Esc)"
+          aria-label="Leave selection mode"
         >
-          <X className="icon" aria-hidden /> Done <kbd className="kbd">Esc</kbd>
+          <X className="icon" aria-hidden /> Done
         </button>
       </div>
 
@@ -188,10 +188,7 @@ export function BoardBulkBar({ projectId, columns, selection, onApplied, onExit 
       )}
       {state.kind === 'skipped' && (
         <div className="bulk-bar-skipped" role="alert">
-          <p>
-            {state.failed.length} ticket{state.failed.length === 1 ? ' was' : 's were'} left as they were and
-            stay selected:
-          </p>
+          <p>{state.failed.length} skipped (still selected):</p>
           <ul>
             {state.failed.map((f) => (
               <li key={f.id}>

@@ -79,7 +79,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -87,19 +87,19 @@
   width: auto;
   min-width: 8.5em;
   padding-block: 3px;
-  font-size: 0.78rem;
+  font-size: 0.82rem;
 }
 
 .bulk-bar-confirm {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   color: var(--bad);
 }
 
 .bulk-bar-hint {
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -110,7 +110,7 @@
 .bulk-bar-error,
 .bulk-bar-skipped {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   color: var(--warn);
 }
 

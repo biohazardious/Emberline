@@ -35,6 +35,7 @@ import {
 import { type ManualConflictState, type SyncResolvingNotice, syncWorktreeOutcome } from '../syncResolution';
 import { dropIntoInProgress } from '../ticketDeps';
 import { toastError, toastInfo } from '../toast';
+import '../components/board/board-ux.css';
 
 export { TicketDrawer } from '../components/board/TicketDrawer';
 

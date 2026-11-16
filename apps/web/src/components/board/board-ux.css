@@ -1,0 +1,351 @@
+/* M6 Board, ticket drawer, cards, export menu and issue import dialog styles. */
+
+.board-header {
+  position: relative;
+}
+
+.board-count-badge {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-auto-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.board-select-btn.active {
+  color: var(--text);
+  border-color: color-mix(in hsl, var(--ember-1) 45%, var(--border));
+  background: color-mix(in hsl, var(--ember-1) 12%, var(--surface-2));
+}
+
+.quick-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(360px, 100%);
+}
+
+.quick-add-persona {
+  width: auto;
+  min-width: 7.5rem;
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+}
+
+.quick-add .input {
+  font-size: 0.82rem;
+}
+
+/* --- Columns & Cards ------------------------------------------------------- */
+
+.board-col-head h2 {
+  font-size: 0.82rem;
+  text-transform: none;
+  letter-spacing: -0.01em;
+}
+
+.board-count {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-empty {
+  font-size: 0.8rem;
+}
+
+.card-key {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-prio {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.card-prio .prio-dot {
+  margin-left: 0;
+}
+
+.card-title {
+  font-size: 0.85rem;
+}
+
+.card-waiting {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.card-conflict-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-issue-label,
+.issue-label {
+  font-size: 0.8rem;
+}
+
+/* --- Export menu / dialog -------------------------------------------------- */
+
+.board-export-dialog {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 35;
+  width: min(300px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 75%, transparent);
+}
+
+.board-export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.board-export-title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.board-export-group legend {
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.board-export-option {
+  font-size: 0.82rem;
+}
+
+.board-export-count,
+.board-export-total {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-export-error {
+  font-size: 0.8rem;
+}
+
+/* --- Ticket Drawer --------------------------------------------------------- */
+
+.drawer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawer-head-actions .icon-btn {
+  margin-left: 0;
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawer-section + .drawer-section,
+.drawer-section + .drawer-agent,
+.drawer-agent + .drawer-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.drawer-section-head,
+.drawer-agent-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drawer-section h2,
+.drawer-agent h2 {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--text);
+}
+
+.drawer-label {
+  margin-bottom: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.drawer-grid-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.drawer-field {
+  flex: 1 1 130px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.drawer-field .input {
+  font-size: 0.82rem;
+}
+
+.drawer-completion {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.drawer-completion-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawer-completion-blocked {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.drawer-completion-summary {
+  margin: 0;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+}
+
+.drawer-completion-blockers {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+}
+
+.drawer-completion-handoff {
+  margin: 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+}
+
+.drawer-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawer-history-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawer-foot {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* --- Issue Import Dialog --------------------------------------------------- */
+
+.issue-dialog-head-main {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.issue-sync-help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.issue-sync-help-text {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+/* --- Responsive phone layout ----------------------------------------------- */
+
+@media (max-width: 640px) {
+  .board-header-actions {
+    width: 100%;
+  }
+
+  .quick-add {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .quick-add-persona {
+    flex: 1 1 110px;
+  }
+
+  .drawer-grid-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .drawer-field {
+    flex: 1 1 auto;
+  }
+}

@@ -1,9 +1,15 @@
 // @vitest-environment happy-dom
+import type { Ticket } from '@emberline/protocol';
+import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError } from './api';
 import { boardExportUrl, downloadBoardExport, fileNameFromDisposition } from './boardExport';
+import { BOARD_COLUMNS } from './components/BoardCard';
+import { BoardExportMenu } from './components/BoardExportMenu';
+import { cleanup, click, getButton, renderDom, waitFor } from './domRender';
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -68,5 +74,68 @@ describe('downloadBoardExport', () => {
     );
     expect(error).toBeInstanceOf(ApiRequestError);
     expect(error).toMatchObject({ status: 400, code: 'bad_request', message: 'unknown status' });
+  });
+});
+
+describe('BoardExportMenu', () => {
+  it('opens with the requested format, toggles status columns, and downloads', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('{"tickets":[]}', {
+          status: 200,
+          headers: { 'content-disposition': 'attachment; filename="tickets.json"' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:export');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    const onClose = vi.fn();
+    const tickets: Ticket[] = [
+      {
+        id: 't1',
+        projectId: 'p1',
+        key: 'EMB-1',
+        title: 'Task 1',
+        body: '',
+        persona: 'coder',
+        status: 'ready',
+        priority: 1,
+        position: 1024,
+        depth: 0,
+        dependsOn: [],
+        blockedBy: [],
+        completion: null,
+        external: null,
+        waitingOn: null,
+        createdAt: '2026-11-12T00:00:00.000Z',
+        updatedAt: '2026-11-12T00:00:00.000Z',
+      },
+    ];
+
+    const { container } = await renderDom(
+      createElement(BoardExportMenu, {
+        projectId: 'p1',
+        columns: BOARD_COLUMNS,
+        tickets,
+        openFormat: 'json',
+        onClose,
+        hideTrigger: true,
+      }),
+    );
+
+    expect(container.textContent).toContain('1 tickets');
+    const checkboxes = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(checkboxes).toHaveLength(5);
+    await click(checkboxes[0]!);
+
+    await click(getButton('Download', container));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/p1/tickets/export?format=json&status=ready%2Cin_progress%2Creview%2Cdone',
+      expect.anything(),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

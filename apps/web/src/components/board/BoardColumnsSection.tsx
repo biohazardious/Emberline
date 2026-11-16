@@ -3,7 +3,7 @@ import { EMPTY_BOARD_FILTER } from '../../boardFilter';
 import { blockingMessage, unmergeableText } from '../../reviewComments';
 import { BoardBulkBar } from '../BoardBulkBar';
 import { BOARD_COLUMNS, TicketCard } from '../BoardCard';
-import { BoardFilterBar, MobileColumnNav } from '../BoardFilterBar';
+import { MobileColumnNav } from '../BoardFilterBar';
 import { ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
 import { SyncResolutionBanner } from '../HoldRecovery';
 import type { BoardCtx, DropTarget } from './boardMeta';
@@ -31,10 +31,8 @@ export function BoardColumnsSection({
     visibleColumns,
     columnCounts,
     latestRun,
-    autoStart,
     bulkSelection,
     onBulkApplied,
-    filter,
     filterActive,
     filteredCount,
     updateFilter,
@@ -85,7 +83,7 @@ export function BoardColumnsSection({
           </span>
           <button
             type="button"
-            className="btn btn-sm btn-primary"
+            className="btn btn-sm"
             onClick={() => void moveTicket(blockedDrop.ticket, blockedDrop.target, { force: true })}
           >
             Merge anyway
@@ -100,7 +98,7 @@ export function BoardColumnsSection({
           <span>{unmergeableText(missingDrop.why, missingDrop.ticket.key)}</span>
           <button
             type="button"
-            className="btn btn-sm btn-primary"
+            className="btn btn-sm"
             onClick={() => void moveTicket(missingDrop.ticket, missingDrop.target, { skipMerge: true })}
           >
             Move to Done without merging
@@ -109,16 +107,6 @@ export function BoardColumnsSection({
             Cancel
           </button>
         </div>
-      )}
-
-      {((tickets?.length ?? 0) > 0 || filterActive) && (
-        <BoardFilterBar
-          tickets={tickets ?? []}
-          latestRunByTicket={latestRun}
-          filter={filter}
-          shown={filteredCount}
-          onChange={updateFilter}
-        />
       )}
 
       {bulkSelection.active && (
@@ -177,14 +165,9 @@ export function BoardColumnsSection({
                   }}
                   onDrop={onDrop}
                 >
-                  <header className="board-col-head" title={col.hint}>
+                  <header className="board-col-head">
                     <span className="board-col-dot" aria-hidden="true" />
                     <h2>{col.label}</h2>
-                    {col.status === 'in_progress' && autoStart && (
-                      <span className="badge mono" title="Drop a card here to auto-start Claude">
-                        auto
-                      </span>
-                    )}
                     {bulkSelection.active && list.length > 0 && (
                       <button
                         type="button"

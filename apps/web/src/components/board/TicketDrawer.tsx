@@ -2,7 +2,7 @@ import type { AgentPersona, PermissionMode, Run, Ticket, TicketStatus } from '@e
 import { X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../../api';
-import type { ConflictHoldFallback } from '../../holdRecovery';
+import { type ConflictHoldFallback, recoveryApplies } from '../../holdRecovery';
 import { useQueryParam } from '../../hooks/navigation';
 import {
   drawerFailure,
@@ -11,16 +11,18 @@ import {
   type PendingMergeStep,
 } from '../../reviewComments';
 import type { SyncResolvingNotice } from '../../syncResolution';
-import { timeAgo } from '../../time';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { SyncResolutionBanner } from '../HoldRecovery';
 import { PersonaBadge } from '../PersonaBadge';
 import { RunEventTimeline, RunFailureBanner } from '../RunInspector';
 import { RunStatePill } from '../RunStatePill';
 import { ico } from '../SectionState';
-import { DRAWER_VIEWS, type DrawerCtx, type DrawerView } from './boardMeta';
-import { DrawerAgentSection } from './DrawerAgentSection';
+import { Disclosure } from '../ui/Disclosure';
+import { MoreMenu, type MoreMenuItem } from '../ui/MoreMenu';
+import { DRAWER_VIEWS, type DrawerCtx, type DrawerPrimaryAction, type DrawerView } from './boardMeta';
+import { AttemptChain, DrawerAgentSection } from './DrawerAgentSection';
 import { DrawerDetailsSection } from './DrawerDetailsSection';
+import './board-ux.css';
 
 const TerminalView = lazy(() => import('../TerminalView').then((m) => ({ default: m.TerminalView })));
 const ReviewView = lazy(() => import('../ReviewView').then((m) => ({ default: m.ReviewView })));
@@ -64,7 +66,7 @@ export function TicketDrawer({
   const [persona, setPersona] = useState<AgentPersona>(ticket.persona ?? 'coder');
   const [mode, setMode] = useState<PermissionMode>(armStart > 0 ? 'auto' : 'default');
   const [followUp, setFollowUp] = useState('');
-  const defaultView: DrawerView = ticket.status === 'review' && run?.worktreePath ? 'review' : 'details';
+  const defaultView: DrawerView = 'details';
   const [viewParam, setViewParam] = useQueryParam('view');
   const viewTab: DrawerView = DRAWER_VIEWS.includes(viewParam as DrawerView)
     ? (viewParam as DrawerView)
@@ -167,6 +169,7 @@ export function TicketDrawer({
       onChanged(res.ticket);
     });
 
+  const live = Boolean(run && !run.endedAt);
   const runLive =
     run !== undefined &&
     (run.state === 'rate_limited' ||
@@ -184,11 +187,61 @@ export function TicketDrawer({
       await api(`/api/runs/${run.id}/${name}`, 'POST', name === 'resume' ? {} : undefined);
     });
 
+  const hasHoldRecovery = Boolean(
+    run && (recoveryApplies(run) || (conflictFallback && conflictFallback.conflicts.length > 0)),
+  );
+  const primaryAction: DrawerPrimaryAction = mergeStep
+    ? 'merge_step'
+    : hasHoldRecovery
+      ? 'hold_recovery'
+      : ticket.status === 'review'
+        ? 'accept'
+        : ticket.status === 'in_progress' && live
+          ? run?.worktreePath
+            ? 'open_review'
+            : 'send'
+          : ticket.status !== 'done' && !live
+            ? 'start'
+            : 'none';
+
+  const moreItems: MoreMenuItem[] = [];
+  if (ticket.status !== 'done') {
+    moreItems.push({
+      id: 'close-without-merge',
+      label: 'Move to Done without merging',
+      disabled: !!busy,
+      onSelect: () => void act('done', onDiscard),
+    });
+  }
+  if (run?.worktreePath) {
+    moreItems.push({
+      id: 'open-review',
+      label: 'Open review',
+      href: `/runs/${run.id}/review`,
+    });
+  }
+  if (run?.terminalId) {
+    moreItems.push({
+      id: 'open-terminal',
+      label: 'Open terminal',
+      href: `/terminals/${run.terminalId}`,
+    });
+  }
+  moreItems.push({
+    id: 'delete-ticket',
+    label: 'Delete',
+    danger: true,
+    disabled: !!busy || runLive,
+    description: runLive ? 'Stop the active run first' : undefined,
+    onSelect: () => void remove(),
+  });
+
   const ctx: DrawerCtx = {
     ticket,
     allTickets,
     run,
     conflictFallback: conflictFallback ?? null,
+    primaryAction,
     title,
     setTitle,
     body,
@@ -230,7 +283,7 @@ export function TicketDrawer({
           <span id="drawer-key" className="card-key mono">
             {ticket.key}
           </span>
-          <PersonaBadge persona={persona} showFull />
+          <PersonaBadge persona={persona} />
           {run && (
             <RunStatePill
               state={run.state}
@@ -239,55 +292,12 @@ export function TicketDrawer({
               handedOffTo={run.handedOffTo}
             />
           )}
-          {run?.branch && <span className="badge badge-soft mono hide-sm">{run.branch}</span>}
-          <span className="muted small mono">updated {timeAgo(ticket.updatedAt)}</span>
-          {run && (
-            <div className="segmented" role="tablist" aria-label="Ticket inspector view">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewTab === 'details'}
-                className={viewTab === 'details' ? 'active' : ''}
-                onClick={() => setViewTab('details')}
-              >
-                Spec &amp; Agent
-              </button>
-              {run.worktreePath && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewTab === 'review'}
-                  className={viewTab === 'review' ? 'active' : ''}
-                  onClick={() => setViewTab('review')}
-                >
-                  Review &amp; Diff
-                </button>
-              )}
-              {run.terminalId && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewTab === 'terminal'}
-                  className={viewTab === 'terminal' ? 'active' : ''}
-                  onClick={() => setViewTab('terminal')}
-                >
-                  Live Terminal
-                </button>
-              )}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewTab === 'events'}
-                className={viewTab === 'events' ? 'active' : ''}
-                onClick={() => setViewTab('events')}
-              >
-                Events
-              </button>
-            </div>
-          )}
-          <button id="drawer-close" className="icon-btn" aria-label="Close" onClick={onClose}>
-            {ico(X)}
-          </button>
+          <div className="drawer-head-actions">
+            <MoreMenu items={moreItems} ariaLabel="Ticket actions" />
+            <button id="drawer-close" type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+              {ico(X)}
+            </button>
+          </div>
         </header>
 
         {viewTab === 'review' && run && (
@@ -296,7 +306,7 @@ export function TicketDrawer({
               <Suspense
                 fallback={
                   <div className="empty" aria-busy="true">
-                    Loading diff &amp; review…
+                    Loading review…
                   </div>
                 }
               >
@@ -326,6 +336,21 @@ export function TicketDrawer({
         {viewTab === 'details' && <DrawerDetailsSection ctx={ctx} />}
 
         <DrawerAgentSection ctx={ctx} />
+
+        <section className="drawer-section drawer-history" aria-label="History">
+          <Disclosure label="History">
+            <div className="drawer-history-body">
+              {run ? (
+                <>
+                  <AttemptChain run={run} />
+                  <RunEventTimeline run={run} />
+                </>
+              ) : (
+                <p className="muted small">No runs yet.</p>
+              )}
+            </div>
+          </Disclosure>
+        </section>
 
         {resolvingNotice && <SyncResolutionBanner notice={resolvingNotice} onDismiss={onDismissResolving} />}
 
@@ -358,22 +383,19 @@ export function TicketDrawer({
           </div>
         )}
 
-        <footer className="drawer-foot">
-          <button
-            id="drawer-delete"
-            className="btn btn-sm btn-ghost danger"
-            disabled={!!busy || runLive}
-            title={runLive ? 'An agent is still working on this ticket: stop its run first' : undefined}
-            onClick={() => void remove()}
-          >
-            Delete
-          </button>
-          {ticket.status !== 'done' && (
-            <button id="drawer-done" className="btn btn-sm" disabled={!!busy} onClick={() => void markDone()}>
-              Mark done ✓
+        {ticket.status !== 'done' && (
+          <footer className="drawer-foot">
+            <button
+              id="drawer-done"
+              type="button"
+              className={`btn btn-sm${primaryAction === 'accept' ? ' btn-primary' : ''}`}
+              disabled={!!busy}
+              onClick={() => void markDone()}
+            >
+              Accept and merge
             </button>
-          )}
-        </footer>
+          </footer>
+        )}
       </aside>
     </div>
   );

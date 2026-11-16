@@ -1,12 +1,18 @@
-import type { Ticket } from '@emberline/protocol';
-import { ListChecks, Play, Sparkles } from 'lucide-react';
+import type { Ticket, TicketExportFormat } from '@emberline/protocol';
+import { Download, FileText, FolderGit2, Play, Settings, Sparkles } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'wouter';
+import { useLocation } from 'wouter';
 import { api, errorMessage } from '../../api';
 import { BOARD_COLUMNS, QuickAdd } from '../BoardCard';
 import { BoardExportMenu } from '../BoardExportMenu';
-import { ico, SectionState } from '../SectionState';
+import { BoardFilterBar } from '../BoardFilterBar';
+import { SectionState } from '../SectionState';
+import { HelpHint } from '../ui/HelpHint';
+import { MoreMenu, type MoreMenuItem } from '../ui/MoreMenu';
+import { PageHeader } from '../ui/PageHeader';
+import { Switch } from '../ui/Switch';
 import type { BoardCtx } from './boardMeta';
+import './board-ux.css';
 
 export function BoardHeaderSection({
   ctx,
@@ -23,19 +29,25 @@ export function BoardHeaderSection({
     projectId,
     project,
     tickets,
+    latestRun,
     canSeed,
     bulkSelection,
     autoStart,
     toggleAutoStart,
     demoPanelOpen,
     toggleDemoPanel,
+    filter,
+    filterActive,
+    filteredCount,
+    updateFilter,
     openBlueprint,
     openImport,
-    goBack,
     patchTicket,
     setError,
   } = ctx;
+  const [, navigate] = useLocation();
   const [seeding, setSeeding] = useState(false);
+  const [exportFormat, setExportFormat] = useState<TicketExportFormat | null>(null);
 
   if (standaloneLoading || standaloneError !== undefined) {
     return (
@@ -62,93 +74,117 @@ export function BoardHeaderSection({
     }
   };
 
+  const moreItems: MoreMenuItem[] = [];
+  if (project) {
+    moreItems.push(
+      {
+        id: 'project-settings',
+        label: 'Project settings',
+        icon: <Settings className="icon" aria-hidden />,
+        onSelect: () => navigate(`/projects/${project.id}/settings`),
+      },
+      {
+        id: 'demo-status',
+        label: 'Demo and status',
+        description: demoPanelOpen ? 'Hide status and live demo panel' : 'Open status and live demo panel',
+        icon: <Play className="icon" aria-hidden />,
+        onSelect: toggleDemoPanel,
+      },
+      {
+        id: 'open-project-md',
+        label: 'Open PROJECT.md',
+        icon: <FileText className="icon" aria-hidden />,
+        onSelect: openBlueprint,
+      },
+      {
+        id: 'import-issues',
+        label: 'Import issues',
+        icon: <FolderGit2 className="icon" aria-hidden />,
+        onSelect: openImport,
+      },
+      {
+        id: 'export-csv',
+        label: 'Export CSV',
+        icon: <Download className="icon" aria-hidden />,
+        onSelect: () => setExportFormat('csv'),
+      },
+      {
+        id: 'export-json',
+        label: 'Export JSON',
+        icon: <Download className="icon" aria-hidden />,
+        onSelect: () => setExportFormat('json'),
+      },
+    );
+  }
+  if (canSeed) {
+    moreItems.push({
+      id: 'seed-backlog',
+      label: seeding ? 'Seeding…' : 'Seed starter backlog',
+      icon: <Sparkles className="icon" aria-hidden />,
+      disabled: seeding,
+      onSelect: () => void seedTickets(),
+    });
+  }
+
+  const totalCount = tickets?.length ?? 0;
+
   return (
-    <header className="board-head">
-      <div className="board-title">
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          aria-label="Back to the previous page"
-          onClick={goBack}
-        >
-          ←
-        </button>
-        <div>
-          <p className="eyebrow">{project?.name ?? 'Project'} · Pipeline Board</p>
-          <h1>{project?.name ?? 'Board'}</h1>
+    <PageHeader
+      className="board-header"
+      title={project?.name ?? 'Board'}
+      meta={
+        <span className="badge mono board-count-badge">
+          {totalCount} {totalCount === 1 ? 'ticket' : 'tickets'}
+        </span>
+      }
+      actions={
+        <div className="board-header-actions">
+          <QuickAdd projectId={projectId} onCreated={patchTicket} onError={setError} />
+          <div className="board-auto-start">
+            <Switch
+              id="pipeline-auto-start"
+              checked={autoStart}
+              onChange={() => toggleAutoStart()}
+              label="Auto-start"
+            />
+            <HelpHint topic="auto-start">
+              When enabled, dragging a ticket into In progress automatically starts an agent run.
+            </HelpHint>
+          </div>
+          {totalCount > 0 && (
+            <button
+              id="board-select-mode"
+              type="button"
+              className={`btn btn-sm board-select-btn${bulkSelection.active ? ' active' : ''}`}
+              aria-pressed={bulkSelection.active}
+              onClick={() => bulkSelection.setActive(!bulkSelection.active)}
+            >
+              Select
+            </button>
+          )}
+          {moreItems.length > 0 && <MoreMenu items={moreItems} ariaLabel="Board actions" />}
         </div>
-      </div>
-      <div className="board-controls">
-        {project && (
-          <>
-            <Link href={`/projects/${project.id}/settings`} className="btn btn-sm">
-              Project settings
-            </Link>
-            <button
-              type="button"
-              className={`btn btn-sm${demoPanelOpen ? ' btn-primary' : ''}`}
-              onClick={toggleDemoPanel}
-              title="View Project Status, Sync Worktrees & Play Live Demo"
-            >
-              {ico(Play)} Live Demo &amp; Status
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={openBlueprint}
-              title="Open PROJECT.md Blueprint"
-            >
-              PROJECT.md
-            </button>
-          </>
-        )}
-        {canSeed && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={seeding}
-            onClick={() => void seedTickets()}
-            title="Seed 4 starter tickets across PO, Architect, Coder, and QA personas"
-          >
-            {seeding ? 'Seeding…' : <>{ico(Sparkles)} Seed Starter Backlog</>}
-          </button>
-        )}
-        <button
-          id="pipeline-auto-start"
-          type="button"
-          className={`chip-toggle${autoStart ? ' active' : ''}`}
-          aria-pressed={autoStart}
-          title="When enabled, dragging a card into In progress automatically starts a Claude run"
-          onClick={toggleAutoStart}
-        >
-          <span className="dot" />
-          Auto-dispatch on In progress
-        </button>
-        {(tickets?.length ?? 0) > 0 && (
-          <button
-            id="board-select-mode"
-            type="button"
-            className={`chip-toggle${bulkSelection.active ? ' active' : ''}`}
-            aria-pressed={bulkSelection.active}
-            title="Pick several tickets to move, reprioritise, reassign or delete them at once"
-            onClick={() => bulkSelection.setActive(!bulkSelection.active)}
-          >
-            {ico(ListChecks)} Select
-          </button>
-        )}
-        {project && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={openImport}
-            title="Import issues from the project's GitHub, GitLab or Gitea remote"
-          >
-            Import issues
-          </button>
-        )}
-        {project && <BoardExportMenu projectId={project.id} columns={BOARD_COLUMNS} tickets={tickets} />}
-        <QuickAdd projectId={projectId} onCreated={patchTicket} onError={setError} />
-      </div>
-    </header>
+      }
+    >
+      {(totalCount > 0 || filterActive) && (
+        <BoardFilterBar
+          tickets={tickets ?? []}
+          latestRunByTicket={latestRun}
+          filter={filter}
+          shown={filteredCount}
+          onChange={updateFilter}
+        />
+      )}
+      {project && (
+        <BoardExportMenu
+          projectId={project.id}
+          columns={BOARD_COLUMNS}
+          tickets={tickets}
+          openFormat={exportFormat}
+          onClose={() => setExportFormat(null)}
+          hideTrigger
+        />
+      )}
+    </PageHeader>
   );
 }

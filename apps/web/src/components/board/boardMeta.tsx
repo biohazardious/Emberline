@@ -35,6 +35,8 @@ export interface DropTarget {
 
 export const DRAWER_VIEWS = ['details', 'review', 'terminal', 'events'] as const;
 export type DrawerView = (typeof DRAWER_VIEWS)[number];
+export type DrawerPrimaryAction =
+  'start' | 'open_review' | 'accept' | 'send' | 'merge_step' | 'hold_recovery' | 'none';
 
 export interface BoardCtx {
   projectId: string;
@@ -80,6 +82,7 @@ export interface DrawerCtx {
   allTickets: Ticket[];
   run: Run | undefined;
   conflictFallback?: ConflictHoldFallback | null;
+  primaryAction: DrawerPrimaryAction;
   title: string;
   setTitle: (value: string) => void;
   body: string;

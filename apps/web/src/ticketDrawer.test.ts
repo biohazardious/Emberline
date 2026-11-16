@@ -63,10 +63,10 @@ const shown = () => ({
   mergeAnyway: queryButton('Merge anyway') !== null,
 });
 
-describe('TicketDrawer: a failed Mark done (L-13)', () => {
+describe('TicketDrawer: a failed Accept and merge (L-13)', () => {
   it('offers its step while the ticket stays put', async () => {
     const view = await renderDom(drawer('review'));
-    await click(getButton('Mark done ✓'));
+    await click(getButton('Accept and merge'));
     expect(onAccept).toHaveBeenCalledTimes(1);
     expect(shown()).toEqual({ error: BLOCKED, mergeAnyway: true });
     await view.rerender(drawer('review'));
@@ -75,7 +75,7 @@ describe('TicketDrawer: a failed Mark done (L-13)', () => {
 
   it('retires the step and its sentence on a move, and they do not come back with the ticket', async () => {
     const view = await renderDom(drawer('review'));
-    await click(getButton('Mark done ✓'));
+    await click(getButton('Accept and merge'));
     expect(onAccept).toHaveBeenCalledTimes(1);
     expect(shown()).toEqual({ error: BLOCKED, mergeAnyway: true });
     await view.rerender(drawer('in_progress'));
