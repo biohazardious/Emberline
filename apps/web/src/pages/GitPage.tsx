@@ -1,14 +1,16 @@
 import type { GitPageStatus } from '@emberline/protocol';
 import { GitBranch } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { SectionState } from '../components/SectionState';
 import { GitBranchesTab } from '../components/git/GitBranchesTab';
 import { GitCommitsTab } from '../components/git/GitCommitsTab';
 import { GitReleaseTab } from '../components/git/GitReleaseTab';
 import { GitStatusStrip } from '../components/git/GitStatusStrip';
+import { PageHeader } from '../components/ui/PageHeader';
 import { GIT_TABS, type GitTab, gitRefetchMs, tabFromHash } from '../gitPage';
+import '../git-page.css';
 
 const TAB_LABEL: Record<GitTab, string> = { commits: 'Commits', branches: 'Branches', release: 'Release' };
 
@@ -29,6 +31,7 @@ function useHashTab(): [GitTab, (tab: GitTab) => void] {
 
 export function GitPage({ projectId }: { projectId: string }) {
   const [tab, setTab] = useHashTab();
+  const tabListRef = useRef<HTMLDivElement>(null);
   const status = useQuery({
     queryKey: ['git', projectId],
     queryFn: () => api<GitPageStatus>(`/api/projects/${projectId}/git`),
@@ -36,14 +39,29 @@ export function GitPage({ projectId }: { projectId: string }) {
   });
   const data = status.data;
 
+  const handleTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = GIT_TABS.indexOf(tab);
+    let nextIndex = -1;
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % GIT_TABS.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + GIT_TABS.length) % GIT_TABS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = GIT_TABS.length - 1;
+    }
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    const nextTab = GIT_TABS[nextIndex]!;
+    setTab(nextTab);
+    const tabs = tabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[nextIndex]?.focus();
+  };
+
   return (
     <div className="board-page git-page">
-      <div className="board-head">
-        <div className="board-title">
-          <GitBranch className="icon" aria-hidden />
-          <h1>Git</h1>
-        </div>
-      </div>
+      <PageHeader title="Git" icon={<GitBranch className="icon" aria-hidden="true" />} />
       {data === undefined ? (
         <SectionState
           loading={status.isPending}
@@ -57,7 +75,13 @@ export function GitPage({ projectId }: { projectId: string }) {
           <GitStatusStrip projectId={projectId} status={data} onOpenRelease={() => setTab('release')} />
           {data.isGitRepo && (
             <div className="wizard-tabs">
-              <div className="wizard-tablist" role="tablist" aria-label="Git sections">
+              <div
+                ref={tabListRef}
+                className="wizard-tablist"
+                role="tablist"
+                aria-label="Git sections"
+                onKeyDown={handleTabKeyDown}
+              >
                 {GIT_TABS.map((t) => (
                   <button
                     key={t}
@@ -66,6 +90,7 @@ export function GitPage({ projectId }: { projectId: string }) {
                     id={`git-tab-${t}`}
                     aria-selected={tab === t}
                     aria-controls={`git-panel-${t}`}
+                    tabIndex={tab === t ? 0 : -1}
                     className={`wizard-tab${tab === t ? ' active' : ''}`}
                     onClick={() => setTab(t)}
                   >

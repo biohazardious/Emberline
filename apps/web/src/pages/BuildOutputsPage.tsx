@@ -11,7 +11,9 @@ import {
   filterOutputs,
   formatBytes,
   OUTPUT_GROUPS,
+  type OutputGroup,
   type OutputGroupFilter,
+  outputGroup,
   outputPath,
   usageFraction,
   usageText,
@@ -20,38 +22,42 @@ import { copyText } from '../clipboard';
 import { SearchInput } from '../components/BoardFilterBar';
 import { CopyFallback } from '../components/CopyFallback';
 import { ViewErrorBanner, ViewLoadingState } from '../components/ErrorBoundary';
-import { PERSONA_BY_ID } from '../components/PersonaBadge';
-import { useApi } from '../hooks/useApi';
+import { HelpHint, MoreMenu, PageHeader } from '../components/ui';
 import { useQueryParam } from '../hooks/navigation';
+import { useApi } from '../hooks/useApi';
 import { timeAgo } from '../time';
+import './build-outputs-ux.css';
+
+const KIND_LABEL: Record<OutputGroup, string> = {
+  android: 'APK / AAB',
+  installer: 'Installer',
+  firmware: 'Firmware',
+  other: 'Other',
+};
 
 /** Shows a build output's origin: the ticket (opens the board drawer), else the run, else "run removed". */
 function Origin({ output, projectId }: { output: ProjectBuildOutput; projectId: string }) {
   if (output.ticketId) {
     return (
-      <Link href={`/projects/${projectId}/board?ticket=${output.ticketId}`} className="build-outputs-origin">
-        {output.ticketKey && <span className="mono">{output.ticketKey}</span>}
-        {output.ticketTitle && <span className="build-outputs-ticket-title"> {output.ticketTitle}</span>}
+      <Link
+        href={`/projects/${projectId}/board?ticket=${output.ticketId}`}
+        className="mono build-outputs-ux-origin"
+      >
+        {output.ticketKey ?? output.ticketTitle ?? 'ticket'}
       </Link>
     );
   }
   if (!output.runExists) return <span className="muted small">run removed</span>;
   return (
-    <Link href={`/runs/${output.runId}/review`} className="mono build-outputs-origin">
+    <Link href={`/runs/${output.runId}/review`} className="mono build-outputs-ux-origin">
       run {output.runId.slice(0, 8)}
     </Link>
   );
 }
 
-function Who({ output }: { output: ProjectBuildOutput }) {
-  const parts = [output.persona ? PERSONA_BY_ID[output.persona].label : null, output.agent].filter(Boolean);
-  return <span className="muted small">{parts.length ? parts.join(' · ') : '-'}</span>;
-}
-
-function Actions({
+function RowActions({
   output,
   busy,
-  confirming,
   copied,
   onCopy,
   onPin,
@@ -59,54 +65,56 @@ function Actions({
 }: {
   output: ProjectBuildOutput;
   busy: boolean;
-  confirming: boolean;
   copied: boolean;
   onCopy: () => void;
   onPin: () => void;
   onDelete: () => void;
 }) {
-  const where = outputPath(output).where === 'host' ? 'on the host' : 'in the container';
+  const where = outputPath(output).where === 'host' ? 'on host' : 'in container';
   return (
-    <div className="build-outputs-actions">
+    <div className="build-outputs-ux-actions">
       <a
-        className="icon-btn"
-        title="Download"
+        className="btn btn-sm"
         aria-label={`Download ${output.name}`}
         href={`/api/build-outputs/${output.id}/download`}
         download={output.name}
       >
-        <Download className="icon" aria-hidden />
+        <Download className="icon" aria-hidden="true" /> Download
       </a>
-      <button
-        type="button"
-        className="icon-btn"
-        title={`Copy the path ${where}`}
-        aria-label={`Copy the path of ${output.name} ${where}`}
-        onClick={onCopy}
-      >
-        {copied ? <Check className="icon" aria-hidden /> : <Copy className="icon" aria-hidden />}
-      </button>
-      <button
-        type="button"
-        className={`icon-btn${output.pinned ? ' build-outputs-pinned' : ''}`}
-        title={output.pinned ? 'Unpin (the quota may delete it)' : 'Pin (never deleted by the quota)'}
-        aria-label={output.pinned ? `Unpin ${output.name}` : `Pin ${output.name}`}
-        aria-pressed={output.pinned}
-        disabled={busy}
-        onClick={onPin}
-      >
-        {output.pinned ? <PinOff className="icon" aria-hidden /> : <Pin className="icon" aria-hidden />}
-      </button>
-      <button
-        type="button"
-        className={confirming ? 'btn btn-sm danger' : 'icon-btn'}
-        title="Delete this archived file"
-        aria-label={confirming ? `Click again to confirm deleting ${output.name}` : `Delete ${output.name}`}
-        disabled={busy}
-        onClick={onDelete}
-      >
-        {confirming ? 'Click again to confirm' : <Trash2 className="icon" aria-hidden />}
-      </button>
+      <MoreMenu
+        ariaLabel={`More actions for ${output.name}`}
+        items={[
+          {
+            id: 'pin',
+            label: output.pinned ? 'Unpin' : 'Pin',
+            icon: output.pinned ? (
+              <PinOff className="icon" aria-hidden="true" />
+            ) : (
+              <Pin className="icon" aria-hidden="true" />
+            ),
+            disabled: busy,
+            onSelect: onPin,
+          },
+          {
+            id: 'copy',
+            label: copied ? 'Copied path' : `Copy path (${where})`,
+            icon: copied ? (
+              <Check className="icon" aria-hidden="true" />
+            ) : (
+              <Copy className="icon" aria-hidden="true" />
+            ),
+            onSelect: onCopy,
+          },
+          {
+            id: 'delete',
+            label: 'Delete',
+            icon: <Trash2 className="icon" aria-hidden="true" />,
+            danger: true,
+            disabled: busy,
+            onSelect: onDelete,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -117,7 +125,6 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   const [query, setQuery] = useState('');
   const [starting, setStarting] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,12 +141,6 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
   );
   const collecting = (data?.collecting ?? false) || starting;
 
-  // The delete confirmation lapses on its own.
-  useEffect(() => {
-    if (!confirmId) return;
-    const timer = setTimeout(() => setConfirmId(null), 4_000);
-    return () => clearTimeout(timer);
-  }, [confirmId]);
   useEffect(() => {
     if (!copiedId) return;
     const timer = setTimeout(() => setCopiedId(null), 1_500);
@@ -194,82 +195,62 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
     }
   }
 
-  function actionsFor(o: ProjectBuildOutput) {
-    return (
-      <Actions
-        output={o}
-        busy={busyId === o.id}
-        confirming={confirmId === o.id}
-        copied={copiedId === o.id}
-        onCopy={() => void copyPath(o)}
-        onPin={() => void mutate(o, () => api(`/api/build-outputs/${o.id}`, 'PATCH', { pinned: !o.pinned }))}
-        onDelete={() => {
-          if (confirmId !== o.id) {
-            setConfirmId(o.id);
-            return;
-          }
-          setConfirmId(null);
-          void mutate(o, () => api(`/api/build-outputs/${o.id}`, 'DELETE'));
-        }}
-      />
-    );
-  }
-
   const total = data?.outputs.length ?? 0;
   const fraction = data ? usageFraction(data.usedBytes, data.quotaBytes) : 0;
   const last = data?.lastCollect;
 
   return (
-    <div className="board-page build-outputs-page">
-      <div className="board-head">
-        <div className="board-title">
-          <Package className="icon" aria-hidden />
-          <h1>Build Outputs</h1>
-        </div>
-        <button
-          type="button"
-          className="btn btn-sm"
-          disabled={collecting || !data}
-          onClick={() => void collect()}
-        >
-          <RefreshCw className={`icon${collecting ? ' icon-spin' : ''}`} aria-hidden />{' '}
-          {collecting ? 'Collecting…' : 'Collect now'}
-        </button>
-      </div>
+    <div className="board-page build-outputs-ux-page">
+      <PageHeader
+        title="Build outputs"
+        icon={<Package className="icon" aria-hidden="true" />}
+        actions={
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={collecting || !data}
+            onClick={() => void collect()}
+          >
+            <RefreshCw className={`icon${collecting ? ' icon-spin' : ''}`} aria-hidden="true" />{' '}
+            {collecting ? 'Collecting…' : 'Collect now'}
+          </button>
+        }
+      />
 
       {data && (
-        <section className="build-outputs-usage" aria-label="Archive usage">
-          <div className="build-outputs-usage-line">
+        <section className="panel build-outputs-ux-usage" aria-label="Archive usage">
+          <div className="build-outputs-ux-meter-line">
             <strong className="mono">{usageText(data.usedBytes, data.quotaBytes)}</strong>
-            {quotaFull && <span className="badge badge-bad">quota full</span>}
-            <span className="muted small">
-              {data.hostArchiveDir ? 'Archive on the host: ' : 'Archive (container path): '}
-              <code className="mono">{data.hostArchiveDir ?? data.archiveDir}</code>
-            </span>
-          </div>
-          <div
-            className="build-outputs-meter"
-            role="progressbar"
-            aria-label="Archive usage"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(fraction * 100)}
-          >
-            <div
-              className={`build-outputs-meter-fill${fraction >= 0.9 ? ' warn' : ''}`}
-              style={{ width: `${fraction * 100}%` }}
+            <progress
+              className={`build-outputs-ux-meter${fraction >= 0.9 ? ' warn' : ''}`}
+              max={100}
+              value={Math.round(fraction * 100)}
+              aria-label="Archive usage"
             />
+            {quotaFull && <span className="badge badge-bad">quota full</span>}
+            <HelpHint topic="output retention">
+              <div className="build-outputs-ux-help-copy">
+                <p>
+                  Archived build outputs survive worktree cleanup. When the archive reaches its quota, the
+                  oldest unpinned files are evicted first; pinned files are kept until you unpin or delete
+                  them.
+                </p>
+                <p>
+                  {data.hostArchiveDir ? 'Host archive: ' : 'Container archive: '}
+                  <code className="mono">{data.hostArchiveDir ?? data.archiveDir}</code>
+                </p>
+                {last && !collecting && (
+                  <p>
+                    Last collect {timeAgo(last.finishedAt)}: {last.archived} archived, {last.skipped}{' '}
+                    unchanged, {last.failed} failed.
+                  </p>
+                )}
+              </div>
+            </HelpHint>
           </div>
           {quotaFull && (
             <p className="muted small">
-              Pinned outputs fill the whole quota, so nothing new is archived. Unpin or delete some, or raise
-              the quota in Settings.
-            </p>
-          )}
-          {last && !collecting && (
-            <p className="muted small" role="status">
-              Last collect {timeAgo(last.finishedAt)}: {last.archived} archived, {last.skipped} unchanged,{' '}
-              {last.failed} failed.
+              Pinned outputs fill the quota. Unpin or delete files, or raise the quota in Settings.
             </p>
           )}
         </section>
@@ -287,8 +268,8 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
       {manualCopy && <CopyFallback text={manualCopy} onClose={() => setManualCopy(null)} />}
 
       {total > 0 && (
-        <div className="build-outputs-filters">
-          <div className="build-outputs-chips" role="group" aria-label="Filter by type">
+        <div className="build-outputs-ux-filters">
+          <div className="build-outputs-ux-chips" role="group" aria-label="Filter by type">
             {OUTPUT_GROUPS.map((g) => (
               <button
                 key={g.id}
@@ -302,13 +283,13 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
             ))}
             {runFilter && (
               <button type="button" className="chip-btn chip-on" onClick={() => setRunFilter(null)}>
-                Run {runFilter.slice(0, 8)} <X className="icon" aria-hidden />
+                Run {runFilter.slice(0, 8)} <X className="icon" aria-hidden="true" />
                 <span className="sr-only">Clear the run filter</span>
               </button>
             )}
           </div>
           <SearchInput
-            className="build-outputs-search"
+            className="build-outputs-ux-search"
             ariaLabel="Search build outputs"
             placeholder="Search name or ticket"
             value={query}
@@ -320,15 +301,14 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
       {loading && !data && !loadError && <ViewLoadingState label="Loading build outputs…" />}
 
       {data && total === 0 && (
-        <div className="build-outputs-empty">
-          <Package className="icon" aria-hidden />
+        <div className="build-outputs-ux-empty">
+          <Package className="icon" aria-hidden="true" />
           <p>
             <strong>No build outputs yet.</strong>
           </p>
           <p className="muted small">
-            When a run finishes and has built an APK, installer or firmware image, a copy is kept here so it
-            survives cleaning up the worktree. Use Collect now to pick up files from runs that still have a
-            worktree.
+            Finished runs archive APKs, installers and firmware here; use Collect now to scan active
+            worktrees.
           </p>
         </div>
       )}
@@ -351,59 +331,54 @@ export function BuildOutputsPage({ projectId }: { projectId: string }) {
       )}
 
       {outputs.length > 0 && (
-        <>
-          <table className="build-outputs-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Size</th>
-                <th>Ticket / run</th>
-                <th>By</th>
-                <th>Archived</th>
-                <th>
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {outputs.map((o) => (
-                <tr key={o.id}>
-                  <td className="build-outputs-name">
-                    <strong className="mono">{o.name}</strong>
-                    {o.pinned && <span className="badge badge-ok">pinned</span>}
-                  </td>
-                  <td className="mono">{formatBytes(o.sizeBytes)}</td>
-                  <td>
-                    <Origin output={o} projectId={projectId} />
-                  </td>
-                  <td>
-                    <Who output={o} />
-                  </td>
-                  <td className="muted small" title={o.archivedAt}>
-                    {timeAgo(o.archivedAt)}
-                  </td>
-                  <td>{actionsFor(o)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <ul className="build-outputs-cards">
+        <table className="build-outputs-ux-table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Size</th>
+              <th scope="col">Date</th>
+              <th scope="col">Pinned</th>
+              <th scope="col">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
             {outputs.map((o) => (
-              <li key={o.id} className="build-outputs-card">
-                <div className="build-outputs-name">
-                  <strong className="mono">{o.name}</strong>
-                  {o.pinned && <span className="badge badge-ok">pinned</span>}
-                </div>
-                <div className="muted small">
-                  <span className="mono">{formatBytes(o.sizeBytes)}</span> · {timeAgo(o.archivedAt)}
-                </div>
-                <Origin output={o} projectId={projectId} />
-                <Who output={o} />
-                {actionsFor(o)}
-              </li>
+              <tr key={o.id}>
+                <td>
+                  <div className="build-outputs-ux-name-cell">
+                    <strong className="mono">{o.name}</strong>
+                    <Origin output={o} projectId={projectId} />
+                  </div>
+                </td>
+                <td className="muted small">{KIND_LABEL[outputGroup(o.name)]}</td>
+                <td className="mono">{formatBytes(o.sizeBytes)}</td>
+                <td className="muted small mono">{timeAgo(o.archivedAt)}</td>
+                <td>
+                  {o.pinned ? (
+                    <span className="badge badge-ok">pinned</span>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td>
+                  <RowActions
+                    output={o}
+                    busy={busyId === o.id}
+                    copied={copiedId === o.id}
+                    onCopy={() => void copyPath(o)}
+                    onPin={() =>
+                      void mutate(o, () => api(`/api/build-outputs/${o.id}`, 'PATCH', { pinned: !o.pinned }))
+                    }
+                    onDelete={() => void mutate(o, () => api(`/api/build-outputs/${o.id}`, 'DELETE'))}
+                  />
+                </td>
+              </tr>
             ))}
-          </ul>
-        </>
+          </tbody>
+        </table>
       )}
     </div>
   );

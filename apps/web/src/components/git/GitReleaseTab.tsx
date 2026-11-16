@@ -19,6 +19,7 @@ import {
   releaseSummaryText,
   suggestedVersion,
 } from '../../gitPage';
+import { Disclosure } from '../ui';
 import { GitProblemBanner, type Problem, problemOf } from './GitStatusStrip';
 
 const STEP_ICON = {
@@ -133,34 +134,36 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
 
   // A release that is over leaves nothing to carry on: the next one starts from the new suggestion,
   // not from the version and notes of the last. A draft already shown counts as applied.
+  const newDraft = draft?.status === 'ready' && draft.at !== form.appliedAt ? draft : null;
+  const latestRef = useRef({ suggestion, draftAt: draft?.at ?? null, newDraft });
+  latestRef.current = { suggestion, draftAt: draft?.at ?? null, newDraft };
+  const jobId = job?.id ?? null;
   const jobEnded = job?.state === 'done' || job?.state === 'undone';
   useEffect(() => {
-    if (!job || !jobEnded || endedJobOf(projectId) === job.id) return;
-    markEnded(projectId, job.id);
+    if (!jobId || !jobEnded || endedJobOf(projectId) === jobId) return;
+    markEnded(projectId, jobId);
     clearForm(projectId);
+    const { suggestion: nextSuggestion, draftAt } = latestRef.current;
     const next: ReleaseForm = {
-      version: suggestion,
+      version: nextSuggestion,
       notes: '',
-      appliedAt: draft?.at ?? null,
-      appliedVersion: suggestion,
+      appliedAt: draftAt,
+      appliedVersion: nextSuggestion,
       appliedNotes: '',
     };
     fresh.current = next;
     setForm(next);
-    // Only the job's end matters here; the suggestion and draft are read as they are then.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id, jobEnded]);
+  }, [projectId, jobId, jobEnded]);
 
   // A new draft fills the fields only while the person has edited neither the notes nor the version;
-  // otherwise it waits behind "Use the new draft", so a draft that finishes late never overwrites their text.
-  const newDraft = draft?.status === 'ready' && draft.at !== form.appliedAt ? draft : null;
+  // otherwise it waits behind "Use new draft", so a draft that finishes late never overwrites their text.
+  const newDraftAt = newDraft?.at ?? null;
   const untouched = form.notes === form.appliedNotes && form.version === form.appliedVersion;
   useEffect(() => {
-    if (newDraft && untouched) setForm(seedFrom(newDraft, suggestion));
-    // `suggestion` only matters when a draft names no version.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newDraft?.at, untouched]);
-  useEffect(() => setRestart(false), [job?.id]);
+    const currentDraft = latestRef.current.newDraft;
+    if (currentDraft && untouched) setForm(seedFrom(currentDraft, latestRef.current.suggestion));
+  }, [newDraftAt, untouched]);
+  useEffect(() => setRestart(false), [jobId]);
 
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -305,7 +308,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
                   disabled={busy || drafting || summary.head === null}
                   onClick={() => void act(() => api(`${base}/release/draft`, 'POST'))}
                 >
-                  Draft notes with an agent
+                  Draft notes
                 </button>
                 {drafting && (
                   <span className="muted small">
@@ -326,7 +329,7 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
                     className="btn btn-sm"
                     onClick={() => setForm(seedFrom(newDraft, suggestion))}
                   >
-                    Use the new draft
+                    Use new draft
                   </button>
                 </p>
               )}
@@ -358,15 +361,14 @@ export function GitReleaseTab({ projectId, status }: { projectId: string; status
             </fieldset>
           )}
 
-          <section aria-label="What happens">
-            <h3>What happens</h3>
-            <ol className="git-release-plan">
+          <Disclosure label="What happens">
+            <ol className="git-release-plan" aria-label="What happens">
               {releasePlan(status, separateMode, versionOk ? versionText : null).map((l) => (
                 <li key={l.name}>{l.text}</li>
               ))}
             </ol>
             {factoryMergesWaitText(status) && <p className="muted small">{factoryMergesWaitText(status)}</p>}
-          </section>
+          </Disclosure>
 
           {blocked && <p className="muted small">{blocked}</p>}
           <div className="git-release-actions">

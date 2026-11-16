@@ -157,12 +157,13 @@ describe('Git page', () => {
     );
   });
 
-  it('opens the tab named by the hash and Promote & release… opens Release', async () => {
+  it('opens the tab named by the hash and Cut release opens Release', async () => {
     serve(status());
     const view = await open('/projects/p1/git#branches');
     await waitFor(() => getButton('Branches'));
     expect(getButton('Branches').getAttribute('aria-selected')).toBe('true');
-    await click(getButton(/Promote & release/));
+    await click(getButton('More'));
+    await click(getButton('Cut release'));
     expect(getButton('Release').getAttribute('aria-selected')).toBe('true');
     expect(window.location.hash).toBe('#release');
     expect(view.container.querySelector('[role="tabpanel"]')).not.toBeNull();
@@ -189,8 +190,9 @@ describe('Git page', () => {
     const view = await open();
     await waitFor(() => getButton('Pull'));
     await click(getButton('Pull'));
+    await click(getButton('More'));
     await click(getButton('Refresh'));
-    await click(view.container.querySelector('input[role="switch"]') as HTMLInputElement);
+    await click(view.container.querySelector('[role="switch"]') as HTMLElement);
     await waitFor(() => expect(calls).toEqual(['pull null', 'fetch null', 'PATCH {"autoPull":false}']));
   });
 
@@ -218,7 +220,7 @@ describe('Git page', () => {
     expect(items).toEqual(['EMB-1 Fix login (running)', 'Tidy up (waiting to merge)', 'Old core']);
     expect(alert.querySelector('a[href="/projects/p1/board?ticket=t1"]')?.textContent).toBe('EMB-1');
     // Nothing is set aside from here.
-    expect(queryButton('Set them aside and match origin')).toBeNull();
+    expect(queryButton('Set aside')).toBeNull();
   });
 
   it.each([
@@ -252,9 +254,9 @@ describe('Git page', () => {
     const view = await open();
     await waitFor(() => expect(view.container.textContent).toContain('and 80 more files conflict'));
     expect(view.container.textContent).not.toContain('src/f11.ts');
-    await click(getButton('Show all 90 files'));
+    await click(getButton('Show 90 files'));
     expect(view.container.querySelectorAll('.git-conflict-files li')).toHaveLength(90);
-    await click(getButton('Hide the files'));
+    await click(getButton('Hide files'));
     expect(view.container.querySelector('.git-conflict-files')).toBeNull();
   });
 
@@ -331,7 +333,7 @@ describe('Match origin blocked by runs', () => {
     await click(getButton('Match origin…'));
     await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
     await waitFor(() =>
-      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Set them aside'),
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Set aside'),
     );
     const dialog = document.querySelector('[role="dialog"]')!;
     expect([...dialog.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
@@ -346,7 +348,7 @@ describe('Match origin blocked by runs', () => {
     );
     // The refusal is the dialog's to show, not the strip's.
     expect(view.container.querySelector('.git-strip > [role="alert"]')).toBeNull();
-    const setAside = getButton('Set them aside and match origin', dialog);
+    const setAside = getButton('Set aside', dialog);
     expect(setAside.className).toContain('danger');
     await click(setAside);
     await waitFor(() =>
@@ -372,14 +374,12 @@ describe('Match origin blocked by runs', () => {
     await waitFor(() => getButton('Match origin…'));
     await click(getButton('Match origin…'));
     await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
-    await waitFor(() =>
-      getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!),
-    );
-    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => getButton('Set aside', document.querySelector('[role="dialog"]')!));
+    await click(getButton('Set aside', document.querySelector('[role="dialog"]')!));
     await waitFor(() =>
       expect(document.querySelector('[role="dialog"]')?.textContent).toContain('EMB-41 Later (running)'),
     );
-    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await click(getButton('Set aside', document.querySelector('[role="dialog"]')!));
     await waitFor(() =>
       expect(calls).toContain(
         'POST /api/projects/p1/git/match-origin {"branch":"develop","setAside":["r38","r41"]}',
@@ -449,10 +449,8 @@ describe('Match origin blocked by runs', () => {
     await waitFor(() => getButton('Match origin…'));
     await click(getButton('Match origin…'));
     await click(getButton('Match origin', document.querySelector('[role="dialog"]')!));
-    await waitFor(() =>
-      getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!),
-    );
-    await click(getButton('Set them aside and match origin', document.querySelector('[role="dialog"]')!));
+    await waitFor(() => getButton('Set aside', document.querySelector('[role="dialog"]')!));
+    await click(getButton('Set aside', document.querySelector('[role="dialog"]')!));
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(view.container.querySelector('.git-strip > [role="alert"]')?.textContent).toBe(
       'Could not keep a backup of develop, so it was not changed.',
@@ -469,7 +467,7 @@ describe('Git page, main workspace off the working branch', () => {
         'The main workspace is on feature, not the working branch develop. Factory merges wait until it is switched back.',
       ),
     );
-    await click(getButton('Switch back to develop'));
+    await click(getButton('Switch back'));
     await waitFor(() => expect(calls).toEqual(['working {"branch":"develop"}']));
   });
 

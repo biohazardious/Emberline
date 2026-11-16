@@ -87,6 +87,10 @@ const serve = () =>
     }),
   );
 const show = (s: GitPageStatus) => renderDom(createElement(GitReleaseTab, { projectId: 'p1', status: s }));
+const openPlan = async (root: HTMLElement) => {
+  const trigger = getButton('What happens', root);
+  if (trigger.getAttribute('aria-expanded') !== 'true') await click(trigger);
+};
 const lines = (root: HTMLElement) =>
   [...root.querySelectorAll('[aria-label="What happens"] li')].map((li) => li.textContent);
 
@@ -104,6 +108,8 @@ describe('the release tab', () => {
     const { container } = await show(status());
     expect(container.textContent).toContain('develop → main: 4 commits, 2 tickets');
     expect(container.textContent).toContain('Checks: build, test');
+    expect(getButton('What happens', container).getAttribute('aria-expanded')).toBe('false');
+    await openPlan(container);
     expect(lines(container)).toEqual([
       'Merge develop into main',
       'Run the checks on main: build, test',
@@ -127,6 +133,7 @@ describe('the release tab', () => {
     );
     expect(container.textContent).toContain('Release main as it is');
     expect(container.textContent).toContain('No approved checks; the release runs none');
+    await openPlan(container);
     expect(lines(container)).toEqual([
       'No approved checks; none run',
       'Add the notes to CHANGELOG.md in the release commit',
@@ -143,6 +150,7 @@ describe('the release tab', () => {
     const { container } = await show(
       status({ releaseSummary: { head: HEAD, commits: 4, tickets: 2, checks: [], hasChangelog: false } }),
     );
+    await openPlan(container);
     expect(lines(container)).not.toContain('Add the notes to CHANGELOG.md in the release commit');
     expect(lines(container)).toContain('Tag v0.8.1');
   });
@@ -150,6 +158,7 @@ describe('the release tab', () => {
   it('plans a promote only without the tag, the notes and the release, and sends that mode', async () => {
     const { container } = await show(status());
     await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
+    await openPlan(container);
     expect(lines(container)).toEqual([
       'Merge develop into main',
       'Run the checks on main: build, test',
@@ -216,7 +225,7 @@ describe('the release tab', () => {
     );
     expect(container.querySelector('textarea')!.value).toBe('Mine');
     expect(container.textContent).toContain('A new draft is ready');
-    await click(getButton('Use the new draft'));
+    await click(getButton('Use new draft'));
     expect(container.querySelector('textarea')!.value).toBe('Late draft');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Version"]')!.value).toBe('v0.9.0');
     expect(container.textContent).not.toContain('A new draft is ready');
@@ -307,10 +316,10 @@ describe('the release tab', () => {
       }),
     );
     expect(container.textContent).toContain('A new draft is ready');
-    expect(container.textContent).toContain('Draft notes with an agent');
+    expect(container.textContent).toContain('Draft notes');
     await click(container.querySelector<HTMLInputElement>('input[name="release-mode"]:not(:checked)')!);
     expect(container.textContent).not.toContain('A new draft is ready');
-    expect(container.textContent).not.toContain('Draft notes with an agent');
+    expect(container.textContent).not.toContain('Draft notes');
   });
 
   it.each(['done', 'undone'] as const)(
@@ -386,7 +395,7 @@ describe('the release tab', () => {
       }),
     );
     expect(container.textContent).toContain('No agent is available.');
-    await click(getButton('Draft notes with an agent'));
+    await click(getButton('Draft notes'));
     await waitFor(() => expect(calls).toEqual(['draft']));
   });
 

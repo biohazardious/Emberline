@@ -6,6 +6,7 @@ import { api } from '../../api';
 import { trapTab } from '../../focusTrap';
 import { isRunBranch, remoteStateText, splitBranches } from '../../gitPage';
 import { SectionState } from '../SectionState';
+import { HelpHint } from '../ui';
 import { GitDiffView } from './GitDiffView';
 import { GitProblemBanner, type Problem, problemOf } from './GitStatusStrip';
 
@@ -290,7 +291,6 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
               type="button"
               className="btn btn-sm"
               disabled={busy}
-              title="Creates the branch here at origin's commit; the working branch stays as it is"
               onClick={() =>
                 void act(() => api(`${base}/branches`, 'POST', { name: b.name, from: 'origin' }))
               }
@@ -305,7 +305,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
               disabled={busy}
               onClick={() => void act(() => api(`${base}/working-branch`, 'POST', { branch: b.name }))}
             >
-              Make this the working branch
+              Set working branch
             </button>
           )}
           {canDelete(b, status.workingBranch, status.hasOrigin) && (
@@ -349,7 +349,7 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
           From the working branch
         </label>
         <button type="submit" className="btn btn-sm" disabled={busy || !name.trim()}>
-          New branch
+          Create branch
         </button>
       </form>
 
@@ -394,7 +394,12 @@ export function GitBranchesTab({ projectId, status }: { projectId: string; statu
 
       {status.backups.length > 0 && (
         <section aria-label="Backups">
-          <h3>Backups (kept by Match origin)</h3>
+          <div className="git-backups-head">
+            <h3>Backups</h3>
+            <HelpHint topic="backups">
+              Saved branch tips kept before Match origin resets a branch to origin.
+            </HelpHint>
+          </div>
           <ul className="git-backups">
             {status.backups.map((b) => (
               <li key={b}>

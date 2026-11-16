@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { GitCommitSummary, GitPageStatus } from '@emberline/protocol';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type * as ApiModule from './api';
@@ -113,7 +113,9 @@ afterEach(async () => {
 
 const render = () => renderDom(createElement(GitCommitsTab, { projectId: 'p1', status }));
 const press = (key: string, target: EventTarget = document.body) =>
-  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
 
 describe('GitCommitsTab', () => {
   it('shows labels and the factory, origin and ticket chips', async () => {
@@ -237,7 +239,9 @@ describe('the histories the Commits tab offers', () => {
     const select = container.querySelector('select')!;
     expect(select.value).toBe('refs/remotes/origin/main');
     select.value = '';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await act(async () => {
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
     await waitFor(() => expect(container.textContent).toContain('subject 2'));
   });
 });
