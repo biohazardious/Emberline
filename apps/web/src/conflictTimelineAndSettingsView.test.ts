@@ -177,30 +177,25 @@ describe('SettingsPage conflict & overlap toggles (Spec 4)', () => {
       { path: '/settings' },
     );
 
-    await waitFor(() =>
-      expect(view.container.textContent).toContain('Auto-resolve additive merge conflicts'),
+    await waitFor(() => expect(view.container.textContent).toContain('Auto-resolve additive conflicts'));
+    expect(view.container.textContent).toContain('Serialize overlapping tickets');
+
+    const autoResolveSwitch = view.container.querySelector<HTMLButtonElement>(
+      'button[role="switch"][aria-label="Auto-resolve additive conflicts"]',
     );
-    expect(view.container.textContent).toContain(
-      "Don't run tickets that edit the same files at the same time",
+    const serializeSwitch = view.container.querySelector<HTMLButtonElement>(
+      'button[role="switch"][aria-label="Serialize overlapping tickets"]',
     );
 
-    const labels = [...view.container.querySelectorAll('label')];
-    const autoResolveInput = labels
-      .find((l) => l.textContent?.includes('Auto-resolve additive merge conflicts'))
-      ?.querySelector('input[type="checkbox"]') as HTMLInputElement | undefined;
-    const serializeInput = labels
-      .find((l) => l.textContent?.includes("Don't run tickets that edit the same files at the same time"))
-      ?.querySelector('input[type="checkbox"]') as HTMLInputElement | undefined;
+    expect(autoResolveSwitch?.getAttribute('aria-checked')).toBe('true');
+    expect(serializeSwitch?.getAttribute('aria-checked')).toBe('true');
 
-    expect(autoResolveInput?.checked).toBe(true);
-    expect(serializeInput?.checked).toBe(true);
+    await click(autoResolveSwitch!);
+    await click(serializeSwitch!);
+    expect(autoResolveSwitch?.getAttribute('aria-checked')).toBe('false');
+    expect(serializeSwitch?.getAttribute('aria-checked')).toBe('false');
 
-    await click(autoResolveInput!);
-    await click(serializeInput!);
-    expect(autoResolveInput?.checked).toBe(false);
-    expect(serializeInput?.checked).toBe(false);
-
-    await click(getButton(/Save Auto-Pilot & Theme Settings/, view.container));
+    await click(getButton('Save', view.container));
     await waitFor(() => expect(savedPayloads).toHaveLength(1));
     expect(savedPayloads[0]).toMatchObject({
       autoResolveAdditiveConflicts: false,

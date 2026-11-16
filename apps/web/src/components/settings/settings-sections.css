@@ -1,0 +1,210 @@
+/* M6 Settings sections: Automation and MCP and skills. */
+
+.settings-section-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+}
+
+.settings-section-form .small,
+.settings-section-form .badge,
+.settings-section-form .segmented button,
+.settings-section-form .btn-sm {
+  font-size: 0.8rem;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-group + .settings-group {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.settings-group-head-split {
+  justify-content: space-between;
+}
+
+.settings-group-title-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-group-head h2 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.settings-group-help {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.settings-group-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-number-input {
+  width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-commit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 12px;
+  max-width: 640px;
+}
+
+.settings-add-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 10px;
+}
+
+.settings-stdio-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.settings-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-detail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-code-pill {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-persona-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-persona-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-persona-head strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings-persona-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-persona-pill {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.settings-persona-pill:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.settings-persona-pill:focus-visible {
+  outline: 2px solid var(--ember-2);
+  outline-offset: 2px;
+}
+
+.settings-persona-pill-all {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 50%, var(--border));
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+}
+
+.settings-persona-pill-active {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+@media (max-width: 640px) {
+  .settings-section-form {
+    padding: 14px;
+  }
+
+  .settings-stdio-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-section-form .btn,
+  .settings-section-form .segmented button,
+  .settings-persona-pill,
+  .settings-number-input {
+    min-height: 44px;
+  }
+}
