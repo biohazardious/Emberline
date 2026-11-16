@@ -10,6 +10,7 @@ interface CommandItem {
   label: string;
   meta?: string;
   badge?: string;
+  keywords?: string;
   run: () => void | Promise<void>;
 }
 
@@ -82,25 +83,28 @@ export function CommandPalette({
       {
         id: 'nav-overview',
         group: 'Navigation',
-        label: 'Go to Workbench Overview',
-        meta: 'Projects, runs, terminals & quota',
+        label: 'Overview',
+        meta: 'Projects, runs, terminals and quota',
         badge: 'G O',
+        keywords: 'go to workbench factory overview dashboard',
         run: () => navigate('/'),
       },
       {
         id: 'nav-inbox',
         group: 'Navigation',
-        label: 'Go to Inbox',
+        label: 'Inbox',
         meta: 'Runs that need you, across all projects',
         badge: 'G I',
+        keywords: 'go to inbox attention',
         run: () => navigate('/inbox'),
       },
       {
         id: 'nav-fleet',
         group: 'Navigation',
-        label: 'Go to Fleet Multiplexer',
+        label: 'Fleet',
         meta: 'Live side-by-side agent terminal grid',
         badge: 'G F',
+        keywords: 'go to fleet multiplexer terminals',
         run: () => navigate('/fleet'),
       },
       ...(dockerEnabled
@@ -108,9 +112,10 @@ export function CommandPalette({
             {
               id: 'nav-docker',
               group: 'Navigation',
-              label: 'Go to Docker Engine',
-              meta: 'Compose projects & container previews',
+              label: 'Docker',
+              meta: 'Compose projects and container previews',
               badge: 'G D',
+              keywords: 'go to docker engine compose containers',
               run: () => navigate('/docker'),
             },
           ]
@@ -118,9 +123,10 @@ export function CommandPalette({
       {
         id: 'nav-settings',
         group: 'Navigation',
-        label: 'Go to Factory Settings',
-        meta: 'Auto-pilot, AI providers (Claude/Antigravity/Codex), theme & quota',
+        label: 'Settings',
+        meta: 'Auto-pilot, AI providers, theme and quota',
         badge: 'G S',
+        keywords: 'go to factory settings control center',
         run: () => navigate('/settings'),
       },
     ];
@@ -133,46 +139,52 @@ export function CommandPalette({
           label: `Board · ${p.name}`,
           meta: p.repoUrl ?? p.path,
           badge: p.slug,
+          keywords: 'kanban board tickets',
           run: () => navigate(`/projects/${p.id}/board`),
         },
         {
           id: `roadmap-${p.id}`,
           group: 'Projects',
-          label: `Roadmap & Brainstorm · ${p.name}`,
+          label: `Roadmap · ${p.name}`,
           meta: p.path,
           badge: 'roadmap',
+          keywords: 'roadmap brainstorm studio milestones',
           run: () => navigate(`/projects/${p.id}/roadmap`),
         },
         {
           id: `code-${p.id}`,
           group: 'Projects',
-          label: `Code Explorer · ${p.name}`,
+          label: `Code · ${p.name}`,
           meta: p.path,
           badge: 'code',
+          keywords: 'code explorer files editor',
           run: () => navigate(`/projects/${p.id}/code`),
         },
         {
           id: `outputs-${p.id}`,
           group: 'Projects',
-          label: `Build Outputs · ${p.name}`,
+          label: `Build outputs · ${p.name}`,
           meta: p.path,
           badge: 'outputs',
+          keywords: 'build outputs artifacts',
           run: () => navigate(`/projects/${p.id}/outputs`),
         },
         {
           id: `browser-${p.id}`,
           group: 'Projects',
-          label: `Live Browser · ${p.name}`,
+          label: `Live browser · ${p.name}`,
           meta: p.path,
           badge: 'browser',
+          keywords: 'live browser studio preview',
           run: () => navigate(`/projects/${p.id}/browser`),
         },
         {
           id: `proj-settings-${p.id}`,
           group: 'Projects',
-          label: `Project Settings · ${p.name}`,
+          label: `Project settings · ${p.name}`,
           meta: p.path,
           badge: 'settings',
+          keywords: 'project settings repository',
           run: () => navigate(`/projects/${p.id}/settings`),
         },
       );
@@ -183,7 +195,7 @@ export function CommandPalette({
       const title = r.title ?? (r.prompt ? r.prompt.slice(0, 48) : `${proj} run`);
       list.push({
         id: `run-${r.id}`,
-        group: r.state === 'waiting_input' || r.attention ? 'Needs Your Attention' : 'Agent Runs',
+        group: r.state === 'waiting_input' || r.attention ? 'Needs attention' : 'Agent runs',
         label: `Inspect · ${title}`,
         meta: `${proj}${r.branch ? ` · ${r.branch}` : ''}`,
         badge: r.state,
@@ -192,7 +204,7 @@ export function CommandPalette({
       if (r.terminalId) {
         list.push({
           id: `run-term-${r.id}`,
-          group: 'Agent Runs',
+          group: 'Agent runs',
           label: `Terminal · ${title}`,
           meta: r.branch ?? proj,
           badge: 'PTY',
@@ -204,10 +216,11 @@ export function CommandPalette({
     list.push(
       {
         id: 'act-new-claude',
-        group: 'Quick Actions',
-        label: 'Start Interactive Claude Terminal',
+        group: 'Quick actions',
+        label: 'New Claude terminal',
         meta: 'Opens a new Claude Code CLI session in the runner',
         badge: 'claude',
+        keywords: 'start interactive claude terminal',
         run: async () => {
           const t = await api<TerminalInfo>('/api/terminals', 'POST', { kind: 'claude' });
           navigate(`/terminals/${t.id}`);
@@ -215,10 +228,11 @@ export function CommandPalette({
       },
       {
         id: 'act-new-shell',
-        group: 'Quick Actions',
-        label: 'Open New Shell Terminal',
+        group: 'Quick actions',
+        label: 'New shell terminal',
         meta: 'Interactive bash session in /workspaces',
         badge: 'shell',
+        keywords: 'open new shell terminal bash',
         run: async () => {
           const t = await api<TerminalInfo>('/api/terminals', 'POST', { kind: 'shell' });
           navigate(`/terminals/${t.id}`);
@@ -229,10 +243,11 @@ export function CommandPalette({
     if (scheduler?.window) {
       list.push({
         id: 'act-quota-resume',
-        group: 'Quota Scheduler',
-        label: 'Resume Quota Window Now',
+        group: 'Quota scheduler',
+        label: 'Resume quota window',
         meta: 'Override rate-limit timer and dispatch paused runs immediately',
         badge: 'quota',
+        keywords: 'resume quota window now',
         run: async () => {
           await api('/api/scheduler/resume', 'POST');
         },
@@ -242,10 +257,11 @@ export function CommandPalette({
     for (const n of [1, 2, 3, 4]) {
       list.push({
         id: `act-concurrency-${n}`,
-        group: 'Quota Scheduler',
-        label: `Set Max Parallel Runs to ${n}`,
+        group: 'Quota scheduler',
+        label: `Set parallel runs to ${n}`,
         meta: scheduler?.maxConcurrentRuns === n ? 'Current setting' : 'Update scheduler concurrency',
         badge: `${n}x`,
+        keywords: 'set max parallel runs concurrency',
         run: async () => {
           await api('/api/scheduler', 'PATCH', { maxConcurrentRuns: n });
         },
@@ -255,7 +271,8 @@ export function CommandPalette({
     list.push({
       id: 'act-logout',
       group: 'Account',
-      label: 'Sign out of Emberline',
+      label: 'Sign out',
+      keywords: 'sign out of emberline logout',
       run: () => onLogout(),
     });
 
@@ -266,7 +283,9 @@ export function CommandPalette({
     const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length === 0) return items;
     return items.filter((item) => {
-      const haystack = [item.label, item.group, item.meta ?? '', item.badge ?? ''].join(' ').toLowerCase();
+      const haystack = [item.label, item.group, item.meta ?? '', item.badge ?? '', item.keywords ?? '']
+        .join(' ')
+        .toLowerCase();
       return terms.every((term) => haystack.includes(term));
     });
   }, [items, query]);

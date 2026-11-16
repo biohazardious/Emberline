@@ -42,6 +42,8 @@ export function AppTopbar({
   ptyd: SystemStatus['ptyd'] | 'connecting';
   onLogout: () => void;
 }) {
+  const badgeLabel = `${attentionCount} ${attentionCount === 1 ? 'run needs' : 'runs need'} you`;
+
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -56,13 +58,19 @@ export function AppTopbar({
           <Menu className="icon" aria-hidden />
         </button>
         <div className="topbar-tabs">
-          <Link href="/" className={`topbar-tab${location === '/' ? ' active' : ''}`} title="Overview">
+          <Link
+            href="/"
+            className={`topbar-tab${location === '/' ? ' active' : ''}`}
+            aria-current={location === '/' ? 'page' : undefined}
+            title="Overview"
+          >
             <LayoutDashboard className="icon" aria-hidden /> <span className="tab-label">Overview</span>
           </Link>
           {activeProject && (
             <Link
               href={`/projects/${activeProject.id}/roadmap`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/roadmap` ? ' active' : ''}`}
+              aria-current={location === `/projects/${activeProject.id}/roadmap` ? 'page' : undefined}
               title="Roadmap"
             >
               <Target className="icon" aria-hidden /> <span className="tab-label">Roadmap</span>
@@ -72,6 +80,7 @@ export function AppTopbar({
             <Link
               href={`/projects/${activeProject.id}/board`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/board` ? ' active' : ''}`}
+              aria-current={location === `/projects/${activeProject.id}/board` ? 'page' : undefined}
               title="Board"
             >
               <SquareKanban className="icon" aria-hidden /> <span className="tab-label">Board</span>
@@ -81,15 +90,17 @@ export function AppTopbar({
             <Link
               href={`/projects/${activeProject.id}/code`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/code` ? ' active' : ''}`}
-              title="Code Explorer"
+              aria-current={location === `/projects/${activeProject.id}/code` ? 'page' : undefined}
+              title="Code"
             >
-              <FileCode className="icon" aria-hidden /> <span className="tab-label">Code Explorer</span>
+              <FileCode className="icon" aria-hidden /> <span className="tab-label">Code</span>
             </Link>
           )}
           {activeProject && (
             <Link
               href={`/projects/${activeProject.id}/git`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/git` ? ' active' : ''}`}
+              aria-current={location === `/projects/${activeProject.id}/git` ? 'page' : undefined}
               title="Git: history, branches and releases"
             >
               <GitBranch className="icon" aria-hidden /> <span className="tab-label">Git</span>
@@ -99,27 +110,39 @@ export function AppTopbar({
             <Link
               href={`/projects/${activeProject.id}/outputs`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/outputs` ? ' active' : ''}`}
-              title="Build Outputs"
+              aria-current={location === `/projects/${activeProject.id}/outputs` ? 'page' : undefined}
+              title="Build outputs"
             >
-              <Package className="icon" aria-hidden /> <span className="tab-label">Build Outputs</span>
+              <Package className="icon" aria-hidden /> <span className="tab-label">Build outputs</span>
             </Link>
           )}
           {activeProject && (
             <Link
               href={`/projects/${activeProject.id}/browser`}
               className={`topbar-tab${location === `/projects/${activeProject.id}/browser` ? ' active' : ''}`}
-              title="Live Browser"
+              aria-current={location === `/projects/${activeProject.id}/browser` ? 'page' : undefined}
+              title="Live browser"
             >
-              <Globe className="icon" aria-hidden /> <span className="tab-label">Live Browser</span>
+              <Globe className="icon" aria-hidden /> <span className="tab-label">Live browser</span>
             </Link>
           )}
-          <Link href="/fleet" className={`topbar-tab${location === '/fleet' ? ' active' : ''}`} title="Fleet">
+          <Link
+            href="/fleet"
+            className={`topbar-tab${location === '/fleet' ? ' active' : ''}`}
+            aria-current={location === '/fleet' ? 'page' : undefined}
+            title="Fleet"
+          >
             <LayoutGrid className="icon" aria-hidden /> <span className="tab-label">Fleet</span>
-            {attentionCount > 0 && <span className="badge mono">{attentionCount}</span>}
+            {attentionCount > 0 && (
+              <span className="badge mono" aria-label={badgeLabel}>
+                {attentionCount}
+              </span>
+            )}
           </Link>
           <Link
             href="/settings"
             className={`topbar-tab${location === '/settings' ? ' active' : ''}`}
+            aria-current={location === '/settings' ? 'page' : undefined}
             title="Settings"
           >
             <Settings className="icon" aria-hidden /> <span className="tab-label">Settings</span>
@@ -129,14 +152,14 @@ export function AppTopbar({
 
       <div className="topbar-right">
         <button id="topbar-new-project" type="button" className="btn btn-sm hide-sm" onClick={onOpenWizard}>
-          + New Project
+          New project
         </button>
         <button
           id="theme-toggle"
           type="button"
           className="btn btn-ghost btn-sm hide-mobile"
           onClick={onToggleTheme}
-          title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
         >
           {theme === 'dark' ? (
             <>
@@ -154,7 +177,7 @@ export function AppTopbar({
             type="button"
             className="pill pill-attention"
             onClick={onOpenInbox}
-            title="Open the Inbox: runs that need you, across all projects"
+            title="Open inbox"
           >
             <span className="dot" />
             {attentionCount} need you
@@ -168,11 +191,11 @@ export function AppTopbar({
         >
           <span className="mono">⌘K</span>
         </button>
-        <span id="runner-status" className={`pill pill-runner-${ptyd}`} title={`Runner (ptyd): ${ptyd}`}>
+        <span id="runner-status" className={`pill pill-runner-${ptyd}`} title={`Runner: ${ptyd}`}>
           <span className="dot" />
-          <span className="tab-label">runner {ptyd}</span>
+          <span className="tab-label">Runner {ptyd}</span>
         </span>
-        <button id="logout" className="btn btn-ghost btn-sm hide-mobile" onClick={onLogout}>
+        <button id="logout" type="button" className="btn btn-ghost btn-sm hide-mobile" onClick={onLogout}>
           Sign out
         </button>
       </div>

@@ -2,14 +2,13 @@ import type {
   ActiveProjectPreference,
   ClaudeUsageTelemetry,
   FactorySettings,
-  GarbageCollectRunsResponse,
   Project,
   Run,
   SystemStatus,
   UpdatesResponse,
 } from '@emberline/protocol';
 import { useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { api, errorMessage, withTimeout } from './api';
 import { AuthGate, useAuth } from './auth';
@@ -28,14 +27,21 @@ import {
   SecurityBanner,
   SshKeyMissingBanner,
 } from './components/SecurityBanner';
+import {
+  cleanupProjectWorktrees,
+  readStorage,
+  useScopedActiveRuns,
+  useShellShortcuts,
+  useShellTheme,
+  writeStorage,
+} from './components/sidebar/shellHelpers';
 import { ProjectWizard } from './components/wizard/WizardShell';
-import { keptWorktreesSummary } from './gcSummary';
 import { setPresenceRun } from './hooks/eventHub';
 import { LiveEvents, useRuns, useScheduler } from './hooks/liveData';
-import { useModelCatalog } from './modelCatalog';
 import { useTrackPageViews } from './hooks/navigation';
 import { useApi } from './hooks/useApi';
 import { useAttention } from './hooks/useAttention';
+import { useModelCatalog } from './modelCatalog';
 import { Dashboard } from './pages/Dashboard';
 import { RoadmapPage } from './pages/RoadmapPage';
 import {
@@ -70,7 +76,9 @@ const DockerPage = lazy(() => import('./pages/DockerPage').then((m) => ({ defaul
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'emberline.activeProjectId';
-const THEME_STORAGE_KEY = 'emberline.theme';
+function PageSuspense({ className = 'board-page', children }: { className?: string; children: ReactNode }) {
+  return <Suspense fallback={<div className={className} aria-busy="true" />}>{children}</Suspense>;
+}
 
 export function App() {
   return (
@@ -93,69 +101,17 @@ function Shell() {
   const { runs, loading: runsLoading, error: runsError, refresh: refreshRuns } = useRuns();
   useModelCatalog();
   const { scheduler } = useScheduler();
-
   const queryClient = useQueryClient();
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    try {
-      const saved = localStorage.getItem(THEME_STORAGE_KEY);
-      if (saved === 'light' || saved === 'dark') return saved;
-    } catch {
-      // ignore storage errors
-    }
-    return 'dark';
-  });
-
-  const serverTheme = useRef<'dark' | 'light' | undefined>(undefined);
-
-  const applyTheme = useCallback(
-    (next: 'dark' | 'light') => {
-      setTheme(next);
-      serverTheme.current = next;
-      document.documentElement.dataset.theme = next;
-      try {
-        localStorage.setItem(THEME_STORAGE_KEY, next);
-      } catch {
-        // ignore storage errors
-      }
-      api<FactorySettings>('/api/factory/settings', 'PATCH', { theme: next })
-        .then((saved) => queryClient.setQueryData(['api', '/api/factory/settings'], saved))
-        .catch((e: unknown) => toastError(`Could not save the theme: ${errorMessage(e)}`));
-    },
-    [queryClient],
+  const [theme, applyTheme] = useShellTheme(factorySettings.data, queryClient);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() =>
+    readStorage(ACTIVE_PROJECT_STORAGE_KEY),
   );
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
-  useEffect(() => {
-    const remote = factorySettings.data?.theme;
-    if (remote !== 'light' && remote !== 'dark') return;
-    if (remote === serverTheme.current) return;
-    serverTheme.current = remote;
-    setTheme(remote);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, remote);
-    } catch {
-      // ignore storage errors
-    }
-  }, [factorySettings.data]);
-
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  });
   const [wizardOpen, setWizardOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [inspectRunId, setInspectRunId] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-
   const ptyd = system.data?.ptyd ?? 'connecting';
-
   const [serverActiveId, setServerActiveId] = useState<string | null | undefined>(undefined);
   const [serverFailed, setServerFailed] = useState(false);
   const picked = useRef(false);
@@ -166,17 +122,11 @@ function Shell() {
     picked.current = true;
     setActiveProjectId(id);
     setServerActiveId(id);
-    try {
-      if (id) localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
-      else localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
-    } catch {
-      // ignore storage errors
-    }
+    writeStorage(ACTIVE_PROJECT_STORAGE_KEY, id);
     void api<ActiveProjectPreference>('/api/projects/active', 'PUT', { activeProjectId: id }).catch(
       (e: unknown) => toastError(`Could not remember the active project: ${errorMessage(e)}`),
     );
   }, []);
-
   const askedServer = useRef(false);
   const urlProjectId = projectIdFromPath(location);
   const resolution = useMemo(
@@ -222,49 +172,15 @@ function Shell() {
     }
   }, [projects.data, resolution, activeProjectId, selectProject]);
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setCmdOpen((open) => !open);
-      } else if (e.altKey && e.code === 'KeyN') {
-        e.preventDefault();
-        openNextAttentionRef.current();
-      } else if (e.key === 'Escape' && mobileNavOpen) {
-        setMobileNavOpen(false);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mobileNavOpen]);
-
-  useEffect(() => {
-    setMobileNavOpen(false);
-  }, [location]);
-
   const projectById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p])), [projects.data]);
   const activeProject = useMemo(
     () => (resolution.id ? projectById.get(resolution.id) : undefined),
     [resolution.id, projectById],
   );
   const scope = pageScope(resolution.id, !projects.data && projects.error !== undefined);
-
-  const activeRuns = useMemo(() => {
-    const list = (runs ?? []).filter(
-      (r) =>
-        !r.endedAt &&
-        r.state !== 'done' &&
-        r.state !== 'failed' &&
-        inActiveScope(projects.data ? resolution.id : undefined, r.projectId),
-    );
-    return list.sort((a, b) => {
-      const rank = (s: string) => (s === 'waiting_input' ? 0 : s === 'working' || s === 'starting' ? 1 : 2);
-      return rank(a.state) - rank(b.state);
-    });
-  }, [runs, projects.data, resolution.id]);
+  const activeRuns = useScopedActiveRuns(runs, Boolean(projects.data), resolution.id);
 
   const inspectedRun = useMemo(() => (runs ?? []).find((r) => r.id === inspectRunId), [runs, inspectRunId]);
-
   const openRun = useCallback((run: Run) => setInspectRunId(run.id), []);
   const attention = useAttention(runs, openRun);
   const openNextAttention = useCallback(() => {
@@ -274,8 +190,13 @@ function Shell() {
   useEffect(() => {
     setPresenceRun(inspectRunId ?? null, 'inspector');
   }, [inspectRunId]);
-  const openNextAttentionRef = useRef(openNextAttention);
-  openNextAttentionRef.current = openNextAttention;
+  useShellShortcuts({
+    mobileNavOpen,
+    setMobileNavOpen,
+    setCmdOpen,
+    onOpenNextAttention: openNextAttention,
+    location,
+  });
 
   const handleSwitchProject = (nextId: string) => {
     if (nextId === '__new__') {
@@ -286,21 +207,6 @@ function Shell() {
     selectProject(targetId);
     const next = targetId ? switchProjectPath(location, targetId) : null;
     if (next && next !== location) navigate(next);
-  };
-
-  const handleCleanupProjectWorktrees = async () => {
-    if (!activeProject) return;
-    try {
-      const res = await api<GarbageCollectRunsResponse>(
-        `/api/projects/${activeProject.id}/cleanup-worktrees`,
-        'POST',
-      );
-      const kept = keptWorktreesSummary(res);
-      if (kept && res.prunedWorktrees === 0) toastInfo(kept);
-      else toastInfo(kept ? `Finished worktrees cleaned up. ${kept}` : 'Finished worktrees cleaned up.');
-    } catch (e) {
-      toastError(`Cleanup failed: ${errorMessage(e)}`);
-    }
   };
 
   const handleProjectDeleted = async (res: ProjectDeleted) => {
@@ -325,7 +231,7 @@ function Shell() {
         activeProject={activeProject}
         onSwitchProject={handleSwitchProject}
         onOpenWizard={() => setWizardOpen(true)}
-        onCleanupWorktrees={() => void handleCleanupProjectWorktrees()}
+        onCleanupWorktrees={() => void cleanupProjectWorktrees(activeProject)}
         onProjectDeleted={handleProjectDeleted}
         onOpenCommandPalette={() => setCmdOpen(true)}
         attentionCount={attention.count}
@@ -372,117 +278,115 @@ function Shell() {
             <ErrorBoundary resetKey={location}>
               <Switch>
                 <Route path="/terminals/:id">
-                  {(params) => (
-                    <Suspense fallback={<div className="term-shell" aria-busy="true" />}>
-                      <TerminalPage id={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense className="term-shell">
+                      <TerminalPage id={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/runs/:id/review">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <ReviewPage key={params.id} id={params.id} onInspectRun={(id) => setInspectRunId(id)} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <ReviewPage key={p.id} id={p.id} onInspectRun={(id) => setInspectRunId(id)} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/roadmap">
-                  {(params) => <RoadmapPage key={params.id} projectId={params.id} />}
+                  {(p) => <RoadmapPage key={p.id} projectId={p.id} />}
                 </Route>
                 <Route path="/projects/:id/board">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <BoardPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <BoardPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/settings">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <ProjectSettingsPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <ProjectSettingsPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/code">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <CodeExplorerPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <CodeExplorerPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/git">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <GitPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <GitPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/outputs">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <BuildOutputsPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <BuildOutputsPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/projects/:id/browser">
-                  {(params) => (
-                    <Suspense fallback={<div className="board-page" aria-busy="true" />}>
-                      <LiveBrowserPage key={params.id} projectId={params.id} />
-                    </Suspense>
+                  {(p) => (
+                    <PageSuspense>
+                      <LiveBrowserPage key={p.id} projectId={p.id} />
+                    </PageSuspense>
                   )}
                 </Route>
                 <Route path="/settings">
-                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                  <PageSuspense>
                     <SettingsPage theme={theme} onChangeTheme={applyTheme} />
-                  </Suspense>
+                  </PageSuspense>
                 </Route>
                 <Route path="/inbox">
-                  <Suspense fallback={<div className="inbox-page" aria-busy="true" />}>
+                  <PageSuspense className="inbox-page">
                     <ScopedPage scope={scope} pendingClassName="inbox-page">
-                      {(activeProjectId) => (
+                      {(activeId) => (
                         <InboxPage
                           runs={runs}
                           runsLoading={runsLoading}
                           runsError={runsError}
                           onRetryRuns={refreshRuns}
                           seen={attention.seen}
-                          activeProjectId={activeProjectId}
+                          activeProjectId={activeId}
                           projectName={activeProject?.name}
                           onOpenRun={(id) => setInspectRunId(id)}
                           onDismiss={attention.dismiss}
                         />
                       )}
                     </ScopedPage>
-                  </Suspense>
+                  </PageSuspense>
                 </Route>
                 <Route path="/docker">
-                  <Suspense fallback={<div className="board-page" aria-busy="true" />}>
+                  <PageSuspense>
                     <ScopedPage scope={scope} pendingClassName="board-page">
-                      {(activeProjectId) => (
-                        <DockerPage activeProjectId={activeProjectId} projects={projects.data} />
-                      )}
+                      {(activeId) => <DockerPage activeProjectId={activeId} projects={projects.data} />}
                     </ScopedPage>
-                  </Suspense>
+                  </PageSuspense>
                 </Route>
                 <Route path="/fleet">
-                  <Suspense fallback={<div className="fleet-page" aria-busy="true" />}>
+                  <PageSuspense className="fleet-page">
                     <ScopedPage scope={scope} pendingClassName="fleet-page">
-                      {(activeProjectId) => (
+                      {(activeId) => (
                         <FleetPage
-                          activeProjectId={activeProjectId}
+                          activeProjectId={activeId}
                           seen={attention.seen}
                           onInspectRun={(id) => setInspectRunId(id)}
                         />
                       )}
                     </ScopedPage>
-                  </Suspense>
+                  </PageSuspense>
                 </Route>
                 <Route path="/">
-                  <h1 className="sr-only">Emberline dashboard</h1>
+                  <h1 className="sr-only">Overview</h1>
                   <ScopedPage scope={scope} pendingClassName="dashboard">
-                    {(activeProjectId) => (
+                    {(activeId) => (
                       <Dashboard
                         system={system.data}
-                        activeProjectId={activeProjectId}
+                        activeProjectId={activeId}
                         onSelectProject={selectProject}
                         onOpenWizard={() => setWizardOpen(true)}
                         onInspectRun={(id) => setInspectRunId(id)}
