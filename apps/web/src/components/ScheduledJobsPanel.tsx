@@ -1,4 +1,3 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import type {
   CronOverlapPolicy,
   CronPermissionMode,
@@ -8,8 +7,12 @@ import type {
   ScheduledJob,
 } from '@emberline/protocol';
 import { X } from 'lucide-react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { api, errorMessage } from '../api';
+import { HelpHint } from './ui/HelpHint';
+import { Switch } from './ui/Switch';
+import '../pages/dashboard-ux.css';
 
 interface Props {
   projects: Project[];
@@ -18,22 +21,21 @@ interface Props {
 
 const PRESETS = [
   {
-    label: 'Nightly Test & Lint Fix (02:00)',
-    name: 'Nightly Test & Lint Maintenance',
+    label: 'Use nightly check',
+    name: 'Nightly test and lint maintenance',
     cronExpr: '0 2 * * *',
     prompt:
       'Run the test suite and linter. If any tests or lint checks fail, investigate the root cause and commit a minimal fix.',
   },
   {
-    label: 'Weekly Dependency & Security Audit (Mon 04:00)',
-    name: 'Weekly Security & Dependency Audit',
+    label: 'Use weekly audit',
+    name: 'Weekly security and dependency audit',
     cronExpr: '0 4 * * 1',
     prompt:
       'Audit project dependencies and recent changes for security vulnerabilities or outdated packages, and summarize findings.',
   },
 ];
 
-/** Names as the form offers them; the others only appear on jobs saved by older versions. */
 const MODE_LABELS: Record<ScheduledJob['permissionMode'], string> = {
   auto: 'Autonomous',
   bypassPermissions: 'Bypass permissions',
@@ -42,7 +44,6 @@ const MODE_LABELS: Record<ScheduledJob['permissionMode'], string> = {
   plan: 'Plan only',
 };
 
-/** The viewer's zone; schedules default to it so "02:00" means their 02:00. */
 const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 const formatInZone = (iso: string, timeZone: string) => {
@@ -88,7 +89,6 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
     }
   }, [projects, projectId]);
 
-  // Live "next 5 runs" preview while the expression or zone is edited.
   useEffect(() => {
     if (!formOpen || !cronExpr.trim()) return;
     let stale = false;
@@ -141,7 +141,6 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
     }
   };
 
-  /** `mode` re-enables a job paused for its permission mode with one that scheduled runs may use. */
   const handleToggleEnabled = async (job: ScheduledJob, mode?: CronPermissionMode) => {
     setBusyId(job.id);
     setError(null);
@@ -192,30 +191,29 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
   return (
     <section className="panel" aria-labelledby="cron-title">
       <header className="panel-head">
-        <div>
-          <h2 id="cron-title">Scheduled Agent Jobs (Cron)</h2>
-          <p className="muted">
-            Recurring maintenance, nightly test runs, and automated audits. Quota-aware: pauses automatically
-            during rate limits.
-          </p>
+        <div className="budget-heading-row">
+          <h2 id="cron-title">Scheduled jobs</h2>
+          <HelpHint topic="scheduled jobs">
+            Recurring maintenance, nightly test runs, and audits. Pauses automatically during usage limits.
+          </HelpHint>
         </div>
-        <div className="actions">
-          <span className="badge mono">{visibleJobs.filter((j) => j.enabled).length} ACTIVE</span>
+        <div className="scheduled-jobs-head-meta">
+          <span className="badge mono">{visibleJobs.filter((j) => j.enabled).length} active</span>
           <button
             type="button"
             className="btn btn-sm"
             onClick={() => setFormOpen((v) => !v)}
             disabled={projects.length === 0}
           >
-            {formOpen ? 'Cancel' : '+ Schedule Job'}
+            {formOpen ? 'Cancel' : 'Add job'}
           </button>
         </div>
       </header>
 
       {formOpen && (
-        <form className="form" onSubmit={(e) => void handleCreate(e)} style={{ marginBottom: '0.75rem' }}>
-          <div className="form-row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span className="muted small">Templates:</span>
+        <form className="scheduled-job-form" onSubmit={(e) => void handleCreate(e)}>
+          <div className="scheduled-job-presets">
+            <span className="muted">Templates:</span>
             {PRESETS.map((preset) => (
               <button
                 key={preset.label}
@@ -232,12 +230,12 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
             ))}
           </div>
 
-          <div className="form-row">
+          <div className="scheduled-job-fields">
             <select
               className="input"
+              aria-label="Project"
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              style={{ maxWidth: '200px' }}
               required
             >
               {projects.map((p) => (
@@ -249,7 +247,8 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
             <input
               type="text"
               className="input"
-              placeholder="Job name (e.g. Nightly Test & Lint)"
+              aria-label="Job name"
+              placeholder="Job name (e.g. Nightly test and lint)"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -257,44 +256,41 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
             <input
               type="text"
               className="input mono"
+              aria-label="Schedule"
               placeholder="Cron (e.g. 0 2 * * * or @daily)"
               value={cronExpr}
               onChange={(e) => setCronExpr(e.target.value)}
-              style={{ maxWidth: '180px' }}
               required
             />
             <input
               type="text"
               className="input mono"
-              placeholder="Time zone (e.g. Europe/Istanbul)"
+              aria-label="Time zone"
+              placeholder="Time zone (e.g. UTC)"
               value={timeZone}
               onChange={(e) => setTimeZone(e.target.value)}
-              style={{ maxWidth: '180px' }}
-              title="IANA time zone the schedule is evaluated in"
             />
             <select
               className="input"
+              aria-label="Overlap policy"
               value={overlapPolicy}
               onChange={(e) => setOverlapPolicy(e.target.value as CronOverlapPolicy)}
-              style={{ maxWidth: '200px' }}
-              title="What happens when the job is due while its previous run is still going"
             >
               <option value="skip">Skip if still running</option>
               <option value="queue">Queue another run</option>
             </select>
             <select
               className="input"
+              aria-label="Permission mode"
               value={permissionMode}
               onChange={(e) => setPermissionMode(e.target.value as CronPermissionMode)}
-              style={{ maxWidth: '170px' }}
-              title="Scheduled runs are unattended, so they never stop to ask permission"
             >
               <option value="auto">Autonomous</option>
               <option value="bypassPermissions">Bypass permissions</option>
             </select>
           </div>
 
-          <p className="muted small mono" aria-live="polite">
+          <p className="muted mono scheduled-job-preview" aria-live="polite">
             {preview.error
               ? `Invalid schedule: ${preview.error}`
               : preview.runs.length > 0
@@ -305,25 +301,22 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
           <textarea
             className="input textarea"
             rows={2}
+            aria-label="Scheduled prompt"
             placeholder="Prompt to execute on each scheduled run…"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             required
           />
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn-sm btn-primary" disabled={creating}>
-              {creating ? 'Saving…' : 'Create Scheduled Job'}
+          <div className="actions">
+            <button type="submit" className="btn btn-sm" disabled={creating}>
+              {creating ? 'Saving…' : 'Create job'}
             </button>
           </div>
         </form>
       )}
 
-      {notice && (
-        <p className="muted small mono" style={{ padding: '0 0.25rem' }}>
-          {notice}
-        </p>
-      )}
+      {notice && <p className="muted mono scheduled-job-notice">{notice}</p>}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -333,60 +326,42 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
       {visibleJobs.length === 0 ? (
         <div className="empty">
           <p>No scheduled jobs configured.</p>
-          <p className="muted">
-            Click <strong>+ Schedule Job</strong> to run Claude on a recurring cron schedule (`0 2 * * *`,
-            `@daily`, etc.).
-          </p>
         </div>
       ) : (
         <ul className="list">
           {visibleJobs.map((job) => (
-            <li key={job.id} className="row">
+            <li key={job.id} className="row scheduled-job-row">
               <div className="row-main">
                 <span className={`dot ${job.enabled ? 'dot-running' : 'dot-exited'}`} />
                 <span className="row-title">{job.name}</span>
                 <span className="badge badge-soft">{projectName(job.projectId)}</span>
                 <span className="badge mono">{job.cronExpr}</span>
-                <span className="badge badge-soft mono" title="Time zone the schedule runs in">
-                  {job.timeZone}
-                </span>
-                <span className="badge badge-soft" title="Permission mode of this job's runs">
-                  {MODE_LABELS[job.permissionMode]}
-                </span>
-                {job.overlapPolicy === 'queue' && (
-                  <span
-                    className="badge badge-soft"
-                    title="Due runs are queued even while the previous one runs"
-                  >
-                    queues overlaps
-                  </span>
-                )}
-                <span className="row-meta mono">next: {formatInZone(job.nextRunAt, job.timeZone)}</span>
+                <span className="badge badge-soft">{MODE_LABELS[job.permissionMode]}</span>
+                {job.overlapPolicy === 'queue' && <span className="badge badge-soft">queues overlaps</span>}
+                <span className="row-meta mono">Next: {formatInZone(job.nextRunAt, job.timeZone)}</span>
                 {job.lastRunId && (
                   <Link href={`/runs/${job.lastRunId}/review`} className="badge mono">
-                    last run ↗
+                    last run
                   </Link>
                 )}
                 {job.pausedReason && <span className="row-meta">Paused: {job.pausedReason}.</span>}
               </div>
-              <div className="row-actions">
+              <div className="scheduled-job-actions">
                 <button
                   type="button"
                   className="btn btn-sm"
                   disabled={busyId === job.id || Boolean(job.pausedReason)}
                   onClick={() => void handleTriggerNow(job)}
-                  title="Spawn a run for this scheduled job immediately"
                 >
-                  Run Now
+                  Run now
                 </button>
                 {job.pausedReason ? (
                   <select
-                    className="input"
+                    className="input scheduled-job-mode-select"
                     aria-label={`Re-enable ${job.name} with a permission mode`}
                     value=""
                     disabled={busyId === job.id}
                     onChange={(e) => void handleToggleEnabled(job, e.target.value as CronPermissionMode)}
-                    style={{ maxWidth: '190px' }}
                   >
                     <option value="" disabled>
                       Enable as…
@@ -395,14 +370,12 @@ export function ScheduledJobsPanel({ projects, onRunCreated }: Props) {
                     <option value="bypassPermissions">Bypass permissions</option>
                   </select>
                 ) : (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    disabled={busyId === job.id}
-                    onClick={() => void handleToggleEnabled(job)}
-                  >
-                    {job.enabled ? 'Pause' : 'Enable'}
-                  </button>
+                  <Switch
+                    checked={job.enabled}
+                    busy={busyId === job.id}
+                    ariaLabel={`Enable ${job.name}`}
+                    onChange={() => void handleToggleEnabled(job)}
+                  />
                 )}
                 <button
                   type="button"

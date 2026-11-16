@@ -11,12 +11,10 @@ import {
 import { X } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { Link } from 'wouter';
-import { formatAgentDisplayName } from '../agentLabel';
 import { api, errorMessage } from '../api';
 import { modelAfterAgentChange } from '../runFormModel';
 import {
   countDashboardRunCategories,
-  DASHBOARD_CATEGORY_LABELS,
   DASHBOARD_RUN_CATEGORIES,
   type DashboardRunCategory,
   filterDashboardRuns,
@@ -27,6 +25,19 @@ import { ViewErrorBanner, ViewLoadingState } from './ErrorBoundary';
 import { modeHint, PermissionModePicker } from './PermissionModePicker';
 import { PersonaBadge, PersonaPicker, TaskTemplateBar } from './PersonaBadge';
 import { RunStatePill } from './RunStatePill';
+import { Disclosure } from './ui/Disclosure';
+import { HelpHint } from './ui/HelpHint';
+import '../pages/dashboard-ux.css';
+
+const CATEGORY_LABELS: Record<DashboardRunCategory, string> = {
+  all: 'All',
+  live: 'Active and waiting',
+  working: 'Working',
+  attention: 'Needs your input',
+  queued: 'Queued or paused',
+  done: 'Completed',
+  failed: 'Failed',
+};
 
 export function DashboardRunsSection({
   runs,
@@ -63,20 +74,20 @@ export function DashboardRunsSection({
   return (
     <section className="panel" aria-labelledby="runs-title">
       <header className="panel-head">
-        <div>
+        <div className="budget-heading-row">
           <h2 id="runs-title">
             Runs{' '}
             <span className="mono muted">
               ({filterActive ? `${filteredRuns.length}/${runs.length}` : runs.length})
             </span>
           </h2>
-          <p className="muted">
-            Agent sessions on their own branch and worktree. State comes live from hooks.
-          </p>
+          <HelpHint topic="runs">
+            Agent sessions run on their own git branch and worktree, with live state from hooks.
+          </HelpHint>
         </div>
         <div className="actions">
           <Link href="/fleet" className="btn btn-sm">
-            Open Fleet Multiplexer →
+            Open fleet
           </Link>
         </div>
       </header>
@@ -104,7 +115,7 @@ export function DashboardRunsSection({
                   aria-pressed={pressed}
                   onClick={() => onCategoryChange(pressed && cat !== 'all' ? 'all' : cat)}
                 >
-                  {DASHBOARD_CATEGORY_LABELS[cat]}
+                  {CATEGORY_LABELS[cat]}
                   <span className="board-filter-count mono">{count}</span>
                 </button>
               );
@@ -146,8 +157,7 @@ export function DashboardRunsSection({
             </button>
           ) : (
             <p className="muted">
-              Pick a project above and press <strong>Start run</strong>, or dispatch a ticket from its{' '}
-              <strong>Board</strong>.
+              Press <strong>Start run</strong> above or dispatch a ticket from the board.
             </p>
           )}
         </div>
@@ -218,69 +228,36 @@ function RunRow({
           {body}
         </Link>
       ) : (
-        <div className="row-main" onClick={onInspect} style={onInspect ? { cursor: 'pointer' } : undefined}>
+        <div className={`row-main${onInspect ? ' run-main-clickable' : ''}`} onClick={onInspect}>
           {body}
         </div>
       )}
       {run.worktreePath && (
-        <Link
-          href={`/runs/${run.id}/review`}
-          className="btn btn-sm btn-ghost"
-          title="Inspect git diff, add line comments, commit or push branch"
-        >
+        <Link href={`/runs/${run.id}/review`} className="btn btn-sm btn-ghost">
           Review
         </Link>
       )}
       {onInspect && (
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={onInspect}
-          title="Dock live terminal and hook event timeline"
-        >
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onInspect}>
           Inspect
         </button>
       )}
       {(run.state === 'rate_limited' || run.resumable) && (
-        <button
-          className="btn btn-sm"
-          onClick={onResume}
-          title={
-            run.state === 'rate_limited'
-              ? run.autoRetry
-                ? 'Retry now instead of waiting'
-                : 'Try now instead of waiting for the reset'
-              : `Continue this ${formatAgentDisplayName(run.agent)} session`
-          }
-        >
+        <button type="button" className="btn btn-sm" onClick={onResume}>
           Resume
         </button>
       )}
       {canPrune && (
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={onPrune}
-          title="Delete linked git worktree directory on disk to reclaim space (keeps branch & run record)"
-        >
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onPrune}>
           Prune worktree
         </button>
       )}
       {!run.endedAt && (
-        <button
-          className="btn btn-sm btn-ghost"
-          onClick={onStop}
-          title={run.state === 'queued' ? 'Remove from the queue' : 'Terminate the agent process'}
-        >
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onStop}>
           {run.state === 'queued' ? 'Cancel' : 'Stop'}
         </button>
       )}
-      <button
-        className="icon-btn"
-        aria-label="Remove run"
-        title="Remove run (the worktree and branch are kept)"
-        onClick={onRemove}
-      >
+      <button type="button" className="icon-btn" aria-label="Remove run" onClick={onRemove}>
         <X className="icon" aria-hidden />
       </button>
     </li>
@@ -329,83 +306,107 @@ export function StartRunForm({
     }
   };
 
+  const agentName =
+    agent === 'antigravity'
+      ? 'Antigravity'
+      : agent === 'copilot'
+        ? 'Copilot'
+        : agent === 'codex'
+          ? 'Codex'
+          : agent === 'aider'
+            ? 'Aider'
+            : 'Claude';
+
   return (
     <form className="run-form" onSubmit={(e) => void submit(e)}>
-      <TaskTemplateBar
-        onSelect={(tpl) => {
-          setPersona(tpl.persona);
-          setMode(tpl.permissionMode);
-          setPrompt(tpl.promptTemplate);
-        }}
-      />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span className="muted small mono">Specialist Persona:</span>
+      <div className="run-form-persona-row">
+        <span className="muted mono">Persona:</span>
         <PersonaPicker value={persona} onChange={setPersona} />
       </div>
+
       <textarea
         id="run-prompt"
         className="input"
         rows={3}
         autoFocus
-        placeholder={`What should ${agent === 'antigravity' ? 'Antigravity' : agent === 'copilot' ? 'Copilot' : agent === 'codex' ? 'Codex' : agent === 'aider' ? 'Aider' : 'Claude'} do in ${project.name}? (optional, leave empty for an interactive session)`}
+        placeholder={`What should ${agentName} do in ${project.name}? (optional, leave empty for an interactive session)`}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit(e);
         }}
       />
-      <div className="run-form-foot" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <div className="segmented" role="radiogroup" aria-label="CLI Agent">
-          {(['claude', 'antigravity', 'copilot', 'codex', 'aider'] as const).map((a) => (
-            <button
-              key={a}
-              type="button"
-              role="radio"
-              aria-checked={agent === a}
-              className={agent === a ? 'active' : ''}
-              onClick={() => {
-                setAgent(a);
-                setModel(modelAfterAgentChange(a, model));
+
+      <div className="run-form-foot">
+        <Disclosure label="Advanced">
+          <div className="run-form-advanced-stack">
+            <TaskTemplateBar
+              onSelect={(tpl) => {
+                setPersona(tpl.persona);
+                setMode(tpl.permissionMode);
+                setPrompt(tpl.promptTemplate);
               }}
-            >
-              {a === 'claude'
-                ? 'Claude'
-                : a === 'antigravity'
-                  ? 'Antigravity'
-                  : a === 'copilot'
-                    ? 'Copilot'
-                    : a === 'codex'
-                      ? 'Codex'
-                      : 'Aider'}
-            </button>
-          ))}
-        </div>
-        <select
-          className="input mono"
-          style={{ fontSize: '0.78rem', padding: '4px 8px' }}
-          value={model}
-          onChange={(e) => setModel(e.target.value as AgentModelId)}
-          title="Model Tier (Fable / Opus / Sonnet / Argon / Auto)"
-        >
-          <option value="auto">Auto (Match Persona Rank)</option>
-          {getModelsForProvider(agent).map((m) => (
-            <option key={m.id} value={m.id}>
-              {modelLabel(agent, m.id)}
-            </option>
-          ))}
-        </select>
-        <PermissionModePicker value={mode} onChange={setMode} />
+            />
+            <div className="run-form-overrides-row">
+              <div className="segmented" role="radiogroup" aria-label="CLI Agent">
+                {(['claude', 'antigravity', 'copilot', 'codex', 'aider'] as const).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    role="radio"
+                    aria-checked={agent === a}
+                    className={agent === a ? 'active' : ''}
+                    onClick={() => {
+                      setAgent(a);
+                      setModel(modelAfterAgentChange(a, model));
+                    }}
+                  >
+                    {a === 'claude'
+                      ? 'Claude'
+                      : a === 'antigravity'
+                        ? 'Antigravity'
+                        : a === 'copilot'
+                          ? 'Copilot'
+                          : a === 'codex'
+                            ? 'Codex'
+                            : 'Aider'}
+                  </button>
+                ))}
+              </div>
+              <select
+                className="input mono run-form-model-select"
+                aria-label="Model"
+                value={model}
+                onChange={(e) => setModel(e.target.value as AgentModelId)}
+              >
+                <option value="auto">Auto (match persona rank)</option>
+                {getModelsForProvider(agent).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {modelLabel(agent, m.id)}
+                  </option>
+                ))}
+              </select>
+              <PermissionModePicker value={mode} onChange={setMode} />
+            </div>
+            <p className="muted run-form-hint">{modeHint(mode)}. Runs on a new branch in its own worktree.</p>
+          </div>
+        </Disclosure>
+
         <div className="actions">
           <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>
             Cancel
           </button>
-          <button id="run-start" className="btn btn-sm btn-primary" disabled={busy}>
+          <button id="run-start" type="submit" className="btn btn-sm btn-primary" disabled={busy}>
             {busy ? 'Starting…' : 'Start'}
           </button>
         </div>
       </div>
-      <p className="muted small">{modeHint(mode)}. Runs on a new branch in its own worktree.</p>
-      {error && <p className="form-error">{error}</p>}
+
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
     </form>
   );
 }

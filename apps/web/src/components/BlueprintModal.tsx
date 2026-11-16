@@ -2,7 +2,7 @@ import type { Project, ProjectBlueprintResponse, Run } from '@emberline/protocol
 import { Check, Sparkles, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { PersonaBadge } from './PersonaBadge';
+import '../pages/dashboard-ux.css';
 
 export function BlueprintModal({
   project,
@@ -95,7 +95,6 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
     setBusy('refine');
     setError(undefined);
     try {
-      // Save current content first so the agent sees the latest draft in its worktree
       await api<ProjectBlueprintResponse>(`/api/projects/${project.id}/blueprint`, 'PUT', {
         content,
       });
@@ -126,22 +125,17 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
         onClick={(e) => e.stopPropagation()}
       >
         <header className="drawer-head">
-          <div>
-            <p className="eyebrow">{project.name} · Living Specification</p>
-            <h2 id="blueprint-modal-title" style={{ margin: 0, fontSize: '1.05rem' }}>
-              Project Blueprint (<code className="mono">PROJECT.md</code>)
-            </h2>
-          </div>
+          <h2 id="blueprint-modal-title" className="blueprint-modal-title">
+            PROJECT.md
+          </h2>
           {blueprintPath && <span className="badge badge-soft mono hide-sm">{blueprintPath}</span>}
           <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
             <X className="icon" aria-hidden />
           </button>
         </header>
 
-        <p className="muted small" style={{ margin: 0 }}>
-          Every specialized agent persona reads <code className="mono">PROJECT.md</code> as the living source
-          of truth. Edit it directly or dispatch the <PersonaBadge persona="product_owner" showFull /> agent
-          to enrich it.
+        <p className="muted blueprint-modal-sub">
+          Shared specification read by every agent run in {project.name}.
         </p>
 
         {loading ? (
@@ -151,9 +145,8 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
         ) : (
           <textarea
             id="blueprint-editor"
-            className="input mono"
+            className="input mono blueprint-editor"
             rows={18}
-            style={{ fontSize: '0.84rem', lineHeight: 1.5 }}
             value={content}
             onChange={(e) => {
               setContent(e.target.value);
@@ -163,11 +156,15 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
         )}
 
         {savedNotice && (
-          <p className="small" style={{ color: 'var(--ok, var(--ok))', margin: 0 }}>
+          <p className="blueprint-saved-notice" role="status">
             <Check className="icon" aria-hidden /> Saved PROJECT.md and synced CLAUDE.md in workspace.
           </p>
         )}
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
 
         <footer className="drawer-foot">
           <button
@@ -175,13 +172,12 @@ ${project.description || `${project.name} managed by Emberline AI Coding Factory
             className="btn btn-sm"
             disabled={!!busy || loading}
             onClick={() => void askProductOwner()}
-            title="Save PROJECT.md and launch a Product Owner agent run to refine requirements and milestones"
           >
             {busy === 'refine' ? (
-              'Dispatching PO Agent…'
+              'Starting…'
             ) : (
               <>
-                <Sparkles className="icon" aria-hidden /> Ask Product Owner Agent to Refine
+                <Sparkles className="icon" aria-hidden /> Refine with agent
               </>
             )}
           </button>

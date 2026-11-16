@@ -1,6 +1,8 @@
 import type { Project, ProjectUsageResponse } from '@emberline/protocol';
 import { useApi } from '../hooks/useApi';
 import { formatTokensCompact } from './QuotaPanel';
+import { HelpHint } from './ui/HelpHint';
+import '../pages/dashboard-ux.css';
 
 const formatDuration = (sec: number) =>
   sec >= 3600 ? `${(sec / 3600).toFixed(1)} h` : sec >= 60 ? `${Math.round(sec / 60)} min` : `${sec} s`;
@@ -30,27 +32,25 @@ export function BudgetPanel({ project }: { project: Project }) {
     <section className="panel" aria-labelledby="budget-title">
       <header className="panel-head">
         <div>
-          <h2 id="budget-title">Usage &amp; budget · {project.name}</h2>
-          <p className="muted">
-            Last 7 days: {totals.runs} runs, {formatTokensCompact(totals.tokens)} tokens,{' '}
-            {formatDuration(totals.duration)} of agent time.
-            {totals.estimated > 0 &&
-              ` Tokens of ${totals.estimated} run(s) are estimated (no transcript usage).`}
+          <div className="budget-heading-row">
+            <h2 id="budget-title">Usage and budget</h2>
+            <HelpHint topic="usage and budget">
+              Shows 7-day token and run totals for {project.name}, runs started in the last 24 hours against
+              the daily auto-dispatch budget, and the maximum depth of agent-created tickets configured in
+              Settings.
+            </HelpHint>
+          </div>
+          <p className="muted budget-summary">
+            7d: {totals.runs} runs, {formatTokensCompact(totals.tokens)} tokens,{' '}
+            {formatDuration(totals.duration)}
+            {totals.estimated > 0 ? ` (${totals.estimated} est.)` : ''}.
           </p>
         </div>
         <div className="actions">
-          <span
-            className={`badge mono${data.budgetExhausted ? ' badge-warn' : ''}`}
-            title="Runs started for this project in the last 24 hours, against the auto-dispatch budget (Settings)"
-          >
-            {data.runsLast24h}/{budget === 0 ? '∞' : budget} runs · 24h
+          <span className={`badge mono${data.budgetExhausted ? ' badge-warn' : ''}`}>
+            {data.runsLast24h}/{budget === 0 ? '∞' : budget} · 24h
           </span>
-          <span
-            className="badge badge-soft mono"
-            title="Generations of agent-created tickets allowed (Settings)"
-          >
-            ticket depth ≤ {data.maxTicketDepth}
-          </span>
+          <span className="badge badge-soft mono">depth ≤ {data.maxTicketDepth}</span>
         </div>
       </header>
       {data.budgetExhausted && (
@@ -62,15 +62,16 @@ export function BudgetPanel({ project }: { project: Project }) {
       <div className="usage-bars" role="list">
         {data.days.map((d) => {
           const tokens = d.inputTokens + d.outputTokens;
+          const pct = Math.round((tokens / maxTokens) * 100);
           return (
-            <div
-              key={d.date}
-              className="usage-day"
-              role="listitem"
-              title={`${d.date}: ${d.runs} runs · ${formatTokensCompact(d.inputTokens)} in / ${formatTokensCompact(d.outputTokens)} out (${formatTokensCompact(d.cachedTokens)} cached) · ${d.toolCalls} tool calls · ${formatDuration(d.durationSec)}${d.estimatedRuns > 0 ? ` · ${d.estimatedRuns} estimated` : ''}`}
-            >
+            <div key={d.date} className="usage-day" role="listitem">
               <div className="usage-bar-track">
-                <div className="usage-bar" style={{ height: `${Math.round((tokens / maxTokens) * 100)}%` }} />
+                <div
+                  className="usage-bar"
+                  ref={(el) => {
+                    if (el) el.style.height = `${pct}%`;
+                  }}
+                />
               </div>
               <span className="usage-day-label mono">{d.date.slice(5)}</span>
               <span className="usage-day-runs muted mono">{d.runs}</span>

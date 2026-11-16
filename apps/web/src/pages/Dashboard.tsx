@@ -8,7 +8,6 @@ import type {
 } from '@emberline/protocol';
 import { API_VERSION } from '@emberline/protocol';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, ChartColumn, FileText, Rocket, Target, Timer } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { ApiRequestError, api, errorMessage } from '../api';
@@ -24,6 +23,7 @@ import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 import { ProjectStatusAndDemoPanel } from '../components/ProjectStatusAndDemoPanel';
 import { QuotaPanel } from '../components/QuotaPanel';
 import { ScheduledJobsPanel } from '../components/ScheduledJobsPanel';
+import { PageHeader } from '../components/ui/PageHeader';
 import { dockerEngineLine, dockerEngineTitle } from '../dockerEngine';
 import { type PrunePending, prunePendingNote } from '../gcSummary';
 import { useRuns } from '../hooks/liveData';
@@ -31,6 +31,7 @@ import { useQueryParam } from '../hooks/navigation';
 import { useApi } from '../hooks/useApi';
 import type { DashboardRunCategory } from '../runFilter';
 import { RoadmapStudioPanel } from './RoadmapPage';
+import './dashboard-ux.css';
 
 const OVERVIEW_TABS = ['studio', 'roadmap', 'runs', 'automation', 'system'] as const;
 type OverviewTab = (typeof OVERVIEW_TABS)[number];
@@ -236,139 +237,55 @@ export function Dashboard({
       )}
 
       <div className="dashboard-head-stack">
-        <div className="stat-strip" role="group" aria-label="Fleet telemetry quick filters">
-          <button
-            type="button"
-            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'working' ? ' stat-card-active' : ''}`}
-            aria-pressed={overviewTab === 'runs' && runCategory === 'working'}
-            onClick={() => selectStatCategory('working')}
-            title="Filter runs to working agents"
-          >
-            <span className="stat-label">Active Agents</span>
-            <strong className="stat-value mono">{stats.working}</strong>
-          </button>
-          <button
-            type="button"
-            className={`stat-card stat-card-btn${stats.attention > 0 ? ' stat-card-warn' : ''}${overviewTab === 'runs' && runCategory === 'attention' ? ' stat-card-active' : ''}`}
-            aria-pressed={overviewTab === 'runs' && runCategory === 'attention'}
-            onClick={() => selectStatCategory('attention')}
-            title="Filter runs waiting for input"
-          >
-            <span className="stat-label">Needs Your Input</span>
-            <strong className="stat-value mono">{stats.attention}</strong>
-          </button>
-          <button
-            type="button"
-            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'queued' ? ' stat-card-active' : ''}`}
-            aria-pressed={overviewTab === 'runs' && runCategory === 'queued'}
-            onClick={() => selectStatCategory('queued')}
-            title="Filter queued or rate-limited runs"
-          >
-            <span className="stat-label">Queued / Paused</span>
-            <strong className="stat-value mono">{stats.queuedOrPaused}</strong>
-          </button>
-          <button
-            type="button"
-            className={`stat-card stat-card-btn${overviewTab === 'runs' && runCategory === 'done' ? ' stat-card-active' : ''}`}
-            aria-pressed={overviewTab === 'runs' && runCategory === 'done'}
-            onClick={() => selectStatCategory('done')}
-            title="Filter completed runs"
-          >
-            <span className="stat-label">Completed Runs</span>
-            <strong className="stat-value mono">{stats.completed}</strong>
-          </button>
-        </div>
+        <PageHeader
+          title="Overview"
+          actions={
+            <div className="segmented overview-tabs" role="tablist" aria-label="Overview sections">
+              {(['studio', 'runs'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  id={`overview-tab-${tab}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={overviewTab === tab}
+                  className={overviewTab === tab ? 'active' : ''}
+                  onClick={() => setOverviewTab(tab)}
+                >
+                  {tab === 'studio' ? 'Project' : 'Runs'}
+                </button>
+              ))}
+            </div>
+          }
+        />
 
-        <div className="overview-nav-bar">
-          <div className="segmented segmented-scroll" role="tablist" aria-label="Factory Overview Sections">
-            <button
-              id="overview-tab-studio"
-              type="button"
-              role="tab"
-              aria-selected={overviewTab === 'studio'}
-              className={overviewTab === 'studio' ? 'active' : ''}
-              onClick={() => setOverviewTab('studio')}
-            >
-              <Rocket className="icon" aria-hidden /> Command Center
-            </button>
-            <button
-              id="overview-tab-roadmap"
-              type="button"
-              role="tab"
-              aria-selected={overviewTab === 'roadmap'}
-              className={overviewTab === 'roadmap' ? 'active' : ''}
-              onClick={() => setOverviewTab('roadmap')}
-            >
-              <Target className="icon" aria-hidden /> Roadmap &amp; Brainstorm
-            </button>
-            <button
-              id="overview-tab-runs"
-              type="button"
-              role="tab"
-              aria-selected={overviewTab === 'runs'}
-              className={overviewTab === 'runs' ? 'active' : ''}
-              onClick={() => setOverviewTab('runs')}
-            >
-              <Bot className="icon" aria-hidden /> Runs &amp; Terminals (
-              {stats.working + stats.attention + stats.queuedOrPaused} active / {visibleRuns.length} total)
-            </button>
-            <button
-              id="overview-tab-automation"
-              type="button"
-              role="tab"
-              aria-selected={overviewTab === 'automation'}
-              className={overviewTab === 'automation' ? 'active' : ''}
-              onClick={() => setOverviewTab('automation')}
-            >
-              <Timer className="icon" aria-hidden /> Automation &amp; Cron
-            </button>
-            <button
-              id="overview-tab-system"
-              type="button"
-              role="tab"
-              aria-selected={overviewTab === 'system'}
-              className={overviewTab === 'system' ? 'active' : ''}
-              onClick={() => setOverviewTab('system')}
-            >
-              <ChartColumn className="icon" aria-hidden /> Quota &amp; Alerts
-            </button>
-          </div>
-
-          <div className="actions">
-            {activeProject && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => setBlueprintFor(activeProject)}
-                  title="Open PROJECT.md Blueprint"
-                >
-                  <FileText className="icon" aria-hidden /> PROJECT.md
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={runnerDown}
-                  onClick={() => void openTerminal('shell', activeProject.id)}
-                >
-                  &gt;_ Shell
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={runnerDown}
-                  onClick={() => {
-                    setRunFormPersona('coder');
-                    setRunFormPrompt('');
-                    setRunFormFor(activeProject.id);
-                    setOverviewTab('runs');
-                  }}
-                >
-                  + Start Run
-                </button>
-              </>
-            )}
-          </div>
+        <div className="stat-strip" role="group" aria-label="Filter runs by status">
+          {(
+            [
+              { category: 'working', label: 'Active', value: stats.working, warn: false },
+              {
+                category: 'attention',
+                label: 'Needs your input',
+                value: stats.attention,
+                warn: stats.attention > 0,
+              },
+              { category: 'queued', label: 'Queued', value: stats.queuedOrPaused, warn: false },
+              { category: 'done', label: 'Completed', value: stats.completed, warn: false },
+            ] as const
+          ).map((card) => {
+            const active = overviewTab === 'runs' && runCategory === card.category;
+            return (
+              <button
+                key={card.category}
+                type="button"
+                className={`stat-card stat-card-btn${card.warn ? ' stat-card-warn' : ''}${active ? ' stat-card-active' : ''}`}
+                aria-pressed={active}
+                onClick={() => selectStatCategory(card.category)}
+              >
+                <span className="stat-label">{card.label}</span>
+                <strong className="stat-value mono">{card.value}</strong>
+              </button>
+            );
+          })}
         </div>
 
         {overviewTab !== 'system' && <QuotaPanel compact />}
@@ -402,12 +319,12 @@ export function Dashboard({
             <section className="panel">
               <header className="panel-head">
                 <div>
-                  <h2>Create Your First Project</h2>
-                  <p className="muted">Start the AI Coding Factory by creating or cloning a project.</p>
+                  <h2>Create your first project</h2>
+                  <p className="muted">Create or clone a repository to get started.</p>
                 </div>
                 {onOpenWizard && (
                   <button type="button" className="btn btn-sm btn-primary" onClick={onOpenWizard}>
-                    + AI Factory Wizard
+                    Create project
                   </button>
                 )}
               </header>
@@ -469,6 +386,9 @@ export function Dashboard({
             onInspectRun={onInspectRun}
             onRunAction={(id, action) => void runAction(id, action)}
           />
+
+          <ScheduledJobsPanel projects={visibleProjects} />
+          {activeProject && <BudgetPanel key={`budget-${activeProject.id}`} project={activeProject} />}
         </>
       )}
 
@@ -478,10 +398,10 @@ export function Dashboard({
         ) : (
           <section className="panel">
             <div className="empty">
-              <p>Select or create a project first to open its Roadmap &amp; Brainstorm Studio.</p>
+              <p>Select or create a project first to open its roadmap.</p>
               {onOpenWizard && (
                 <button type="button" className="btn btn-sm btn-primary" onClick={onOpenWizard}>
-                  + AI Factory Wizard
+                  Create project
                 </button>
               )}
             </div>

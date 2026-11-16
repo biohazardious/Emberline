@@ -32,6 +32,7 @@ import {
 } from '../containerPreviewSetup';
 import { useApi } from '../hooks/useApi';
 import { DEMO_IFRAME_SANDBOX } from '../sandbox';
+import './projectStatus/project-status.css';
 
 type PreviewStatus = RunPreviewStatus | MainPreviewStatus;
 
