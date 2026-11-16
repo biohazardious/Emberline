@@ -306,3 +306,135 @@ await scenario('git page: commits, then release', async (page) => {
   const head = await (await fetch(`${FORGE}/_e2e/head/e2e/${REPO}`)).json();
   assert.equal(head.tags['v0.1.0'], head.main, 'the tag is on the pushed main');
 });
+
+await scenario('settings: providers agents & routing, save bar, discard, save and reload', async (page) => {
+  await page.goto(`${origin(page)}/settings?tab=providers`);
+  const rows = page.locator('.provider-row');
+  await rows.first().waitFor();
+  assert.ok((await rows.count()) >= 5, 'at least 5 provider rows rendered');
+
+  // Each provider row has a single composite status.
+  const rowCount = await rows.count();
+  for (let i = 0; i < rowCount; i++) {
+    assert.equal(await rows.nth(i).locator('.provider-status').count(), 1);
+  }
+
+  // Expand the first provider row.
+  const firstExpand = rows.first().locator('button[aria-expanded]').first();
+  await firstExpand.click();
+  assert.equal(await firstExpand.getAttribute('aria-expanded'), 'true');
+
+  // Toggle a provider switch (last row, e.g. Aider, so we never hit last-enabled refusal),
+  // see the save bar, Discard, then toggle again, Save, reload and verify.
+  const targetSwitch = rows.last().getByRole('switch');
+  const before = await targetSwitch.getAttribute('aria-checked');
+  await targetSwitch.click();
+  const saveBar = page.locator('.ui-save-bar');
+  await saveBar.waitFor();
+  await saveBar.getByRole('button', { name: 'Discard', exact: true }).click();
+  await saveBar.waitFor({ state: 'hidden' });
+  assert.equal(await targetSwitch.getAttribute('aria-checked'), before);
+
+  await targetSwitch.click();
+  await saveBar.waitFor();
+  await saveBar.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveBar.waitFor({ state: 'hidden' });
+
+  await page.reload();
+  await rows.first().waitFor();
+  const afterReload = await rows.last().getByRole('switch').getAttribute('aria-checked');
+  assert.notEqual(afterReload, before, 'saved provider switch persisted across reload');
+
+  // Restore original state.
+  await rows.last().getByRole('switch').click();
+  await saveBar.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveBar.waitFor({ state: 'hidden' });
+
+  // Open view=routing, expand a persona row, and apply a preset from the menu.
+  await page.goto(`${origin(page)}/settings?tab=providers&view=routing`);
+  const personaExpand = page.locator('button[aria-label*="routing"][aria-expanded]').first();
+  await personaExpand.waitFor();
+  await personaExpand.click();
+  assert.equal(await personaExpand.getAttribute('aria-expanded'), 'true');
+
+  await page.getByRole('button', { name: 'Apply preset', exact: true }).click();
+  await page.getByRole('menu').waitFor();
+  await page.getByRole('menuitem').first().click();
+  await saveBar.waitFor();
+  await saveBar.getByRole('button', { name: 'Discard', exact: true }).click();
+});
+
+await scenario('settings: all eight ?tab= deep links show their section', async (page) => {
+  const tabs = [
+    'autopilot',
+    'providers',
+    'mcp_plugins',
+    'quota',
+    'notifications',
+    'ssh_key',
+    'updates',
+    'account',
+  ];
+  for (const tab of tabs) {
+    await page.goto(`${origin(page)}/settings?tab=${tab}`);
+    await page.locator('[role="tab"][aria-selected="true"]').waitFor();
+    await page.locator('[role="tabpanel"]').waitFor();
+  }
+});
+
+await scenario('keyboard: Switch, MoreMenu and Disclosure work by keyboard only', async (page) => {
+  await page.goto(`${origin(page)}/settings?tab=autopilot`);
+  const sw = page.getByRole('switch').first();
+  await sw.waitFor();
+  await sw.focus();
+  const initialChecked = await sw.getAttribute('aria-checked');
+  await page.keyboard.press('Space');
+  assert.notEqual(await sw.getAttribute('aria-checked'), initialChecked, 'Space toggled Switch');
+  await page.keyboard.press('Space');
+  assert.equal(await sw.getAttribute('aria-checked'), initialChecked, 'Space restored Switch');
+
+  const disclosure = page.locator('.ui-disclosure > button[aria-expanded]').first();
+  await disclosure.waitFor();
+  await disclosure.focus();
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
+  await page.keyboard.press('Enter');
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'true', 'Enter opened Disclosure');
+  await page.keyboard.press('Enter');
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'Enter closed Disclosure');
+
+  await page.goto(`${origin(page)}/settings?tab=providers&view=routing`);
+  const menuBtn = page.getByRole('button', { name: 'Apply preset', exact: true });
+  await menuBtn.waitFor();
+  await menuBtn.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('menu').waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('menu').waitFor({ state: 'hidden' });
+});
+
+await scenario('responsive: 390px viewport has no horizontal overflow', async (page) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const paths = [
+    '/',
+    `/projects/${project.id}/board`,
+    `/projects/${project.id}/roadmap`,
+    `/projects/${project.id}/git`,
+    '/inbox',
+    '/settings?tab=autopilot',
+    '/settings?tab=providers',
+    '/settings?tab=mcp_plugins',
+    '/settings?tab=quota',
+    '/settings?tab=notifications',
+    '/settings?tab=ssh_key',
+    '/settings?tab=updates',
+    '/settings?tab=account',
+  ];
+  for (const p of paths) {
+    await page.goto(`${origin(page)}${p}`);
+    await page.locator('h1').first().waitFor();
+    const ok = await page.evaluate(
+      'document.documentElement.scrollWidth <= document.documentElement.clientWidth',
+    );
+    assert.ok(ok, `horizontal overflow at 390px on ${p}`);
+  }
+});
