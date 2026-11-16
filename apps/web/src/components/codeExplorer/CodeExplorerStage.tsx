@@ -1,6 +1,6 @@
 import type { AgentPersona } from '@emberline/protocol';
 import { isWorktreeYmlPath } from '@emberline/protocol';
-import { Download, Package, Rocket, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { Download, Package, Rocket, Save, Trash2, Undo2, X } from 'lucide-react';
 import { type FormEvent, type MouseEvent, useMemo } from 'react';
 import { Link } from 'wouter';
 import { monacoTheme } from '../../monaco';
@@ -8,6 +8,8 @@ import { WORKTREE_EDIT_PARAM, worktreeYmlExplorerNote } from '../../projectSetti
 import { ErrorBoundary, ViewErrorBanner, ViewLoadingState } from '../ErrorBoundary';
 import { MonacoEditor } from '../MonacoEditor';
 import { PERSONA_LIST } from '../PersonaBadge';
+import { Disclosure } from '../ui/Disclosure';
+import { HelpHint } from '../ui/HelpHint';
 import {
   describeFileType,
   detectLanguage,
@@ -27,6 +29,7 @@ export function CodeExplorerStage({
   onSelectTab,
   onCloseTab,
   onChangeActiveContent,
+  onRevertActiveFile,
   saving,
   onSaveActiveFile,
   onRetryActiveFile,
@@ -48,6 +51,7 @@ export function CodeExplorerStage({
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string, e: MouseEvent) => void;
   onChangeActiveContent: (nextVal: string) => void;
+  onRevertActiveFile?: () => void;
   saving: boolean;
   onSaveActiveFile: () => void;
   onRetryActiveFile?: (relPath: string) => void;
@@ -66,30 +70,19 @@ export function CodeExplorerStage({
   );
   const worktreeNote =
     activeTab && isWorktreeYmlPath(activeTab.path) ? worktreeYmlExplorerNote(targetId) : null;
+  const activeDirty = Boolean(activeTab && !activeTab.binary && activeTab.content !== activeTab.savedContent);
+  const activeStateLine = activeTab
+    ? activeTab.binary
+      ? `${activeFileDescriptor?.label ?? 'Binary file'} · ${formatBytes(activeTab.sizeBytes)}`
+      : `${detectLanguage(activeTab.path)} · ${formatBytes(activeTab.sizeBytes)}${
+          isWorktreeYmlPath(activeTab.path) ? ' · Read-only' : activeDirty ? ' · Unsaved changes' : ' · Saved'
+        }`
+    : '';
 
   return (
-    <section
-      className="panel"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        padding: 0,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'var(--surface-2)',
-          borderBottom: '1px solid var(--border)',
-          padding: '4px 8px',
-          gap: '8px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflowX: 'auto' }}>
+    <section className="panel code-stage-panel">
+      {tabs.length > 0 && (
+        <div className="code-stage-tabs-bar">
           {tabs.map((tab) => {
             const isDirty = !tab.binary && tab.content !== tab.savedContent;
             const active = tab.path === activePath;
@@ -97,39 +90,22 @@ export function CodeExplorerStage({
             return (
               <div
                 key={tab.path}
+                className={`code-stage-tab${active ? ' code-stage-tab-active' : ''}`}
                 onClick={() => onSelectTab(tab.path)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '5px 10px',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.78rem',
-                  background: active ? 'var(--surface)' : 'transparent',
-                  border: active ? '1px solid var(--border-strong)' : '1px solid transparent',
-                }}
               >
                 <span>
                   <FileTypeIcon icon={desc.icon} />
                 </span>
                 <span className="mono">{tab.path}</span>
                 {isDirty && (
-                  <span style={{ color: 'var(--ember-1)', fontWeight: 700 }} title="Unsaved changes">
+                  <span className="code-stage-tab-dirty" aria-label="Unsaved changes">
                     ●
                   </span>
                 )}
                 <button
                   type="button"
+                  className="code-stage-tab-close"
                   onClick={(e) => onCloseTab(tab.path, e)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--muted)',
-                    cursor: 'pointer',
-                    padding: 0,
-                    fontSize: '0.82rem',
-                  }}
                   aria-label={`Close ${tab.path}`}
                 >
                   <X className="icon" aria-hidden />
@@ -137,23 +113,31 @@ export function CodeExplorerStage({
               </div>
             );
           })}
-          {tabs.length === 0 && (
-            <span className="muted small">Select a file from the tree to view, download, or edit</span>
-          )}
         </div>
+      )}
 
-        {activeTab && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-            <span className="badge mono" title="File size">
-              {formatBytes(activeTab.sizeBytes)}
-            </span>
-            {!activeTab.binary && <span className="badge mono">{detectLanguage(activeTab.path)}</span>}
+      {activeTab && (
+        <div className="code-stage-header">
+          <div className="code-stage-file-info">
+            <span className="mono code-stage-filepath">{activeTab.path}</span>
+            <span className="muted code-stage-stateline">{activeStateLine}</span>
+          </div>
+
+          <div className="code-stage-actions">
+            {activeDirty && onRevertActiveFile && (
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={saving}
+                onClick={onRevertActiveFile}
+              >
+                <Undo2 className="icon" aria-hidden /> Discard
+              </button>
+            )}
             <a
               href={getFileDownloadUrl(projectId, targetId, activeTab.path)}
               download={activeTab.path.split('/').pop() ?? activeTab.path}
-              className="btn btn-sm btn-ghost"
-              style={{ textDecoration: 'none' }}
-              title={`Download ${activeTab.path}`}
+              className="btn btn-sm btn-ghost code-stage-download-link"
             >
               <Download className="icon" aria-hidden /> Download
             </a>
@@ -161,28 +145,28 @@ export function CodeExplorerStage({
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
-                disabled={saving || activeTab.content === activeTab.savedContent}
+                disabled={saving || !activeDirty}
                 onClick={onSaveActiveFile}
               >
                 {saving ? (
                   'Saving…'
                 ) : (
                   <>
-                    <Save className="icon" aria-hidden /> Save (⌘S)
+                    <Save className="icon" aria-hidden /> Save
                   </>
                 )}
               </button>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', overflowY: 'auto' }}>
+      <div className="code-stage-body">
         {activeTab ? (
           activeTab.loading ? (
             <ViewLoadingState label={`Loading ${activeTab.path}…`} />
           ) : activeTab.error ? (
-            <div style={{ padding: '16px' }}>
+            <div className="code-stage-error-wrap">
               <ViewErrorBanner
                 label={`Could not load ${activeTab.path}`}
                 error={activeTab.error}
@@ -190,41 +174,19 @@ export function CodeExplorerStage({
               />
             </div>
           ) : activeTab.binary ? (
-            <div
-              style={{
-                height: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '28px',
-              }}
-            >
-              <div
-                className="panel"
-                style={{
-                  maxWidth: '580px',
-                  width: '100%',
-                  padding: '24px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  textAlign: 'center',
-                  gap: '14px',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border-strong)',
-                }}
-              >
-                <div style={{ fontSize: '2.6rem', lineHeight: 1 }}>
+            <div className="code-stage-binary-wrap">
+              <div className="panel code-stage-binary-card">
+                <div className="code-stage-binary-icon">
                   <FileTypeIcon icon={activeFileDescriptor?.icon ?? Package} />
                 </div>
                 <div>
-                  <h3 style={{ margin: '0 0 4px 0', fontSize: '1.05rem' }}>
+                  <h2 className="code-stage-binary-title">
                     {activeTab.path.split('/').pop() ?? activeTab.path}
-                  </h3>
+                  </h2>
                   <div className="muted mono small">{activeTab.path}</div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div className="code-stage-binary-badges">
                   <span className="badge badge-soft">
                     {activeFileDescriptor?.label ?? 'Binary / Non-Text File'}
                   </span>
@@ -232,24 +194,11 @@ export function CodeExplorerStage({
                 </div>
 
                 {activeFileDescriptor?.previewKind === 'image' && (
-                  <div
-                    style={{
-                      padding: '12px',
-                      background: 'var(--surface)',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border)',
-                      maxWidth: '100%',
-                    }}
-                  >
+                  <div className="code-stage-media-box">
                     <img
                       src={getFileDownloadUrl(projectId, targetId, activeTab.path, true)}
                       alt={activeTab.path}
-                      style={{
-                        maxWidth: '100%',
-                        maxHeight: '280px',
-                        objectFit: 'contain',
-                        display: 'block',
-                      }}
+                      className="code-stage-media-img"
                     />
                   </div>
                 )}
@@ -258,7 +207,7 @@ export function CodeExplorerStage({
                   <audio
                     controls
                     src={getFileDownloadUrl(projectId, targetId, activeTab.path, true)}
-                    style={{ width: '100%', maxWidth: '420px' }}
+                    className="code-stage-media-audio"
                   />
                 )}
 
@@ -266,32 +215,21 @@ export function CodeExplorerStage({
                   <video
                     controls
                     src={getFileDownloadUrl(projectId, targetId, activeTab.path, true)}
-                    style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '6px' }}
+                    className="code-stage-media-video"
                   />
                 )}
 
-                <p className="muted small" style={{ margin: 0, maxWidth: '460px' }}>
-                  This file is a binary, package, or media artifact and cannot be displayed or edited as plain
-                  text in the code editor. You can download it directly to your device below.
+                <p className="muted small code-stage-binary-note">
+                  Binary and media files cannot be edited as plain text.
                 </p>
 
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '10px',
-                    flexWrap: 'wrap',
-                    justifyContent: 'center',
-                    marginTop: '4px',
-                  }}
-                >
+                <div className="code-stage-binary-actions">
                   <a
                     href={getFileDownloadUrl(projectId, targetId, activeTab.path)}
                     download={activeTab.path.split('/').pop() ?? activeTab.path}
-                    className="btn btn-primary"
-                    style={{ textDecoration: 'none', padding: '8px 16px' }}
+                    className="btn btn-primary code-stage-download-link"
                   >
-                    <Download className="icon" aria-hidden /> Download {activeTab.path.split('/').pop()} (
-                    {formatBytes(activeTab.sizeBytes)})
+                    <Download className="icon" aria-hidden /> Download file
                   </a>
                   {!isWorktreeYmlPath(activeTab.path) && (
                     <button
@@ -299,23 +237,23 @@ export function CodeExplorerStage({
                       className="btn btn-ghost"
                       onClick={() => onDeleteFile(activeTab.path)}
                     >
-                      <Trash2 className="icon" aria-hidden /> Delete File
+                      <Trash2 className="icon" aria-hidden /> Delete file
                     </button>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div className="code-stage-editor-col">
               {worktreeNote && (
-                <p className="muted small worktree-readonly-note" style={{ margin: 0, padding: '6px 12px' }}>
+                <p className="muted small worktree-readonly-note">
                   {worktreeNote.text}{' '}
                   <Link href={`/projects/${projectId}/settings?${WORKTREE_EDIT_PARAM}`}>
                     {worktreeNote.link}
                   </Link>
                 </p>
               )}
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div className="code-stage-editor-wrap">
                 <ErrorBoundary resetKey={`${targetId}:${activeTab.path}`} compact>
                   <MonacoEditor
                     filePath={`${targetId}:${activeTab.path}`}
@@ -330,75 +268,51 @@ export function CodeExplorerStage({
             </div>
           )
         ) : (
-          <div
-            style={{
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--muted)',
-            }}
-          >
-            Choose a file on the left to inspect, download, or edit directly in `/workspaces/
-            {projectSlug}`.
+          <div className="code-stage-empty">
+            <p className="code-stage-empty-line">Select a file from the tree to view or edit.</p>
+            <HelpHint topic="code editor">
+              Open any file in <span className="mono">/workspaces/{projectSlug ?? projectId}</span> to edit
+              and save with Ctrl+S / ⌘S, preview media, or drop files onto the tree to upload.
+            </HelpHint>
           </div>
         )}
       </div>
 
       {activeTab && (
-        <form
-          onSubmit={onSubmitAgentPrompt}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '8px 10px',
-            borderTop: '1px solid var(--border)',
-            background: 'var(--surface-2)',
-            flexWrap: 'wrap',
-          }}
-        >
-          <span className="small mono" style={{ fontWeight: 600 }}>
-            <Sparkles className="icon" aria-hidden /> Ask Agent on `{activeTab.path}`:
-          </span>
-          <select
-            className="input"
-            style={{
-              width: 'auto',
-              maxWidth: 'min(320px, 100%)',
-              padding: '4px 8px',
-              fontSize: '0.76rem',
-            }}
-            value={agentPersona}
-            onChange={(e) => onChangeAgentPersona(e.target.value as AgentPersona)}
-          >
-            {PERSONA_LIST.map((p) => (
-              <option key={p.id} value={p.id}>
-                [{p.shortLabel}] {p.label}
-              </option>
-            ))}
-          </select>
-          <input
-            className="input"
-            style={{ width: 'auto', flex: '1 1 220px', padding: '5px 8px', fontSize: '0.78rem' }}
-            placeholder={`e.g. "Update or inspect ${activeTab.path}"`}
-            value={agentPrompt}
-            onChange={(e) => onChangeAgentPrompt(e.target.value)}
-          />
-          <button
-            type="submit"
-            className="btn btn-sm btn-primary"
-            disabled={dispatchingAgent || !agentPrompt.trim()}
-          >
-            {dispatchingAgent ? (
-              'Dispatching…'
-            ) : (
-              <>
-                <Rocket className="icon" aria-hidden /> Dispatch to Agent
-              </>
-            )}
-          </button>
-        </form>
+        <div className="code-stage-footer">
+          <Disclosure label="Ask agent">
+            <form onSubmit={onSubmitAgentPrompt} className="code-stage-agent-form">
+              <select
+                className="input code-stage-agent-select"
+                aria-label="Agent persona"
+                value={agentPersona}
+                onChange={(e) => onChangeAgentPersona(e.target.value as AgentPersona)}
+              >
+                {PERSONA_LIST.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    [{p.shortLabel}] {p.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input code-stage-agent-input"
+                aria-label={`Task for ${activeTab.path}`}
+                placeholder={`Describe changes for ${activeTab.path}…`}
+                value={agentPrompt}
+                onChange={(e) => onChangeAgentPrompt(e.target.value)}
+              />
+              <button type="submit" className="btn btn-sm" disabled={dispatchingAgent || !agentPrompt.trim()}>
+                {dispatchingAgent ? (
+                  'Dispatching…'
+                ) : (
+                  <>
+                    <Rocket className="icon" aria-hidden /> Ask agent
+                  </>
+                )}
+              </button>
+            </form>
+          </Disclosure>
+        </div>
       )}
     </section>
   );

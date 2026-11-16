@@ -17,6 +17,7 @@ import { useRuns } from '../hooks/liveData';
 import { useProject } from '../hooks/useProjects';
 import { useThemeMode } from '../hooks/useThemeMode';
 import { useWorkspaceFileLoader, useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
+import '../components/codeExplorer/code-explorer.css';
 
 export function CodeExplorerPage({ projectId }: { projectId: string }) {
   const {
@@ -106,6 +107,17 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
   }, [fileList.data, tabs.length, activePath, openFile]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
+  const anyDirty = useMemo(() => tabs.some((t) => !t.binary && t.content !== t.savedContent), [tabs]);
+
+  useEffect(() => {
+    if (!anyDirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [anyDirty]);
 
   const saveActiveFile = useCallback(async () => {
     if (!activeTab || activeTab.binary || isWorktreeYmlPath(activeTab.path)) return;
@@ -299,7 +311,7 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
         statusMessage={statusMessage}
       />
 
-      <div className="code-explorer-grid" style={{ flex: 1, minHeight: 0, display: 'grid', gap: '10px' }}>
+      <div className="code-explorer-grid">
         <CodeExplorerTree
           projectId={projectId}
           targetId={targetId}
@@ -336,6 +348,12 @@ export function CodeExplorerPage({ projectId }: { projectId: string }) {
           onChangeActiveContent={(nextVal) => {
             if (!activeTab) return;
             setTabs((prev) => prev.map((t) => (t.path === activeTab.path ? { ...t, content: nextVal } : t)));
+          }}
+          onRevertActiveFile={() => {
+            if (!activeTab) return;
+            setTabs((prev) =>
+              prev.map((t) => (t.path === activeTab.path ? { ...t, content: t.savedContent } : t)),
+            );
           }}
           saving={saving}
           onSaveActiveFile={() => void saveActiveFile()}
