@@ -14,7 +14,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
+  gap: 8px 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 .git-strip-item {
@@ -22,11 +23,13 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .git-strip-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-left: auto;
 }
@@ -87,14 +90,14 @@
   padding: 0;
 }
 .commit-row {
-  border-bottom: 1px solid var(--border, #8884);
+  border-bottom: 1px solid var(--border);
   padding: 6px 4px;
 }
 .commit-row.active {
-  background: var(--surface-2, #8882);
+  background: var(--surface-2);
 }
 .commit-row--factory {
-  border-left: 3px solid var(--accent, #d9822b);
+  border-left: 3px solid var(--accent);
 }
 .commit-row-main,
 .git-file {
@@ -108,8 +111,9 @@
   cursor: pointer;
 }
 .commit-meta {
-  font-size: 12px;
+  font-size: 0.8rem;
   opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 .commit-chips {
   display: flex;
@@ -131,9 +135,10 @@
   flex-direction: row;
   gap: 6px;
   padding: 3px 4px;
+  font-variant-numeric: tabular-nums;
 }
 .git-file.active {
-  background: var(--surface-2, #8882);
+  background: var(--surface-2);
 }
 .git-file-path {
   flex: 1;
@@ -143,10 +148,10 @@
   white-space: nowrap;
 }
 .git-add {
-  color: var(--ok, #2a9d4a);
+  color: var(--ok);
 }
 .git-del {
-  color: var(--danger, #d64545);
+  color: var(--danger);
 }
 .git-diff-pane {
   min-height: 320px;
@@ -156,11 +161,15 @@
 .git-new-branch,
 .git-branch-actions,
 .git-compare-head,
+.git-backups-head,
 .git-backups li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+.git-backups-head h3 {
+  margin: 0;
 }
 .git-new-branch {
   margin-bottom: 12px;
@@ -168,12 +177,13 @@
 .git-branch-table {
   width: 100%;
   border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
 .git-branch-table th,
 .git-branch-table td {
   text-align: left;
   padding: 6px 8px;
-  border-bottom: 1px solid var(--border, #8884);
+  border-bottom: 1px solid var(--border);
 }
 .git-backups {
   list-style: none;
@@ -185,6 +195,7 @@
 .git-compare-head {
   justify-content: space-between;
   margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .chip {
@@ -194,7 +205,7 @@
   border: 1px solid var(--border-subtle);
   background: var(--surface-1);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 0.8rem;
   line-height: 1.5;
   text-decoration: none;
 }
@@ -245,7 +256,7 @@
   gap: 8px;
 }
 .git-release-step-failed {
-  color: var(--danger, inherit);
+  color: var(--danger);
 }
 .git-release-step-skipped,
 .git-release-step-pending {
@@ -285,7 +296,7 @@
 }
 .git-branch-table th {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
 }
 .git-release-plan {
@@ -302,4 +313,44 @@
   align-items: center;
   gap: 4px;
   font-size: 0.8rem;
+}
+
+@media (max-width: 760px) {
+  .git-commits,
+  .git-diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .git-strip-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .git-branch-select {
+    max-width: 100%;
+  }
+
+  .git-branch-table thead {
+    display: none;
+  }
+
+  .git-branch-table,
+  .git-branch-table tbody,
+  .git-branch-table tr,
+  .git-branch-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .git-branch-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .git-branch-table td {
+    padding: 2px 0;
+    border-bottom: 0;
+  }
 }

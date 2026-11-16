@@ -116,10 +116,10 @@ describe('GitBranchesTab', () => {
     expect(has(rowOf(container, 'main'), 'Delete')).toBe(false);
     expect(has(rowOf(container, 'feature/wip'), 'Delete')).toBe(false);
     expect(has(rowOf(container, 'feature/busy'), 'Delete')).toBe(false);
-    expect(has(rowOf(container, 'develop'), 'Make this the working branch')).toBe(false);
-    expect(has(rowOf(container, 'feature/wip'), 'Make this the working branch')).toBe(true);
+    expect(has(rowOf(container, 'develop'), 'Set working branch')).toBe(false);
+    expect(has(rowOf(container, 'feature/wip'), 'Set working branch')).toBe(true);
     await click(getButton('2 run branches'));
-    expect(has(rowOf(container, 'emberline/run-1'), 'Make this the working branch')).toBe(false);
+    expect(has(rowOf(container, 'emberline/run-1'), 'Set working branch')).toBe(false);
   });
 
   it('sends remote=1 only when Also delete on origin is ticked', async () => {
@@ -141,7 +141,7 @@ describe('GitBranchesTab', () => {
   it('lists the runs of a runs_live error', async () => {
     const { container } = await render();
     await waitFor(() => expect(container.textContent).toContain('feature/wip'));
-    await click(getButton('Make this the working branch', rowOf(container, 'feature/wip')));
+    await click(getButton('Set working branch', rowOf(container, 'feature/wip')));
     await waitFor(() =>
       expect(container.querySelector('[role="alert"]')?.textContent).toContain('Fix the login'),
     );
@@ -150,12 +150,14 @@ describe('GitBranchesTab', () => {
 
   it('compares a backup with the working branch', async () => {
     const { container } = await render();
-    await waitFor(() => expect(container.textContent).toContain('Backups (kept by Match origin)'));
+    await waitFor(() => expect(container.textContent).toContain('Backups'));
+    await click(container.querySelector('button[aria-label="About backups"]')!);
+    expect(container.textContent).toContain('Match origin');
     await click(getButton('Compare'));
     await waitFor(() => expect(container.textContent).toContain('3 ahead, 2 behind'));
   });
 
-  it('lists a branch only on origin: Compare with…, Check out, Make this the working branch', async () => {
+  it('lists a branch only on origin: Compare with…, Check out, Set working branch', async () => {
     list.push(branch('12112026_backup', { kind: 'origin' }));
     list.push(branch('emberline/run-on-origin', { kind: 'origin' }));
     vi.mocked(api).mockImplementation(
@@ -185,7 +187,7 @@ describe('GitBranchesTab', () => {
 
     await click(getButton('Check out', row));
     await waitFor(() => expect(calls).toEqual(['create {"name":"12112026_backup","from":"origin"}']));
-    await click(getButton('Make this the working branch', rowOf(container, '12112026_backup')));
+    await click(getButton('Set working branch', rowOf(container, '12112026_backup')));
     await waitFor(() => expect(calls).toContain('working {"branch":"12112026_backup"}'));
 
     const select = rowOf(container, '12112026_backup')!.querySelector('select') as HTMLSelectElement;
