@@ -1,9 +1,25 @@
 import type { AgentId, AgentModelId, BrainstormSuggestion, RoadmapCategory, Run } from '@emberline/protocol';
-import { Bot, Brain, Rocket, Square, SquareCheck, Trash2, Zap } from 'lucide-react';
+import { Bot, Rocket, Square, SquareCheck, Trash2, Zap } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { Link } from 'wouter';
 import { PersonaBadge } from '../PersonaBadge';
 import { SectionState } from '../SectionState';
+import { MoreMenu, type MoreMenuItem } from '../ui';
 import { CATEGORY_META, RouteBadgeSelect } from './RoadmapBadges';
+import './roadmap-ux.css';
+
+function MenuItemLabel({ itemId, children }: { itemId: string; children: ReactNode }) {
+  return (
+    <span
+      ref={(el) => {
+        const btn = el?.closest('[role="menuitem"]');
+        if (btn) btn.id = itemId;
+      }}
+    >
+      {children}
+    </span>
+  );
+}
 
 export function BrainstormingColumn({
   projectName,
@@ -63,267 +79,155 @@ export function BrainstormingColumn({
       />
     );
   }
+
+  const allSelected =
+    filteredSuggestions.length > 0 && filteredSuggestions.every((s) => selectedSuggestions.has(s.id));
+
+  const moreItems: MoreMenuItem[] = [
+    {
+      id: 'brainstorm-agent-btn',
+      icon: <Bot className="icon" aria-hidden="true" />,
+      label: (
+        <MenuItemLabel itemId="brainstorm-agent-btn">
+          {busy === 'brainstorm-agent' ? 'Launching…' : isAgentBrainstorming ? 'Agent working…' : 'Ask agent'}
+        </MenuItemLabel>
+      ),
+      disabled: busy !== null || isAgentBrainstorming,
+      onSelect: () => onBrainstorm('agent'),
+    },
+    ...(filteredSuggestions.length > 0
+      ? ([
+          {
+            id: 'brainstorm-select-all-btn',
+            icon: allSelected ? (
+              <Square className="icon" aria-hidden="true" />
+            ) : (
+              <SquareCheck className="icon" aria-hidden="true" />
+            ),
+            label: allSelected ? 'Deselect all' : 'Select all',
+            onSelect: onToggleSelectAllSuggestions,
+          },
+          {
+            id: 'brainstorm-build-all-btn',
+            icon: <Rocket className="icon" aria-hidden="true" />,
+            label: (
+              <MenuItemLabel itemId="brainstorm-build-all-btn">
+                {busy === 'build-all-suggestions' ? 'Starting…' : 'Build all'}
+              </MenuItemLabel>
+            ),
+            disabled: busy !== null,
+            onSelect: onBuildAllSuggestions,
+          },
+          {
+            id: 'brainstorm-clear-btn',
+            icon: <Trash2 className="icon" aria-hidden="true" />,
+            label: 'Clear ideas',
+            danger: true,
+            disabled: busy !== null,
+            onSelect: onClearAllSuggestions,
+          },
+        ] satisfies MoreMenuItem[])
+      : []),
+  ];
+
   return (
-    <section className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <header className="panel-head" style={{ marginBottom: 0 }}>
-        <div>
-          <h2>
-            <Brain className="icon" aria-hidden /> AI Brainstorming &amp; Feature Suggestions
-          </h2>
-          <p className="muted">
-            Explore what to build next, customize each idea&apos;s CLI agent &amp; model route inline, or
-            launch all ideas at once.
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span className="badge mono">{filteredSuggestions.length} ideas</span>
-          {filteredSuggestions.length > 0 && (
-            <>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                style={{ fontSize: '0.74rem', padding: '3px 8px' }}
-                onClick={onToggleSelectAllSuggestions}
-                title="Select or deselect all visible brainstorming suggestions"
-              >
-                {filteredSuggestions.every((s) => selectedSuggestions.has(s.id)) ? (
-                  <>
-                    <Square className="icon" aria-hidden /> Deselect All
-                  </>
-                ) : (
-                  <>
-                    <SquareCheck className="icon" aria-hidden /> Select All
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                style={{ fontSize: '0.74rem', padding: '3px 8px' }}
-                disabled={busy !== null}
-                onClick={onClearAllSuggestions}
-                title="Clear all current brainstorming suggestions"
-              >
-                <Trash2 className="icon" aria-hidden /> Clear
-              </button>
-              <button
-                id="brainstorm-build-all-btn"
-                type="button"
-                className="btn btn-sm btn-primary"
-                style={{ fontSize: '0.74rem', padding: '3px 10px' }}
-                disabled={busy !== null}
-                onClick={onBuildAllSuggestions}
-                title="Create Kanban tickets for all visible suggestions and start autonomous execution"
-              >
-                {busy === 'build-all-suggestions' ? (
-                  'Starting All…'
-                ) : (
-                  <>
-                    <Rocket className="icon" aria-hidden /> Build All ({filteredSuggestions.length})
-                  </>
-                )}
-              </button>
-            </>
-          )}
+    <section className="panel roadmap-column">
+      <header className="panel-head roadmap-column-head">
+        <h2 className="roadmap-column-title">Ideas</h2>
+        <div className="roadmap-column-actions">
+          <span className="badge mono roadmap-count-badge">{`${filteredSuggestions.length} ideas`}</span>
+          <MoreMenu label="More" ariaLabel="More idea actions" items={moreItems} />
         </div>
       </header>
 
-      <div
-        style={{
-          padding: 10,
-          borderRadius: 'var(--radius)',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}
-      >
-        <input
-          id="brainstorm-focus-input"
-          className="input"
-          placeholder="Optional brainstorm focus (leave empty for general project analysis, or type a topic and press Enter)…"
-          value={brainstormFocus}
-          onChange={(e) => onBrainstormFocusChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              onBrainstorm('instant');
-            }
-          }}
-        />
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-          <div className="segmented segmented-scroll" style={{ fontSize: '0.74rem' }}>
-            <button
-              type="button"
-              className={categoryFilter === 'all' ? 'active' : ''}
-              onClick={() => onCategoryFilterChange('all')}
-            >
-              All
-            </button>
-            {(Object.keys(CATEGORY_META) as RoadmapCategory[]).map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                className={categoryFilter === cat ? 'active' : ''}
-                onClick={() => onCategoryFilterChange(cat)}
-              >
-                {CATEGORY_META[cat].icon} {CATEGORY_META[cat].label}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              id="brainstorm-instant-btn"
-              type="button"
-              className="btn btn-sm"
-              disabled={busy !== null}
-              onClick={() => onBrainstorm('instant')}
-              title="Analyze PROJECT.md & project domain to synthesize instant suggestions"
-            >
-              {busy === 'brainstorm-instant' ? (
-                'Synthesizing…'
-              ) : (
-                <>
-                  <Zap className="icon" aria-hidden /> Synthesize Ideas
-                </>
-              )}
-            </button>
-            <button
-              id="brainstorm-agent-btn"
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy !== null || isAgentBrainstorming}
-              onClick={() => onBrainstorm('agent')}
-              title={
-                isAgentBrainstorming
-                  ? 'A Deep Brainstorming Agent is already running for this project'
-                  : 'Launch a Product Owner (Claude Fable) agent to deeply inspect the codebase and write new suggestions'
+      <div className="roadmap-ideas-prompt">
+        <div className="roadmap-ideas-bar">
+          <input
+            id="brainstorm-focus-input"
+            className="input roadmap-ideas-input"
+            placeholder="Focus topic (optional)…"
+            value={brainstormFocus}
+            onChange={(e) => onBrainstormFocusChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onBrainstorm('instant');
               }
-            >
-              {busy === 'brainstorm-agent' ? (
-                'Launching…'
-              ) : isAgentBrainstorming ? (
-                <>
-                  <Brain className="icon" aria-hidden /> Brainstorming in Progress…
-                </>
-              ) : (
-                <>
-                  <Bot className="icon" aria-hidden /> Deep Agent Brainstorm
-                </>
-              )}
-            </button>
-          </div>
+            }}
+          />
+          <select
+            aria-label="Filter ideas by category"
+            className="input mono roadmap-ideas-category"
+            value={categoryFilter}
+            onChange={(e) => onCategoryFilterChange(e.target.value as RoadmapCategory | 'all')}
+          >
+            <option value="all">All categories</option>
+            {(Object.keys(CATEGORY_META) as RoadmapCategory[]).map((cat) => (
+              <option key={cat} value={cat}>
+                {CATEGORY_META[cat].label}
+              </option>
+            ))}
+          </select>
+          <button
+            id="brainstorm-instant-btn"
+            type="button"
+            className="btn btn-sm"
+            disabled={busy !== null}
+            onClick={() => onBrainstorm('instant')}
+          >
+            {busy === 'brainstorm-instant' ? (
+              'Suggesting…'
+            ) : (
+              <>
+                <Zap className="icon" aria-hidden="true" /> Suggest ideas
+              </>
+            )}
+          </button>
         </div>
 
         {activeBrainstormRun && (
-          <div
-            style={{
-              marginTop: 4,
-              padding: '6px 10px',
-              borderRadius: 'var(--radius)',
-              background: 'color-mix(in srgb, var(--violet) 12%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--violet) 40%, transparent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              fontSize: '0.78rem',
-            }}
-          >
-            <span className="mono">
-              <span className="dot run-working" style={{ marginRight: 6 }} />
-              Deep Brainstorming Agent ({activeBrainstormRun.agent} · fable) is inspecting the repository…
+          <div className="roadmap-agent-banner">
+            <span className="mono roadmap-agent-status">
+              <span className="dot run-working" aria-hidden="true" />
+              {`Agent (${activeBrainstormRun.agent}) is inspecting the repository…`}
             </span>
             {activeBrainstormRun.terminalId && (
               <Link
                 href={`/terminals/${activeBrainstormRun.terminalId}`}
                 className="btn btn-sm btn-ghost mono"
-                style={{ fontSize: '0.72rem', padding: '2px 8px' }}
               >
-                View Terminal →
+                Open terminal
               </Link>
             )}
           </div>
         )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="roadmap-idea-list">
         {filteredSuggestions.map((sug) => {
           const checked = selectedSuggestions.has(sug.id);
           const cat = CATEGORY_META[sug.category] ?? CATEGORY_META.feature;
           return (
-            <div
-              key={sug.id}
-              style={{
-                padding: '12px 14px',
-                borderRadius: 'var(--radius)',
-                background: checked
-                  ? 'color-mix(in srgb, var(--ember-1) 8%, transparent)'
-                  : 'var(--bg-elevated)',
-                border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                }}
-              >
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    fontSize: '0.88rem',
-                  }}
-                >
+            <div key={sug.id} className={`roadmap-idea-row${checked ? ' is-selected' : ''}`}>
+              <div className="roadmap-idea-head">
+                <label className="roadmap-idea-label">
                   <input
                     type="checkbox"
+                    className="roadmap-idea-checkbox"
                     checked={checked}
                     onChange={() => onToggleSuggestion(sug.id)}
-                    style={{ marginTop: 3 }}
                   />
                   <span>
                     {cat.icon} {sug.title}
                   </span>
                 </label>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  title="Dismiss suggestion"
-                  onClick={() => onDismissSuggestion(sug.id)}
-                >
-                  ×
-                </button>
               </div>
 
-              <p className="muted" style={{ margin: 0, fontSize: '0.8rem', lineHeight: 1.45 }}>
-                {sug.rationale}
-              </p>
+              <p className="muted roadmap-idea-rationale">{sug.rationale}</p>
 
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  paddingTop: 4,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span className="badge mono" style={{ fontSize: '0.68rem' }}>
-                    Target: {sug.suggestedMilestoneCode}
-                  </span>
+              <div className="roadmap-idea-foot">
+                <div className="roadmap-idea-badges">
+                  <span className="badge mono roadmap-meta-badge">{sug.suggestedMilestoneCode}</span>
                   <PersonaBadge persona={sug.persona} />
                   <RouteBadgeSelect
                     agent={sug.preferredAgent}
@@ -333,35 +237,25 @@ export function BrainstormingColumn({
                     disabled={busy !== null}
                     onChange={(nextAgent, nextModel) => onChangeRoute(sug.id, nextAgent, nextModel)}
                   />
-                  <span className="badge mono" style={{ fontSize: '0.68rem' }}>
-                    Impact: {sug.impact.toUpperCase()}
-                  </span>
+                  <span className="badge mono roadmap-meta-badge">{`${sug.impact} impact`}</span>
                 </div>
 
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div className="roadmap-idea-actions">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy !== null}
+                    onClick={() => onQuickPromoteSuggestion(sug, false)}
+                  >
+                    Add to roadmap
+                  </button>
                   <button
                     type="button"
                     className="btn btn-sm btn-ghost"
                     disabled={busy !== null}
-                    onClick={() => onQuickPromoteSuggestion(sug, false)}
-                    title={`Add to Milestone ${sug.suggestedMilestoneCode} without starting a run yet`}
+                    onClick={() => onDismissSuggestion(sug.id)}
                   >
-                    + Add to {sug.suggestedMilestoneCode}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    disabled={busy !== null}
-                    onClick={() => onQuickPromoteSuggestion(sug, true)}
-                    title="Add to Roadmap, create Kanban ticket, and start the specialist agent immediately"
-                  >
-                    {busy === `sug-${sug.id}` ? (
-                      'Starting…'
-                    ) : (
-                      <>
-                        <Rocket className="icon" aria-hidden /> Build Now
-                      </>
-                    )}
+                    Dismiss
                   </button>
                 </div>
               </div>
@@ -370,32 +264,14 @@ export function BrainstormingColumn({
         })}
 
         {filteredSuggestions.length === 0 && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '24px 16px',
-              borderRadius: 'var(--radius)',
-              border: '1px dashed var(--border)',
-              background: 'var(--bg)',
-            }}
-          >
+          <div className="roadmap-empty">
             {isAgentBrainstorming ? (
-              <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                <Brain className="icon" aria-hidden /> <strong>Deep Brainstorming Agent</strong> is analyzing{' '}
-                <strong>{projectName ?? 'this project'}</strong>… Tailored suggestions will automatically
-                appear here as soon as analysis finishes.
+              <p className="muted roadmap-empty-text">
+                {`Brainstorming agent is analyzing ${projectName ?? 'this project'}…`}
               </p>
             ) : (
-              <p className="muted" style={{ margin: 0, fontSize: '0.84rem' }}>
-                Brainstorming list is empty. Click{' '}
-                <strong>
-                  <Bot className="icon" aria-hidden /> Deep Agent Brainstorm
-                </strong>{' '}
-                (for full AI codebase analysis) or{' '}
-                <strong>
-                  <Zap className="icon" aria-hidden /> Synthesize Ideas
-                </strong>{' '}
-                above to populate suggestions tailored to <strong>{projectName ?? 'this project'}</strong>.
+              <p className="muted roadmap-empty-text">
+                {`Brainstorming list is empty. Use Suggest ideas above to generate ideas for ${projectName ?? 'this project'}.`}
               </p>
             )}
           </div>
