@@ -6,7 +6,10 @@ import { anchorScrollDue } from '../containerPreviewSetup';
 import { asSentence, type Feedback, feedbackFor } from '../forgeAccounts';
 import { useApi } from '../hooks/useApi';
 import { createdText, hostLabel, SHARED_KEY_HINT } from '../sshKeys';
+import './settings/settings-panels.css';
 import { SshKeyLine } from './SshKeyLine';
+import { Disclosure } from './ui/Disclosure';
+import { HelpHint } from './ui/HelpHint';
 
 const NEW_KEY_QUESTION =
   'Make a new shared key? The current key stops working at once: remove its public key from GitHub, GitLab or your server and add the new one.';
@@ -102,15 +105,18 @@ export function SshKeyPanel() {
   };
 
   return (
-    <section className="panel ssh-key-panel" id="ssh-key" aria-labelledby="ssh-key-title">
-      <header className="panel-head">
-        <div>
-          <h2 id="ssh-key-title">SSH key</h2>
-          <p className="muted">
-            Emberline reaches ssh repositories (such as{' '}
-            <span className="mono">git@github.com:you/app.git</span>) with its own key. The private key stays
-            in Emberline&apos;s core: agents never see it.
-          </p>
+    <section className="panel settings-panel ssh-key-panel" id="ssh-key" aria-labelledby="ssh-key-title">
+      <header className="settings-panel-head">
+        <div className="settings-panel-title-group">
+          <div className="settings-panel-heading-row">
+            <h2 id="ssh-key-title">SSH key</h2>
+            <HelpHint topic="SSH key">
+              Emberline reaches SSH repositories (such as{' '}
+              <span className="mono">git@github.com:you/app.git</span>) with its own key. The private key
+              stays in Emberline&apos;s core: agents never see it.
+            </HelpHint>
+          </div>
+          <p className="muted">Shared key for SSH repositories.</p>
         </div>
       </header>
       {shared.error !== undefined && !shared.data && (
@@ -124,9 +130,6 @@ export function SshKeyPanel() {
       {shared.data && !key && (
         <div className="ssh-key-empty">
           <p>Emberline has no SSH key yet.</p>
-          <p className="muted small">
-            Projects that use the shared key cannot reach an ssh repository until you create one.
-          </p>
           <div className="actions">
             <button
               type="button"
@@ -141,29 +144,32 @@ export function SshKeyPanel() {
       )}
       {key && (
         <div className="ssh-key-shown">
-          <p>
-            <strong>Emberline SSH key</strong>{' '}
-            <span className="muted small">
+          <p className="ssh-key-meta">
+            <strong>Emberline SSH key</strong>
+            <span className="muted small mono">
               {key.algorithm} · created {createdText(key.createdAt)}
             </span>
-          </p>
-          <p className="muted small">
-            Fingerprint <span className="mono">{key.fingerprint}</span>
+            <span className="muted small mono">Fingerprint {key.fingerprint}</span>
           </p>
           <SshKeyLine publicKey={key.publicKey}>
             <button
               type="button"
-              className="btn btn-sm btn-ghost"
+              className="btn btn-sm btn-ghost danger"
               disabled={busy !== null}
               onClick={() => generate(true)}
             >
-              {busy === 'key' ? 'Working…' : 'New key'}
+              {busy === 'key' ? 'Working…' : 'Replace key'}
             </button>
-            <button type="button" className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={remove}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost danger"
+              disabled={busy !== null}
+              onClick={remove}
+            >
               Delete
             </button>
           </SshKeyLine>
-          <p className="muted small">{SHARED_KEY_HINT}</p>
+          <Disclosure label="Where to add this key">{SHARED_KEY_HINT}</Disclosure>
         </div>
       )}
       {show('key')}
@@ -174,12 +180,14 @@ export function SshKeyPanel() {
         ref={hostsRef}
         aria-labelledby="ssh-hosts-title"
       >
-        <h3 id="ssh-hosts-title">Trusted host keys</h3>
-        <p className="muted small">
-          Servers whose host key you trusted after comparing its fingerprint. GitHub, GitLab and Bitbucket are
-          known to Emberline already. When a server&apos;s key changes, Emberline refuses to connect until you
-          remove the old key here.
-        </p>
+        <div className="settings-panel-heading-row">
+          <h3 id="ssh-hosts-title">Trusted host keys</h3>
+          <HelpHint topic="trusted host keys">
+            Servers whose host key you trusted after comparing its fingerprint. GitHub, GitLab and Bitbucket
+            are known to Emberline already. When a server&apos;s key changes, Emberline refuses to connect
+            until you remove the old key here.
+          </HelpHint>
+        </div>
         {hosts.error !== undefined && !hosts.data && (
           <p className="form-error" role="alert">
             Could not load the trusted host keys: {errorMessage(hosts.error)}{' '}
@@ -192,17 +200,17 @@ export function SshKeyPanel() {
         <ul className="forge-account-list">
           {hosts.data?.hosts.map((h) => (
             <li key={`${h.host}:${h.port}:${h.keyType}`} className="forge-account-row">
-              <div>
-                <span className="mono">{hostLabel(h)}</span>{' '}
+              <div className="forge-account-main">
+                <span className="mono">{hostLabel(h)}</span>
                 <span className="badge badge-soft">{h.keyType}</span>
-                <p className="muted small">
-                  <span className="mono">{h.fingerprint}</span> · trusted {createdText(h.trustedAt)}
+                <p className="muted small mono">
+                  {h.fingerprint} · trusted {createdText(h.trustedAt)}
                 </p>
               </div>
               <div className="actions">
                 <button
                   type="button"
-                  className="btn btn-sm btn-ghost"
+                  className="btn btn-sm btn-ghost danger"
                   disabled={busy !== null}
                   onClick={() => removeHost(h)}
                 >

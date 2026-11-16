@@ -1,16 +1,20 @@
 import { MIN_PASSWORD_LENGTH, type SessionIssued } from '@emberline/protocol';
-import { KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
+import { LoaderCircle, LogOut, ShieldCheck } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { api, ApiRequestError, errorMessage } from '../api';
-import { PasswordField, StrengthMeter } from '../auth';
-import { changingKey, setSessionKey } from '../sessionKey';
+import { PasswordField, StrengthMeter, useAuth } from '../auth';
+import { changingKey, setSessionKey, signOut } from '../sessionKey';
+import './settings/settings-panels.css';
+import { HelpHint } from './ui/HelpHint';
 
 /** Change the admin password; every other session (browser, device) is signed out. */
 export function AccountPanel() {
+  const { logout } = useAuth();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState<string>();
   const [done, setDone] = useState(false);
   const mismatch = confirm.length > 0 && confirm !== next;
@@ -45,20 +49,43 @@ export function AccountPanel() {
     }
   };
 
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await signOut(() => api('/api/auth/logout', 'POST'));
+      await logout();
+      window.dispatchEvent(new Event('emberline:unauthorized'));
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
   return (
-    <section className="panel" aria-labelledby="account-title">
-      <header className="panel-head">
-        <div>
-          <h2 id="account-title">
-            <KeyRound className="icon" aria-hidden /> Admin password
-          </h2>
-          <p className="muted">
-            Changing it signs out every other browser and device. Forgot it? Run{' '}
-            <code>make reset-password</code> on the server.
-          </p>
+    <section className="panel settings-panel" aria-labelledby="account-title">
+      <header className="settings-panel-head">
+        <div className="settings-panel-title-group">
+          <div className="settings-panel-heading-row">
+            <h2 id="account-title">Account</h2>
+            <HelpHint topic="password rules">
+              Minimum {MIN_PASSWORD_LENGTH} characters. Changing it signs out every other browser and device.
+              Forgot it? Run <code>make reset-password</code> on the server.
+            </HelpHint>
+          </div>
+          <p className="muted">Password and session.</p>
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={signingOut || busy}
+            onClick={() => void handleSignOut()}
+          >
+            <LogOut className="icon" aria-hidden="true" />
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </div>
       </header>
-      <form className="form" style={{ maxWidth: 420 }} onSubmit={(e) => void submit(e)}>
+      <form className="form account-form" onSubmit={(e) => void submit(e)}>
         {/* Single-user app: a fixed username lets password managers file the credential. */}
         <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
         <PasswordField
@@ -80,7 +107,7 @@ export function AccountPanel() {
         <StrengthMeter password={next} id="account-strength" />
         <PasswordField
           id="account-confirm"
-          label="Confirm new password"
+          label="Confirm password"
           value={confirm}
           onChange={setConfirm}
           autoComplete="new-password"
@@ -93,7 +120,8 @@ export function AccountPanel() {
         )}
         {done && (
           <p className="banner banner-ok" role="status">
-            <ShieldCheck className="icon" aria-hidden /> Password changed. Other sessions were signed out.
+            <ShieldCheck className="icon" aria-hidden="true" /> Password changed. Other sessions were signed
+            out.
           </p>
         )}
         <div>
@@ -104,7 +132,7 @@ export function AccountPanel() {
           >
             {busy ? (
               <>
-                <LoaderCircle className="icon icon-spin" aria-hidden /> Saving…
+                <LoaderCircle className="icon icon-spin" aria-hidden="true" /> Saving…
               </>
             ) : (
               'Change password'

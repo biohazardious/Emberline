@@ -11,21 +11,22 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../api';
-import { handoffCandidates, HANDOFF_STATES } from '../handoffCandidates';
+import { HANDOFF_STATES, handoffCandidates } from '../handoffCandidates';
 import { liveKeys, useScheduler } from '../hooks/liveData';
 import { useApi } from '../hooks/useApi';
 import { withHandoff } from '../runHandoff';
 import { formatCountdown, useNow } from '../time';
+import { clockShort } from './quota/QuotaUsageDetails';
 import { CREDENTIAL_LABEL } from './RouteChainEditor';
 
 const providerLabel = (agent: string) => PROVIDER_REGISTRY[agent as AgentId]?.shortLabel ?? agent;
 
-const laneLabel = (w: QuotaWindow) => {
+export const laneLabel = (w: QuotaWindow) => {
   const pool = w.pool === '*' ? 'all models' : w.pool;
   return `${providerLabel(w.agent)} · ${pool}${w.credential === 'login' ? '' : ` · ${CREDENTIAL_LABEL[w.credential as Credential] ?? w.credential}`}`;
 };
 
-/** One row per exhausted lane, each with its own countdown and "Try now". */
+/** One row per exhausted lane, each with its own countdown and "Resume now". */
 export function QuotaLanes({ windows, compact = false }: { windows: QuotaWindow[]; compact?: boolean }) {
   const { setScheduler } = useScheduler();
   const now = useNow(1000);
@@ -35,15 +36,16 @@ export function QuotaLanes({ windows, compact = false }: { windows: QuotaWindow[
     <>
       <ul className={`quota-lanes${compact ? ' compact' : ''}`}>
         {windows.map((w) => (
-          <li key={w.id} title={w.message ?? undefined}>
+          <li key={w.id}>
             <span className="quota-lane-name">{laneLabel(w)}</span>
-            <span className="quota-lane-eta mono">resets in {formatCountdown(w.resumeAt, now)}</span>
+            <span className="quota-lane-eta mono">
+              Paused until {clockShort(w.resetsAt ?? w.resumeAt)} ({formatCountdown(w.resumeAt, now)})
+            </span>
             {w.message && !compact && <span className="quota-lane-message muted small">{w.message}</span>}
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              aria-label={`Try ${laneLabel(w)} now`}
-              title="Try now instead of waiting; if the limit still applies the pause starts again"
+              aria-label={`Resume ${laneLabel(w)} now`}
               onClick={async () => {
                 try {
                   setError(undefined);
@@ -59,7 +61,7 @@ export function QuotaLanes({ windows, compact = false }: { windows: QuotaWindow[
                 }
               }}
             >
-              Try now
+              Resume now
             </button>
           </li>
         ))}

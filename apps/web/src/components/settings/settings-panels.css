@@ -1,0 +1,384 @@
+/* M6 Settings panels: Usage limits, Forges and webhooks, SSH key, Updates, Account. */
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-panel .small,
+.settings-panel .badge,
+.quota .small,
+.quota .badge {
+  font-size: 0.8rem;
+}
+
+.settings-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.settings-panel-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.settings-panel-heading-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-panel-heading-row h2,
+.settings-panel-heading-row h3 {
+  margin: 0;
+}
+
+.settings-panel-head p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-subform {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.settings-token-input {
+  max-width: 320px;
+}
+
+.settings-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+/* --- Usage limits (QuotaPanel & QuotaLanes) -------------------------------- */
+
+.quota.quota-panel {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.quota.quota-compact {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.quota-lane-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.quota-lane-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 10px 12px;
+}
+
+.quota-lane-row + .quota-lane-row {
+  border-top: 1px solid var(--border);
+}
+
+.quota-lane-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 150px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quota-lane-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  flex: 1 1 240px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-lane-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quota-meter-svg {
+  width: 72px;
+  height: 8px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.quota-fill-ok {
+  fill: var(--ember-2);
+}
+
+.quota-fill-warn {
+  fill: var(--warn);
+}
+
+.quota-fill-bad {
+  fill: var(--bad);
+}
+
+.quota-text-ok {
+  color: var(--ember-2);
+}
+
+.quota-text-warn {
+  color: var(--warn);
+}
+
+.quota-text-bad {
+  color: var(--bad);
+}
+
+.quota-state-ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+
+.quota-state-paused {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.quota-state-unknown {
+  color: var(--muted);
+}
+
+.quota-lane-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.quota-details-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quota-details-note {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.quota-buckets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: 10px;
+}
+
+.quota-bucket-card {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-bucket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.quota-bucket-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quota-bucket-sub {
+  font-size: 0.8rem;
+}
+
+.quota-bucket-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.quota-bucket-total strong {
+  font-size: 1.15rem;
+  color: var(--text);
+}
+
+.quota-bucket-total span {
+  font-size: 0.8rem;
+}
+
+.quota-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  font-size: 0.8rem;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.quota-provider-counts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8rem;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.quota-provider-counts strong {
+  color: var(--text);
+}
+
+/* --- Forges and webhooks --------------------------------------------------- */
+
+.forge-account-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.forge-account-main p {
+  margin: 0;
+}
+
+/* --- SSH key --------------------------------------------------------------- */
+
+.ssh-key-line {
+  font-size: 0.8rem;
+}
+
+.ssh-key-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Updates --------------------------------------------------------------- */
+
+.update-release-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.update-commands,
+.update-notes {
+  font-size: 0.8rem;
+}
+
+.update-versions {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-state-up_to_date {
+  color: var(--ok);
+}
+
+.update-state-update_available {
+  color: var(--warn);
+}
+
+.update-state-error {
+  color: var(--bad);
+}
+
+.update-state-not_installed,
+.update-state-pinned,
+.update-state-bundled,
+.update-state-unknown {
+  color: var(--muted);
+}
+
+.update-controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* --- Account --------------------------------------------------------------- */
+
+.account-form {
+  max-width: 420px;
+}
+
+/* --- Responsive phone-width adjustments ------------------------------------ */
+
+@media (max-width: 640px) {
+  .quota-lane-row,
+  .settings-panel-head,
+  .update-controls-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .quota-lane-actions {
+    margin-left: 0;
+  }
+
+  .settings-panel .btn,
+  .quota .btn,
+  .quota .segmented button {
+    min-height: 44px;
+  }
+}

@@ -1,6 +1,7 @@
 import { useUpdatesStatus } from '../../hooks/useSettingsQueries';
 import { SectionState } from '../SectionState';
 import { UpdatesPanel } from '../UpdatesPanel';
+import './settings-panels.css';
 
 export function UpdatesSection() {
   const query = useUpdatesStatus();
