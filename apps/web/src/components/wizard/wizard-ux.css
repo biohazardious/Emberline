@@ -8,9 +8,6 @@
 }
 
 .wizard-card-hint,
-.wizard-card-best,
-.wizard-card-tradeoff,
-.wizard-dim-affects,
 .wizard-dim-hint,
 .wizard-dim-edited,
 .wizard-file-preview,
@@ -74,16 +71,6 @@
   background: var(--surface);
   padding: 0 12px;
   min-width: 0;
-}
-
-.wizard-summary-compact {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  font-size: 0.82rem;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
 }
 
 .wizard-preset-details {

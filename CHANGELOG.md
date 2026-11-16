@@ -4,6 +4,17 @@ All notable changes to Emberline are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- **Calmer, shorter screens across the web app.** Every page now shows its state and next step first, with plain headings and short button labels, and puts longer explanations, command lines and secondary actions one click away behind **Details** disclosures, **?** help hints or **More** menus; nothing you could do or read in 0.9.3 is removed, and unsaved settings stay in place when you switch tabs or views, with a sticky **Save** / **Discard** bar.
+- **Settings → Providers (`?tab=providers`) now has three views** (`view=agents`, `routing`, `sdks`):
+  - **Agents:** one row per CLI (Claude Code, Antigravity, Codex, Copilot, Aider) with one status, its version, an on/off switch and at most one next-step button (**Install** or **Sign in**); expanding a row opens its description, terms, sign-in and `make …-login` command, API key field, CLI maintenance and model list, while install errors, sign-in warnings and stored keys stay visible on the collapsed row.
+  - **Routing:** one row per persona with its first route, fallback count and capability rank; expanding a row opens its fallback chain and tier quick-match, with **Apply preset** and the quota-policy selects above the list.
+  - **SDKs:** the project SDK toolchain list.
+- **Renamed navigation items and Settings tabs** (existing `/settings?tab=<id>` addresses still open the same sections):
+  - Sidebar and command palette: **Factory Overview** → **Overview**, **Roadmap & Brainstorm** → **Roadmap**, **Kanban Board** → **Board**, **Code Explorer** → **Code**, **Build Outputs** → **Build outputs**, **Live Browser** → **Live browser**, **Fleet Multiplexer** → **Fleet**, **Factory Settings** → **Settings**.
+  - Settings tabs: **Auto-Pilot & Theme** → **Automation**, **Multi-Agent & Model Matrix** → **Providers**, **MCP & Plugins** → **MCP and skills**, **Quota & Concurrency** → **Usage limits**, **Forge & Webhooks** → **Forges and webhooks**.
+
 ## [0.9.3] - 2026-11-15
 
 ### Added

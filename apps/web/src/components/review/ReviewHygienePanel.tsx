@@ -34,7 +34,7 @@ export function ReviewHygienePanel({
             <Shield className="icon" aria-hidden /> Anti-AI-Slop &amp; Code Craftsmanship Audit
           </strong>
           {slopAudit && (
-            <span className="badge mono review-tabular" style={{ fontSize: '0.7rem' }}>
+            <span className="badge mono review-tabular" style={{ fontSize: '0.8rem' }}>
               Grade {slopAudit.grade} · {slopAudit.score}/100 · {slopAudit.filesAudited} file(s) · +
               {slopAudit.addedLinesAudited} lines scanned
             </span>
@@ -43,7 +43,7 @@ export function ReviewHygienePanel({
             <span
               className="badge mono review-tabular"
               style={{
-                fontSize: '0.7rem',
+                fontSize: '0.8rem',
                 borderColor:
                   crossCritic.verdict === 'PASS'
                     ? 'color-mix(in srgb, var(--ok) 45%, transparent)'
@@ -141,11 +141,11 @@ export function ReviewHygienePanel({
                     </span>{' '}
                     {iss.file}:{iss.line} — {iss.message}
                   </span>
-                  <code className="muted mono" style={{ fontSize: '0.68rem' }}>
+                  <code className="muted mono" style={{ fontSize: '0.8rem' }}>
                     {iss.snippet}
                   </code>
                 </div>
-                <div className="muted small" style={{ fontSize: '0.71rem' }}>
+                <div className="muted small" style={{ fontSize: '0.8rem' }}>
                   <Lightbulb className="icon" aria-hidden /> Fix: {iss.fixHint}
                 </div>
               </button>

@@ -134,7 +134,7 @@ export function MonacoDiff({
             scrollBeyondLastLine: false,
             maxComputationTime: 1000,
             diffWordWrap: 'off',
-            fontSize: 12,
+            fontSize: 13,
             lineHeight: 19,
             fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
             renderIndicators: true,

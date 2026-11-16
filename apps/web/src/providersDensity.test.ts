@@ -282,9 +282,7 @@ describe('AC-6.5 Providers tab density budget (at most 50% of 0.9.3 words)', () 
 
     const targetComponentFiles = [
       'components/settings/ProvidersSection.tsx',
-      'components/settings/ProviderCard.tsx',
       'components/settings/ProviderModels.tsx',
-      'components/settings/PersonaRoutingSection.tsx',
       'components/settings/settingsMeta.ts',
       'components/settings/providers/AgentsView.tsx',
       'components/settings/providers/ProviderRow.tsx',

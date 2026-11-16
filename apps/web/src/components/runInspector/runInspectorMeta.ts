@@ -121,7 +121,7 @@ export function extractFailureDetails(
 
   if (!reason || reason === `${agent ?? 'Agent'} exited with non-zero code`) {
     if (exitCode === 41) {
-      reason = `${formatAgentDisplayName(agent)} exited with code 41 (Authentication / API Key required). Open Factory Settings to sign in via Console Login or save your API key.`;
+      reason = `${formatAgentDisplayName(agent)} exited with code 41 (Authentication / API Key required). Open Settings → Providers to sign in or save your API key.`;
     } else if (exitCode !== undefined) {
       reason = `${formatAgentDisplayName(agent)} process exited unexpectedly with exit code ${exitCode}.`;
     } else {

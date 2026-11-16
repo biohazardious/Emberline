@@ -100,23 +100,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
 const FEATURES = [
   {
     icon: Bot,
-    title: 'Many agents, one control room',
-    text: 'Claude Code, Antigravity and more run side by side.',
+    title: 'Official CLI agents',
+    text: 'Claude Code, Antigravity, Codex, Copilot and Aider in a PTY.',
   },
   {
     icon: GitMerge,
-    title: 'Every change lands through git',
-    text: 'Worktrees, reviews and merges you can follow.',
+    title: 'Isolated git worktrees',
+    text: 'Each run works on its own branch and merges after review.',
   },
   {
     icon: ShieldCheck,
-    title: 'Agents stay in their sandbox',
+    title: 'Sandboxed runner',
     text: 'Workspace code runs in the runner, never in core.',
   },
   {
     icon: Gauge,
-    title: 'Quotas under control',
-    text: 'Usage limits, budgets and a scheduler that waits for resets.',
+    title: 'Automatic limit waits',
+    text: 'Pauses on usage limits and resumes after the reset.',
   },
 ];
 
@@ -139,7 +139,7 @@ function AuthLayout({
               <BrandLogo size={40} />
               <span>Emberline</span>
             </div>
-            <p className="auth-tagline">The self-hosted control room for your AI coding agents.</p>
+            <p className="auth-tagline">Self-hosted AI coding factory.</p>
             <ul className="auth-features">
               {FEATURES.map(({ icon: Icon, title: featureTitle, text }) => (
                 <li key={featureTitle}>
@@ -153,9 +153,7 @@ function AuthLayout({
                 </li>
               ))}
             </ul>
-            <p className="auth-footnote">
-              Runs on your server with your own subscriptions. Not affiliated with Anthropic or Google.
-            </p>
+            <p className="auth-footnote">Runs on your server with your own CLI subscriptions.</p>
           </div>
         </aside>
         <section className="auth-panel">
@@ -341,7 +339,7 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
   };
 
   return (
-    <AuthLayout title="Set up Emberline" subtitle="Claim this installation and choose the admin password.">
+    <AuthLayout title="Set up Emberline" subtitle="Claim this server and set the admin password.">
       <form className="form auth-form" onSubmit={(e) => void submit(e)}>
         {/* Single-user app: a fixed username lets password managers file the credential. */}
         <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
@@ -362,10 +360,7 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
                 placeholder="Paste the token from the core log"
               />
             </label>
-            <p className="auth-help">
-              Core prints a one-time token on its first start, so only someone with access to the server can
-              claim it. Find it with:
-            </p>
+            <p className="auth-help">Read the one-time token from the core log:</p>
             <div className="auth-command">
               <code>make logs | grep "setup token"</code>
               <CopyButton text={'make logs | grep "setup token"'} label="Copy command" />
@@ -398,16 +393,16 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
             />
             {mismatch && (
               <small className="field-warn" role="status">
-                The passwords do not match yet.
+                The passwords do not match.
               </small>
             )}
             <button type="button" className="btn btn-ghost btn-sm auth-generate" onClick={generate}>
-              <WandSparkles className="icon" aria-hidden /> Generate a strong password
+              <WandSparkles className="icon" aria-hidden /> Generate password
             </button>
             {generated && (
               <div className="auth-generated" role="status">
                 <span>
-                  <KeyRound className="icon" aria-hidden /> Save this in your password manager now:
+                  <KeyRound className="icon" aria-hidden /> Save this password now:
                 </span>
                 <div className="auth-command">
                   <code>{generated}</code>
@@ -433,7 +428,7 @@ function SetupForm({ onDone }: { onDone: () => Promise<void> }) {
               <LoaderCircle className="icon icon-spin" aria-hidden /> Saving…
             </>
           ) : (
-            'Create password & continue'
+            'Save and continue'
           )}
         </button>
       </form>
@@ -467,7 +462,7 @@ function LoginForm({ onDone, notice }: { onDone: () => Promise<void>; notice?: s
   };
 
   return (
-    <AuthLayout title="Welcome back" subtitle="Sign in to your Emberline control room.">
+    <AuthLayout title="Sign in" subtitle="Enter the admin password.">
       <form className="form auth-form" onSubmit={(e) => void submit(e)}>
         {/* Single-user app: a fixed username lets password managers file the credential. */}
         <input type="text" name="username" autoComplete="username" value="admin" readOnly hidden />
@@ -505,19 +500,16 @@ function LoginForm({ onDone, notice }: { onDone: () => Promise<void>; notice?: s
           onClick={() => setShowReset((v) => !v)}
           aria-expanded={showReset}
         >
-          Forgot your password?
+          Reset password
         </button>
         {showReset && (
           <div className="auth-help-box">
-            <p>On the server, run:</p>
+            <p>Run on the server, then reload this page:</p>
             <div className="auth-command">
               <code>make reset-password</code>
               <CopyButton text="make reset-password" label="Copy command" />
             </div>
-            <p>
-              It clears the password (projects and runs are kept), restarts core and prints a new setup token.
-              Then reload this page and set a new password.
-            </p>
+            <p>Clears the password and prints a new setup token; projects and runs are kept.</p>
           </div>
         )}
       </form>

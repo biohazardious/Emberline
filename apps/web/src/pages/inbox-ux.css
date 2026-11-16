@@ -123,14 +123,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.inbox-item-main {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
 .inbox-title {
   margin: 0;
   font-size: 0.92rem;
@@ -174,11 +166,6 @@
 
   .inbox-item {
     width: 100%;
-  }
-
-  .inbox-item-main {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .inbox-actions .btn,
